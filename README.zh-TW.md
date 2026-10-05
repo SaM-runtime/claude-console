@@ -1,5 +1,8 @@
 # claude-console
 
+<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" alt="claude-console 示範：主控台面板、專案表、動作選單、額度電池" width="900"></a></p>
+<p align="center"><a href="docs/demo.mp4">▶ 觀看 30 秒介紹影片（MP4，示範資料）</a> · <a href="README.md">English</a></p>
+
 `claude-console` 是本機多專案 Claude Code mod。單一主控台 session 負責各專案的規格、監督與審核關卡；操作者只提供決策，並在最後決定是否 release。
 
 `console-status` mod 讀取精簡 STATUS 卡與受管理的執行器狀態，提供觸發式動作。驗證、派工、同步 STATUS 與審核都從按鈕直接開始，結果會寫入動態 feed。面板不會執行 release 或正式環境變更。
