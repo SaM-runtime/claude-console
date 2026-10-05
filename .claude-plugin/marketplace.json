@@ -1,0 +1,16 @@
+{
+  "name": "claude-console",
+  "description": "A multi-project supervision console for Claude Code",
+  "owner": {
+    "name": "SaM-runtime"
+  },
+  "plugins": [
+    {
+      "name": "console-status",
+      "source": "./plugins/console-status",
+      "description": "Multi-project specification, supervision, and gate console for Claude Code",
+      "repository": "https://github.com/SaM-runtime/claude-console",
+      "homepage": "https://github.com/SaM-runtime/claude-console"
+    }
+  ]
+}

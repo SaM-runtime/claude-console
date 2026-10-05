@@ -1,0 +1,76 @@
+import type { Project, ActionKind, ContinueConfirmation, VerificationResult } from '../types'
+import type { State } from './logic'
+import { hasAsk, parseGate } from './logic'
+
+export const ACTION_LABEL: Record<ActionKind, string> = {
+  verify: '▶ 執行驗證', sync: '⇢ 同步 STATUS', continue: '⇢ 繼續下一步',
+  decide: '✎ 做決定', gate: '⚑ 審核關卡', open: '↗ 開啟 STATUS.md',
+}
+
+export function actionLabel(kind: ActionKind, project: Project): string {
+  return kind === 'gate' && parseGate(project.gate)?.kind === 'release' ? '⚑ 最終審核' : ACTION_LABEL[kind]
+}
+
+export function dispatchBlockReason(project: Project): string {
+  const active = project.jobs.filter(job => job.kind === 'running')
+  return active.length ? `${[...new Set(active.map(job => job.executor ?? '執行者'))].join(' / ')} 工作尚未結束` : ''
+}
+
+export function actionKinds(project: Project, state: State): ActionKind[] {
+  const kinds: ActionKind[] = []
+  if (project.verify.trim()) kinds.push('verify')
+  if (state === 'SYNC' && !dispatchBlockReason(project)) kinds.push('sync')
+  const gate = parseGate(project.gate)
+  const next = project.next.trim()
+  if (state === 'IDLE' && !dispatchBlockReason(project) && next && !/^(?:無|沒有|none|n\/a|-)(?:$|[；;，,。\s])/i.test(next) && !hasAsk(project) && !gate) kinds.push('continue')
+  if (hasAsk(project)) kinds.push('decide')
+  if (gate && gate.kind !== 'unknown') kinds.push('gate')
+  return [...kinds, 'open']
+}
+
+export function dispatchPrompt(project: Project, kind: 'sync' | 'continue'): string {
+  const instruction = kind === 'sync'
+    ? '把最近完成的工作結果寫回 STATUS CARD，只改 CARD 與歷程，不做其他變更'
+    : '依 STATUS CARD 的下一步繼續；遵守任務骨架；結束時更新 CARD（含關卡欄）'
+  return `${instruction}\nSTATUS：${project.statusPath}\n只在此專案授權的本機範圍作業。不得執行正式環境變更或 release；需要上線時填入 release 關卡，交主控台整理後由使用者決定。`
+}
+
+export function gatePrompt(project: Project): string {
+  const gate = parseGate(project.gate)
+  if (!gate || gate.kind === 'unknown') throw new Error('關卡種類無法辨識；請先檢查 STATUS。')
+  const base = `依 claude-console skill 審核「${project.name}」的 ${gate.kind} 關卡。`
+  return gate.kind === 'release'
+    ? `${base}整理成「可上線／不可上線＋理由＋要使用者確認的一句」；不得自行執行 release 或任何正式環境變更。`
+    : `${base}依證據判斷，指出結果與理由，更新關卡結論；不得執行 release 或正式環境變更。`
+}
+
+export function workSignature(project: Project): string {
+  return JSON.stringify([project.statusPath, project.updated, project.next, project.ask, project.gate ?? ''])
+}
+
+export function confirmationMatches(value: ContinueConfirmation | undefined, signature: string, now: number): boolean {
+  return !!value && value.signature === signature && now >= value.at && now - value.at < 3000
+}
+
+/** CARD verification is a shell command, run in the project's directory, not the console's. */
+export function verificationArgs(command: string, windows: boolean): string[] {
+  if (!windows) return ['sh', '-lc', command]
+  return ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+    `$ErrorActionPreference = 'Stop'; & { ${command}\n}; $consoleVerifyOK = $?; if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; if (-not $consoleVerifyOK) { exit 1 }`]
+}
+
+/** The API returns separate streams; append stderr, then keep only the final three nonblank lines. */
+export function outputTail(stdout: string, stderr = ''): string[] {
+  return `${stdout}\n${stderr}`.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/).map(s => s.trimEnd()).filter(s => s.trim()).slice(-3).map(s => s.slice(0, 500))
+}
+
+export function verificationResult(command: string, at: number, result: { exitCode: number; stdout: string; stderr: string; isStdoutTruncated?: boolean; isStderrTruncated?: boolean }): VerificationResult {
+  return { command, at, ok: result.exitCode === 0, exitCode: result.exitCode, lines: outputTail(result.stdout, result.stderr), truncated: !!(result.isStdoutTruncated || result.isStderrTruncated) }
+}
+
+export function launchId(stdout: string): string | null {
+  try {
+    const data = JSON.parse(stdout.trim())
+    return typeof data?.jobId === 'string' && data.jobId.trim() ? data.jobId : null
+  } catch { return null }
+}

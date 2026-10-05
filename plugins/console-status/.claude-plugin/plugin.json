@@ -1,0 +1,74 @@
+{
+  "name": "console-status",
+  "version": "0.1.0",
+  "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "SaM-runtime"
+  },
+  "repository": "https://github.com/SaM-runtime/claude-console",
+  "license": "MIT",
+  "userConfig": {
+    "registryPath": {
+      "type": "string",
+      "title": "Project registry",
+      "description": "Absolute path or ~/ path to the project registry.",
+      "default": "~/.claude/handoffs/projects-scope.md"
+    },
+    "companionScript": {
+      "type": "string",
+      "title": "Companion script",
+      "description": "Absolute path or ~/ path to codex-companion.mjs; blank disables the dispatch template.",
+      "default": ""
+    },
+    "companionStateDir": {
+      "type": "string",
+      "title": "Companion state directory",
+      "description": "Legacy Temp state root, also passed unchanged to preflight. Blank uses LOCALAPPDATA/Temp/codex-companion (system temp on other platforms).",
+      "default": ""
+    },
+    "dispatchSettingsPath": {
+      "type": "string",
+      "title": "Dispatch settings file",
+      "description": "Absolute or ~/ path to the shared Claude/Codex dispatch settings.",
+      "default": "~/.claude/handoffs/dispatch.json"
+    },
+    "claudeSessionsPath": {
+      "type": "string",
+      "title": "Claude sessions file",
+      "description": "Absolute or ~/ path used to persist project-root to Claude session mappings.",
+      "default": "~/.claude/handoffs/claude-sessions.json"
+    },
+    "executor": {
+      "type": "string",
+      "title": "Default executor",
+      "description": "Fallback executor when dispatch.json is unavailable: claude or codex.",
+      "default": "claude"
+    },
+    "modelsCachePath": {
+      "type": "string",
+      "title": "Model cache",
+      "description": "Absolute or ~/ path to the Codex models cache.",
+      "default": "~/.codex/models_cache.json"
+    },
+    "defaultModel": {
+      "type": "string",
+      "title": "Default model",
+      "description": "Fallback when the settings file or model field is unavailable; blank uses the selected executor default.",
+      "default": ""
+    },
+    "defaultEffort": {
+      "type": "string",
+      "title": "Default effort",
+      "description": "Fallback when the settings file or effort field is unavailable; blank uses the selected executor default.",
+      "default": ""
+    },
+    "companionStateRoots": {
+      "type": "string",
+      "title": "Companion state roots",
+      "description": "JSON array of root paths. Blank reads plugin data first, then companionStateDir (Temp).",
+      "default": ""
+    }
+  },
+  "homepage": "https://github.com/SaM-runtime/claude-console"
+}
