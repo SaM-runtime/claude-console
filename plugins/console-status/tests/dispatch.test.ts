@@ -62,6 +62,7 @@ test('fictional cache preserves model and effort order, ignores malformed and du
 test('terminal and mobile buttons cycle persisted settings, including model-specific efforts', {
   options: { executor: 'codex' },
 }, async ($, on) => {
+  mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
   let settings = '{"executor":"codex","model":"fiction-alpha","effort":"high"}'
   let cache = JSON.stringify({ models: [
     { slug: 'fiction-alpha', supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }] },
@@ -103,19 +104,24 @@ test('row sync trigger reads latest file and omits each empty dispatch flag inde
 }, async ($, on) => {
   let settings = '{"executor":"codex","model":"fiction-current","effort":"high"}'
   let dispatched: string[] = []
-  let completedJobs = '{"jobs":[]}'
+  let completedJobs = '{"jobs":[{"id":"fixture-result","jobClass":"task","status":"completed","completedAt":"2030-01-05T11:00:00Z"}]}'
   mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
   on('env.get', () => ({ value: 'C:/Users/example' }))
-  on('fs.read', (_, e) => ({ value: e.path.endsWith('state.json') ? completedJobs : e.path.endsWith('claude-sessions.json') ? '{"version":1,"roots":{}}' : e.path.endsWith('models_cache.json') ? '{}' : settings }))
+  on('fs.read', (_, e) => ({ value: e.path.endsWith('projects-scope.md') ? '## STATUS 卡位置\n| Demo Fixture | `D:/demo/STATUS.md` |'
+    : e.path.endsWith('STATUS.md') ? '<!-- CARD -->\n- 更新：2030-01-04 08:00\n- 等使用者：無\n<!-- /CARD -->'
+    : e.path.endsWith('state.json') ? completedJobs : e.path.endsWith('claude-sessions.json') ? '{"version":1,"roots":{}}' : e.path.endsWith('models_cache.json') ? '{}' : settings }))
   on('fs.list', () => ({ value: [{ name: 'demo-hash', kind: 'dir' }] }))
   on('ui.open', () => ({ value: {} }) as any)
   on('ui.toast', () => ({ value: undefined }) as any)
+  on('session.usage', () => ({ value: null }))
+  on('session.id', () => ({ value: 'fixture-session' }))
   on('process.run', (_, e) => {
+    if (e.argv[0] !== 'node') return { value: { exitCode: 0, stdout: e.argv[0] === 'claude' ? '[]' : 'OK codex=0.0.0-test', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     dispatched = [...e.argv]
-    completedJobs = '{"jobs":[{"id":"new-job","jobClass":"task","status":"completed"}]}'
+    completedJobs = '{"jobs":[{"id":"new-job","jobClass":"task","status":"completed","completedAt":"2030-01-05T11:00:00Z"}]}'
     return { value: { exitCode: 0, stdout: '{"jobId":"new-job"}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  await $.command.run({ command: 'console', args: 'demo' } as any)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
   const ui = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'terminal',
     props: { title: 'Console', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any)
   for (const [model, effort, flags] of [
@@ -125,10 +131,10 @@ test('row sync trigger reads latest file and omits each empty dispatch flag inde
     ['', '', []],
   ] as [string, string, string[]][]) {
     settings = JSON.stringify({ executor: 'codex', model, effort })
-    await $.command.run({ command: 'console', args: 'demo' } as any)
-    await ui.pointer({ in: 'rows', type: 'down', button: 'right', x: 12, y: 2 } as any)
+    await $.command.run({ command: 'console', args: 'refresh' } as any)
+    await ui.pointer({ in: 'rows', type: 'down', button: 'right', x: 12, y: 0 } as any)
     await ui.press({ key: 'm-sync' })
-    expect(dispatched.slice(0, -1)).toEqual(['node', 'D:/Tools/run.mjs', 'task', '--background', '--write', '--resume-last', '--cwd', 'demo', '--json', ...flags])
+    expect(dispatched.slice(0, -1)).toEqual(['node', 'D:/Tools/run.mjs', 'task', '--background', '--write', '--resume-last', '--cwd', 'D:/demo', '--json', ...flags])
     expect(dispatched[dispatched.length - 1].includes('只改 CARD 與歷程')).toBe(true)
     await ui.press({ key: 'm-close' })
   }

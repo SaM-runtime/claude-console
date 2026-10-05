@@ -15,6 +15,11 @@ import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gateProm
 import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
 import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
+import { projectColumnWidth, demoEvents } from './logic'
+import { batteryBody } from './battery'
+import { feedBody } from './feed'
+import { trackRowChanges } from './presentation'
+import { layoutBand } from './band'
 
 const dispatchRevision = atom({ plugin: 'console-status', key: 'dispatchRevision' } as const, 0)
 
@@ -22,6 +27,7 @@ const PANE = 'console-status'
 const TICK_MS = 60_000
 const SLOW_MS = 5 * 60_000
 const snapshot = atom({ plugin: 'console-status', key: 'snapshot' } as const, null)
+const isDemo = atom({ plugin: 'console-status', key: 'isDemo' } as const, false)
 const isPaneOpen = atom({ plugin: 'console-status', key: 'isPaneOpen' } as const, false)
 const isBandHidden = atom({ plugin: 'console-status', key: 'isBandHidden' } as const, false)
 const isDetail = atom({ plugin: 'console-status', key: 'isDetail' } as const, false)
@@ -47,14 +53,42 @@ let codex = '…'
 let agents: Agent[] = []
 let codexQuotaText = ''
 let lastSlow = 0
-let busy = false
-let refreshQueued = false
+let demoActive = false
+let dataGeneration = 0
+let refreshOwner: { generation: number; queued: boolean } | null = null
+let refreshTimer: { cancel(): void } | undefined
+let displayWrites: Promise<void> = Promise.resolve()
+let demoContext: { config: ConsoleConfig; dispatch: Awaited<ReturnType<typeof readDispatch>> } | null = null
+const DISCARDED_REFRESH = Symbol('discarded refresh')
 let settingsWrite: Promise<void> = Promise.resolve()
 let launchGeneration = 0
 const acceptedLaunches = new Set<string>()
 const unpublishedLaunches = new Map<string, { root: string; job: ExecutorJob }>()
 const jobKey = (job: { executor?: ExecutorKind; id: string }) => `${job.executor}:${job.id}`
 const workspaceKey = (root: string) => /^[a-z]:\/|^\/\//i.test(root) ? root.toLowerCase() : root
+
+// A mode transition waits for any older publication, then replaces every visible data channel.
+async function publishDisplay(write: () => Promise<void>) {
+  const previous = displayWrites
+  let release = () => {}
+  displayWrites = new Promise<void>(resolve => { release = resolve })
+  await previous
+  try { await write() } finally { release() }
+}
+
+async function demoEnabled($: any) {
+  return demoActive || await read($, isDemo)
+}
+
+async function refreshDemo($: any, generation = dataGeneration, executor?: ExecutorKind) {
+  const now = await $.clock.now()
+  await publishDisplay(async () => {
+    if (generation !== dataGeneration || !await demoEnabled($)) return
+    const previous = await read($, snapshot)
+    await update($, snapshot, () => ({ ...demoSnapshot(now), executor: executor ?? demoContext?.dispatch.settings.executor ?? previous?.executor ?? 'claude' }))
+    await update($, feedAtom, () => demoEvents(now))
+  })
+}
 
 async function workspaceJobs(kind: ExecutorKind, deps: ExecutorDeps, config: ConsoleConfig, root: string): Promise<ExecutorJob[]> {
   const jobs = await listWorkspaceJobs(kind, deps, config, root)
@@ -107,54 +141,87 @@ async function saveDispatch($: any, config: ConsoleConfig, field: keyof Dispatch
 }
 
 async function slowProbes($: any, config: ConsoleConfig, executor: DispatchSettings['executor']) {
+  let probeCodex = ''
+  let quotaText = ''
+  let probeAgents: Agent[] = []
   if (executor === 'codex') {
     const ps = await $.process
       .run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `${$.plugin.root}/scripts/codex-preflight.ps1`, ...(config.companionScript ? ['-CompanionScript', config.companionScript] : []), '-CompanionStateDir', config.companionStateDir], { timeoutMs: 30_000 })
       .catch(() => null)
-    codex = ps ? (ps.stdout.trim().split('\n').pop() ?? '').trim() || 'unknown' : 'unknown'
+    probeCodex = ps ? (ps.stdout.trim().split('\n').pop() ?? '').trim() || 'unknown' : 'unknown'
     const q = await $.process
       .run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `${$.plugin.root}/scripts/codex-quota.ps1`], { timeoutMs: 30_000 })
       .catch(() => null)
-    codexQuotaText = q ? q.stdout : ''
-  } else { codex = ''; codexQuotaText = '' }
+    quotaText = q ? q.stdout : ''
+  }
   const ag = await $.process.run(['claude', 'agents', '--json'], { timeoutMs: 30_000 }).catch(() => null)
-  try { agents = ag ? JSON.parse(ag.stdout) : [] } catch { agents = [] }
+  try { probeAgents = ag ? JSON.parse(ag.stdout) : [] } catch { probeAgents = [] }
+  return { codex: probeCodex, quotaText, agents: probeAgents }
 }
 
 async function refresh($: any, options: PluginOptions, force = false) {
-  if (busy) { if (force) refreshQueued = true; return }
-  busy = true
+  const generation = dataGeneration
+  if (await demoEnabled($)) { await refreshDemo($, generation); return }
+  if (generation !== dataGeneration) return
+  if (refreshOwner?.generation === generation) { if (force) refreshOwner.queued = true; return }
+  const owner = { generation, queued: false }
+  refreshOwner = owner
+  const current = () => generation === dataGeneration && !demoActive
+  const guarded = async <T,>(work: () => Promise<T>): Promise<T> => {
+    if (!current()) throw DISCARDED_REFRESH
+    const result = await work()
+    if (!current()) throw DISCARDED_REFRESH
+    return result
+  }
+  // Checks surround every external await, so a superseded read cannot start the next read/probe/write.
+  const io = {
+    plugin: { root: $.plugin.root },
+    clock: { now: () => guarded(() => $.clock.now()) },
+    env: { get: (name: string) => guarded(() => name === 'USERPROFILE' ? $.env.get('USERPROFILE')
+      : name === 'HOME' ? $.env.get('HOME') : name === 'LOCALAPPDATA' ? $.env.get('LOCALAPPDATA')
+      : name === 'TMPDIR' ? $.env.get('TMPDIR') : $.env.get('TEMP')) },
+    fs: { read: (path: string) => guarded(() => $.fs.read(path)), list: (path: string) => guarded(() => $.fs.list(path)), write: (path: string, text: string) => guarded(() => $.fs.write(path, text)) },
+    process: { run: (argv: string[], init: any) => guarded(() => $.process.run(argv, init)) },
+    session: { usage: () => guarded(() => $.session.usage()), id: () => guarded(() => $.session.id()) },
+  }
   const startingGeneration = launchGeneration
   let refreshingExecutor: DispatchSettings['executor'] | undefined
   let refreshConfig: ConsoleConfig | undefined
   try {
-    const now = await $.clock.now()
-    const { home, config } = await paths($, options)
-    const { settings } = await readDispatch($, config)
+    const now = await io.clock.now() as number
+    const { home, config } = await paths(io, options)
+    const { settings } = await readDispatch(io, config)
     refreshingExecutor = settings.executor
     refreshConfig = config
-    if (force || now - lastSlow > SLOW_MS) { await slowProbes($, config, settings.executor); lastSlow = now }
+    if (force || now - lastSlow > SLOW_MS) {
+      const probes = await guarded(() => slowProbes(io, config, settings.executor))
+      codex = probes.codex
+      codexQuotaText = probes.quotaText
+      agents = probes.agents
+      lastSlow = now
+    }
     const deps: ExecutorDeps = {
-      run: (argv, init) => $.process.run(argv, init),
-      files: { read: path => $.fs.read(path), list: path => $.fs.list(path), write: (path, text) => $.fs.write(path, text) },
-      now: () => $.clock.now(),
+      run: (argv, init) => guarded(() => $.process.run(argv, init)),
+      files: { read: path => guarded(() => $.fs.read(path)), list: path => guarded(() => $.fs.list(path)), write: (path, text) => guarded(() => $.fs.write(path, text)) },
+      now: () => guarded(() => $.clock.now()),
     }
     let error: string | null = null
-    const registry = await $.fs.read(config.registryPath).catch(() => null)
+    const registry = await io.fs.read(config.registryPath).catch(() => null) as string | null
     if (registry === null) error = '找不到登錄表'
     const projects: Project[] = []
     const bases: string[] = []
     const roots: string[] = []
+    const warnings: string[] = []
     for (const row of parseRegistry(registry ?? '', home)) {
-      const card = await $.fs.read(row.statusPath).catch(() => null)
+      const card = await io.fs.read(row.statusPath).catch(() => null) as string | null
       const root = projectRoot(row.statusPath)
       bases.push(root.replace(/\/+$/, '').split('/').pop() ?? '')
       roots.push(root)
-      const jobs = await workspaceJobs(settings.executor, deps, config, root)
+      const jobs = await guarded(() => workspaceJobs(settings.executor, deps, config, root))
       for (const job of jobs) {
         if (!job.warning) continue
         const text = `${row.name}：${job.warning}`
-        if (!(await read($, feedAtom)).some(event => event.text === text)) await actionNotice($, text, false)
+        warnings.push(text)
       }
       const project = { ...buildProject(row, card, jobs, now), executor: settings.executor }
       for (const j of project.jobs) {
@@ -164,37 +231,53 @@ async function refresh($: any, options: PluginOptions, force = false) {
       }
       projects.push(project)
     }
-    const usage = await $.session.usage().catch(() => null)
+    const usage: any = await io.session.usage().catch(() => null)
     const cur: Snapshot = {
-      at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, await $.session.id().catch(() => null), roots, home), codex: settings.executor === 'codex' ? relevantCodex(codex, bases) : '',
+      at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, await io.session.id().catch(() => null) as string | null, roots, home), codex: settings.executor === 'codex' ? relevantCodex(codex, bases) : '',
       contextPercent: usage?.context?.percent ?? null, error,
       codexQuota: parseCodexQuota(codexQuotaText, now),
       limits: (usage?.rateLimits ?? []).map((l: any) => ({ kind: String(l.kind), percent: Number(l.percentUsed) || 0, ...(l.resetsAt ? { resetsAt: String(l.resetsAt) } : {}) })),
     }
-    if ((await readDispatch($, config)).settings.executor !== settings.executor) { refreshQueued = true; return }
-    const prev = await read($, snapshot)
-    const sameExecutor = prev?.executor === cur.executor ? prev : null
-    for (const t of diffToasts(sameExecutor, cur)) $.ui.toast(t, { timeoutMs: 8000 })
-    const fresh = events(sameExecutor, cur)
-    if (fresh.length) await update($, feedAtom, list => [...fresh, ...list].slice(0, 20))
-    await update($, snapshot, latest => {
-      if (startingGeneration === launchGeneration || !latest) return cur
-      // A refresh already in flight must not erase a dispatch accepted after it started.
-      return { ...cur, projects: cur.projects.map(project => {
-        const recent = latest.projects.find(item => item.statusPath === project.statusPath)
-        const missing = recent?.jobs.filter(job => acceptedLaunches.has(job.id) && !project.jobs.some(item => item.id === job.id && item.executor === job.executor)) ?? []
-        const ids = new Set(missing.map(job => job.id))
-        return missing.length ? { ...project, jobs: [...missing, ...project.jobs], tasks: [...(recent?.tasks ?? []).filter(task => ids.has(task.id)), ...(project.tasks ?? [])] } : project
-      }) }
+    if ((await readDispatch(io, config)).settings.executor !== settings.executor) { owner.queued = true; return }
+    await publishDisplay(async () => {
+      if (!current()) return
+      const prev = await guarded(() => read($, snapshot))
+      const previousFeed = await guarded(() => read($, feedAtom))
+      const sameExecutor = !prev?.demo && prev?.executor === cur.executor ? prev : null
+      const newWarnings = warnings.filter(text => !previousFeed.some(event => event.text === text))
+      const fresh = [...newWarnings.map(text => ({ at: now, text, tone: 'red' as const })), ...events(sameExecutor, cur)]
+      if (fresh.length) await guarded(() => update($, feedAtom, list => current() ? [...fresh, ...list].slice(0, 20) : list))
+      await guarded(() => update($, snapshot, latest => {
+        if (!current()) return latest
+        if (startingGeneration === launchGeneration || !latest) return trackRowChanges(latest, cur, now)
+        // A refresh already in flight must not erase a dispatch accepted after it started.
+        return trackRowChanges(latest, { ...cur, projects: cur.projects.map(project => {
+          const recent = latest.projects.find(item => item.statusPath === project.statusPath)
+          const missing = recent?.jobs.filter(job => acceptedLaunches.has(job.id) && !project.jobs.some(item => item.id === job.id && item.executor === job.executor)) ?? []
+          const ids = new Set(missing.map(job => job.id))
+          return missing.length ? { ...project, jobs: [...missing, ...project.jobs], tasks: [...(recent?.tasks ?? []).filter(task => ids.has(task.id)), ...(project.tasks ?? [])] } : project
+        }) }, now)
+      }))
+      for (const text of [...newWarnings, ...diffToasts(sameExecutor, cur)]) {
+        if (!current()) return
+        $.ui.toast(text, { timeoutMs: 8000 })
+      }
     })
   } catch (error) {
-    if (refreshConfig && (await readDispatch($, refreshConfig)).settings.executor !== refreshingExecutor) { refreshQueued = true; return }
+    if (!current() || error === DISCARDED_REFRESH) return
+    if (refreshConfig && (await readDispatch(io, refreshConfig)).settings.executor !== refreshingExecutor) { owner.queued = true; return }
+    if (!current()) return
     const message = `執行者狀態讀取失敗：${error instanceof Error ? error.message : String(error)}`
-    await update($, snapshot, previous => previous ? { ...previous, error: message } : { at: 0, projects: [], blocked: [], codex: '', contextPercent: null, error: message })
-    $.ui.toast(message, { timeoutMs: 8000 })
+    await publishDisplay(async () => {
+      if (!current()) return
+      await update($, snapshot, previous => !current() ? previous : previous ? { ...previous, error: message } : { at: 0, projects: [], blocked: [], codex: '', contextPercent: null, error: message })
+      if (current()) $.ui.toast(message, { timeoutMs: 8000 })
+    })
   } finally {
-    busy = false
-    if (refreshQueued) { refreshQueued = false; void refresh($, options, true) }
+    if (refreshOwner === owner) {
+      refreshOwner = null
+      if (owner.queued && current()) void refresh($, options, true)
+    }
   }
 }
 
@@ -204,13 +287,22 @@ async function openPane($: any) {
 }
 
 async function actionNotice($: any, text: string, ok: boolean) {
-  $.ui.toast(text, { timeoutMs: 8000 })
+  const generation = dataGeneration
+  if (await demoEnabled($)) return
   const at = await $.clock.now()
-  await update($, feedAtom, list => [{ at, text, tone: ok ? 'green' : 'red' } as const, ...list].slice(0, 20))
+  await publishDisplay(async () => {
+    if (generation !== dataGeneration || await demoEnabled($)) return
+    await update($, feedAtom, list => [{ at, text, tone: ok ? 'green' : 'red' } as const, ...list].slice(0, 20))
+    if (generation === dataGeneration && !demoActive) $.ui.toast(text, { timeoutMs: 8000 })
+  })
 }
 
 /** All entry points share this lock and re-check the latest state, including stale rendered buttons. */
 async function triggerAction($: any, options: PluginOptions, statusPath: string, kind: ActionKind) {
+  if (await demoEnabled($)) {
+    $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。')
+    return
+  }
   if (actionLocks.has(statusPath)) return
   actionLocks.add(statusPath)
   let timer: { cancel(): void } | undefined
@@ -288,11 +380,11 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       const startedAt = new Date(acceptedAt).toISOString()
       acceptedLaunches.add(id)
       launchGeneration++
-      await update($, snapshot, value => value ? { ...value, projects: value.projects.map(item => item.statusPath === statusPath ? {
+      await update($, snapshot, value => value ? trackRowChanges(value, { ...value, projects: value.projects.map(item => item.statusPath === statusPath ? {
         ...item,
         jobs: [{ kind: 'running' as const, id, executor: settings.executor, status: 'queued', summary: actionLabel(kind, p), startedAt, phase: '等待任務狀態' }, ...item.jobs.filter(j => j.id !== id || j.executor !== settings.executor)],
         tasks: [{ id, status: 'queued', title: actionLabel(kind, p), model: settings.model, effort: settings.effort, startedAt }, ...(item.tasks ?? []).filter(t => t.id !== id)],
-      } : item) } : value)
+      } : item) }, acceptedAt) : value)
       await actionNotice($, `${name}：${settings.executor} 已接受${kind === 'sync' ? '同步 STATUS' : '繼續下一步'}，等待執行結果`, true)
     } else if (kind === 'decide') {
       const filled = await $.prompt.fill({ text: `「${p.name}」決策：`, mode: 'replace' })
@@ -348,13 +440,15 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
 
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
+    dataGeneration++
+    refreshTimer?.cancel()
     if (actionLocks.size === 0) earlyReviewStarts.clear()
     selectionClaim = null
     await update($, reviewRequests, values => Object.fromEntries(Object.entries(values).filter(([path]) => actionLocks.has(path))))
     await update($, pendingActions, values => Object.fromEntries(Object.entries(values).filter(([path]) => actionLocks.has(path))))
     await update($, continueConfirmations, () => ({}))
     await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；band 橫帶；demo 示範' })
-    $.clock.every(TICK_MS, () => void refresh($, options))
+    refreshTimer = $.clock.every(TICK_MS, () => void refresh($, options))
     void refresh($, options, true)
     return next(e)
   })
@@ -421,6 +515,7 @@ export const register: Register = (on, options) => {
         if (setting[2] !== undefined) {
           const value = setting[2] === '""' ? '' : setting[2]
           const saved = await changeDispatch($, config, field, value)
+          if (await demoEnabled($)) demoContext = { config, dispatch: await readDispatch($, config) }
           await update($, dispatchRevision, v => v + 1) // Invalidate pane after a settings write.
           if (field === 'executor') await refresh($, options, true)
           const text = `派工設定：${saved.executor} · ${saved.model || '預設'} · ${saved.effort || '預設'}`
@@ -431,11 +526,38 @@ export const register: Register = (on, options) => {
         return { text: `目前：${settings.executor} · ${settings.model || '預設'} · ${settings.effort || '預設'}\nexecutor：claude, codex\nmodel：${models.length ? models.map(m => m.model).join(', ') : '快取不可用；使用 /console model <name>'}\neffort：${effortOptions(settings.executor, models, settings.model).join(', ')}\n以 /console model "" 或 /console effort "" 恢復執行者預設。` }
       } catch (error) { return { text: `設定未儲存：${error instanceof Error ? error.message : String(error)}` } }
     }
-    if (arg === 'refresh') { await refresh($, options, true); return { text: '主控台總覽已更新。' } }
+    if (arg === 'refresh') {
+      if (await demoEnabled($)) {
+        dataGeneration++
+        demoActive = false
+        await publishDisplay(async () => {
+          await update($, isDemo, () => false)
+          await update($, snapshot, () => null)
+          await update($, feedAtom, () => [])
+          await update($, selected, () => null)
+          await update($, hovered, () => null)
+          await update($, menuFor, () => null)
+        })
+      }
+      await refresh($, options, true)
+      return { text: '主控台總覽已更新。' }
+    }
     if (arg === 'demo') {
+      demoActive = true
+      const generation = ++dataGeneration
+      await publishDisplay(async () => {
+        await update($, isDemo, () => true)
+        await update($, feedAtom, () => [])
+        await update($, selected, () => null)
+        await update($, hovered, () => null)
+        await update($, menuFor, () => null)
+        await update($, cursor, () => -1)
+      })
       const { config } = await paths($, options)
-      const { settings } = await readDispatch($, config)
-      await update($, snapshot, () => ({ ...demoSnapshot(Date.now()), executor: settings.executor }))
+      const dispatch = await readDispatch($, config)
+      if (generation !== dataGeneration) return { text: '示範資料載入已被較新的模式切換取代。' }
+      demoContext = { config, dispatch }
+      await refreshDemo($, generation, dispatch.settings.executor)
       await $.ui.open({ id: PANE, title: '主控台（示範資料）' })
       await update($, isPaneOpen, () => true)
       return { text: '已載入示範資料；/console refresh 換回實際狀態。' }
@@ -496,22 +618,28 @@ export const register: Register = (on, options) => {
   const TONE: Record<string, string> = { amber: C.amber, teal: C.teal, blue: C.blue, red: C.red, green: C.green }
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, nextHook) => {
-    const s = await read($, snapshot)
+    const generation = dataGeneration
+    const demo = await demoEnabled($)
+    const stored = await read($, snapshot)
+    const s = demo && !stored?.demo ? demoSnapshot(await $.clock.now()) : stored
     if (e.props.hasSurvey || s === null || (await read($, isBandHidden))) return nextHook(e)
     const { Box, Text, Button } = $.ui.resolve(e)
-    const n = next(s)
-    const c = counts(s)
-    const ctx = s.contextPercent
-    const sel = await read($, selected)
     const paneOpen = await read($, isPaneOpen)
+    const columns = Math.max(0, Math.floor(e.props.bodyColumns ?? 80))
+    const band = layoutBand(s, { columns, demo, paneOpen })
+    if (generation !== dataGeneration) return <Box height={1} width={columns} overflow="hidden"><Text color={C.dim} wrap="truncate-end">{demoActive ? ' 示範資料 ' : '讀取中…'}</Text></Box>
     return (
-      <Box gap={1}>
-        {!paneOpen && <Text bold color={n ? C.amber : C.green} backgroundColor={n ? C.amberBg : undefined}>{n ? ' 下一步 ' : ' 就緒 '}</Text>}
-        {!paneOpen && <Text color={C.strong} wrap="truncate-end">{n ?? ''}</Text>}
-        {SHOWN.filter(k => c[k] > 0).map(k => <Text key={'c' + k} color={FG[k]}>● {LABEL[k].replace('　', '')} {c[k]}</Text>)}
-        {sel !== null && <Text color={C.blue}>◆ {sel.replace(/\s.*$/, '')}</Text>}
-        {ctx !== null && ctx >= ROTATE_PERCENT && <Text color={C.red}>上下文 {ctx}%</Text>}
-        <Button key="pane" plain dimColor label="⌗ 面板" onPress={() => void openPane($)} />
+      <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
+        <Box gap={1} flexShrink={0} height={1}>
+          {band.items.map(item => <Box key={'band-' + item.id} width={item.width} flexShrink={0} height={1} overflow="hidden">
+            <Text wrap="truncate-end" color={item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' ? C.red : FG[item.id as State] ?? C.text}
+              backgroundColor={item.id === 'demo' ? C.bar : undefined}>{item.text}</Text>
+          </Box>)}
+        </Box>
+        <Box flexGrow={1} minWidth={band.items.length ? 1 : 0} />
+        <Box width={band.buttonWidth} flexShrink={0} height={1} overflow="hidden">
+          <Button key="pane" plain dimColor label={band.button} onPress={() => void openPane($)} />
+        </Box>
       </Box>
     )
   })
@@ -547,14 +675,18 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const generation = dataGeneration
     const ui = $.ui.resolve(e) as any
     const { Box, Text, Button } = ui
-    const s = await read($, snapshot)
+    const demo = await demoEnabled($)
+    const stored = await read($, snapshot)
+    const s = demo && !stored?.demo ? demoSnapshot(await $.clock.now()) : stored
     if (s === null) return <Text color={C.dim}>讀取各專案狀態中…</Text>
     const detail = await read($, isDetail)
-    const sel = await read($, selected)
+    const selectedName = await read($, selected)
+    const sel = demo && !s.projects.some(project => project.name === selectedName) ? null : selectedName
     const cur = await read($, cursor)
-    const feed = await read($, feedAtom)
+    const feed = demo ? demoEvents(s.at) : await read($, feedAtom)
     const hov = await read($, hovered)
     const menu = await read($, menuFor)
     const refreshing = await read($, isRefreshing)
@@ -562,12 +694,13 @@ export const register: Register = (on, options) => {
     const confirmations = await read($, continueConfirmations)
     const verified = await read($, verificationResults)
     const pulse = await read($, actionPulse)
-    const { config } = await paths($, options)
+    const { config } = demo ? demoContext ?? { config: resolveConfig(options, '', '', '/tmp') } : await paths($, options)
     await read($, dispatchRevision)
-    const dispatch = await readDispatch($, config)
+    const dispatch = demo ? demoContext?.dispatch ?? { settings: { executor: s.executor ?? 'claude', model: '', effort: '' }, models: [] } : await readDispatch($, config)
     const cycle = async (field: keyof DispatchSettings) => {
       try {
         const saved = await changeDispatch($, config, field)
+        if (await demoEnabled($)) demoContext = { config, dispatch: await readDispatch($, config) }
         await update($, dispatchRevision, v => v + 1)
         if (field === 'executor') await refresh($, options, true)
         $.ui.toast(`派工設定已儲存：${saved.executor} · ${saved.model || '預設'} · ${saved.effort || '預設'}`)
@@ -580,11 +713,14 @@ export const register: Register = (on, options) => {
     const health = codexHealth(s.codex)
     const width: number = Math.max(40, (e.props.bodyColumns ?? 80) - 1)
     const list = rows(s)
-    const W = { state: 8, project: 10, age: 4 }
+    const now = await $.clock.now()
+    const W = { state: 8, project: projectColumnWidth(list.map(row => row.project)), age: 4 }
 
     const specs = list.map(r => ({
       id: r.full,
       shimmer: r.state === 'RUNNING',
+      breathe: r.state === 'ACTION' ? [C.amberBg, '#443925', '#4D412B'] : r.state === 'GATE' ? [C.purpleBg, '#3D304B', '#463755'] : undefined,
+      changedAt: s.projects.find(project => project.name === r.full)?.changedAt,
       cells: [
         { t: ` ${LABEL[r.state]} `, c: FG[r.state], bg: BG[r.state], b: r.state !== 'IDLE', w: W.state },
         { t: r.project, c: r.state === 'IDLE' ? C.dim : C.strong, w: W.project },
@@ -597,7 +733,7 @@ export const register: Register = (on, options) => {
     const table = rich
       ? (
         <ui.Client key="rows" module="./rows.tsx" width="100%"
-          props={JSON.parse(JSON.stringify({ rows: specs, selected: sel, cursor: cur, selectedBg: C.sel, hoverBg: C.hover, shimmer: SHIMMER }))} />
+          props={JSON.parse(JSON.stringify({ rows: specs, now, changed: ['#2C3B4B', '#24303D', '#1C252F'], selected: sel, cursor: cur, selectedBg: C.sel, hoverBg: C.hover, shimmer: SHIMMER }))} />
       )
       : (
         <Box flexDirection="column">
@@ -625,20 +761,20 @@ export const register: Register = (on, options) => {
       if (parseGate(p.gate)) return `關卡：${p.gate}`
       const run = p.jobs.find(j => j.kind === 'running')
       if (run) return runLine(run, s.at)
-      if (p.jobs.some(j => j.kind === 'newer')) return '執行者結果未同步至 STATUS'
+      if (p.jobs.some(j => j.kind === 'newer')) return '結果未同步至 STATUS'
       return p.state || '—'
     }
     const hovRow = hov === null ? null : list.find(x => x.full === hov) ?? null
-    // Fixed two-line help strip: hovering a label lays its text over the default line, so nothing reflows.
+    // One-line help strip; labels replace its contents without adding a blank row above the controls.
     const helpStrip = (
-      <Box key="help" height={2} backgroundColor={C.bar} paddingX={1}>
+      <Box key="help" height={1} backgroundColor={C.bar} paddingX={1}>
         {hovRow !== null
-          ? <Text color={C.text} wrap="wrap"><Text bold color={FG[hovRow.state]}>{hovRow.project}　</Text>{fullItem(hovRow.full)}</Text>
+          ? <Text color={C.text} wrap="truncate-end"><Text bold color={FG[hovRow.state]}>{hovRow.project}　</Text>{fullItem(hovRow.full)}</Text>
           : <Text color={C.faint}>ⓘ 滑鼠移到標籤或專案列上，這裡會顯示說明或完整內容</Text>}
         {Object.keys(HELP).map(id => (
-          <Box key={'tip-' + id} position="absolute" top={0} left={0} width="100%" height={2} paddingX={1}
+          <Box key={'tip-' + id} position="absolute" top={0} left={0} width="100%" height={1} paddingX={1}
             backgroundColor={C.bar} display="none" hover={{ scope: 'help-' + id, display: 'flex' }}>
-            <Text color={C.blue} wrap="wrap">ⓘ {HELP[id]}</Text>
+            <Text color={C.blue} wrap="truncate-end">ⓘ {HELP[id]}</Text>
           </Box>
         ))}
       </Box>
@@ -652,11 +788,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column">
         <Box gap={1} hover={{ scope: 'help-' + id }}>
           <Box width={9}><Text color={C.dim}>{label}</Text></Box>
-          <Text>
-            <Text bold color="#11151B" backgroundColor={tone}>{b.filled}</Text>
-            <Text bold color={tone} backgroundColor="#2A313C">{b.empty}</Text>
-            <Text backgroundColor={b.tone === 'green' ? '#4A5260' : tone}> </Text>
-          </Text>
+          {rich ? <ui.Client key={'battery-' + id + '-' + label} module="./battery.tsx" width={16} height={1} props={{ percent: b.left, tone }} /> : batteryBody(b.left, tone, ui)}
           {hint !== '' && <Text color={C.red}>{hint}</Text>}
           {note ? <Text color={C.dim} wrap="truncate-end">{note}</Text> : null}
         </Box>
@@ -701,10 +833,11 @@ export const register: Register = (on, options) => {
     const rule = <Text color={C.faint} wrap="truncate-end">{'─'.repeat(width)}</Text>
     const limits = (s.limits ?? []).slice(0, 2)
 
+    if (generation !== dataGeneration) return <Text color={C.dim}>{demoActive ? ' 示範資料 ' : '讀取中…'}</Text>
     return (
       <Box flexDirection="column" gap={1}>
         <Box justifyContent="space-between">
-          <Text bold color={C.strong}>主控台<Text color={C.dim}>　{s.projects.length} 個專案</Text></Text>
+          <Text bold color={C.strong}>主控台{demo && <Text color={C.dim} backgroundColor={C.bar}> 示範資料 </Text>}<Text color={C.dim}>　{s.projects.length} 個專案</Text></Text>
           <Text color={C.dim}>{time} 更新</Text>
         </Box>
         <Box gap={1} flexWrap="wrap">
@@ -739,7 +872,7 @@ export const register: Register = (on, options) => {
         </Box>
 
         <Box flexDirection="column">
-          <Box gap={1}>
+          <Box gap={1} paddingRight={1}>
             <Box width={W.state}><Text color={C.dim}> 狀態</Text></Box>
             <Box width={W.project}><Text color={C.dim}>專案</Text></Box>
             <Box flexGrow={1}><Text color={C.dim}>項目</Text></Box>
@@ -830,13 +963,10 @@ export const register: Register = (on, options) => {
         {feed.length > 0 && (
           <Box flexDirection="column">
             <Text color={C.dim}>動態</Text>
-            {feed.slice(0, 5).map((ev, i) => (
-              <Text key={'ev' + i} wrap="truncate-end">
-                <Text color={C.dim}>{new Date(ev.at).toTimeString().slice(0, 5)}　</Text>
-                <Text color={TONE[ev.tone] ?? C.text}>● </Text>
-                <Text color={C.text}>{ev.text}</Text>
-              </Text>
-            ))}
+            {(() => {
+              const props = { events: feed.slice(0, 5).map(ev => ({ at: ev.at, text: ev.text, color: TONE[ev.tone] ?? C.text })), now, normal: C.text, bright: C.strong, dim: C.dim }
+              return rich ? <ui.Client key="feed" module="./feed.tsx" width="100%" props={props} /> : feedBody(props, now, ui, false)
+            })()}
           </Box>
         )}
 
@@ -844,20 +974,20 @@ export const register: Register = (on, options) => {
           {rule}
           <Box gap={3} flexWrap="wrap">
             {dispatch.settings.executor === 'codex' && <Box key="h-codex" hover={{ scope: 'help-codex' }}>
-              <Text color={C.dim}>Codex <Text color={health === 'stale' ? C.red : health === 'ok' ? C.green : C.amber}>● {health === 'stale' ? '需處理' : health === 'ok' ? '正常' : '未知'}</Text></Text>
+              <Text color={C.dim}>Codex <Text color={health === 'stale' ? C.red : health === 'ok' ? C.green : C.dim}>● {health === 'stale' ? '需處理' : health === 'ok' ? '正常' : '未檢查'}</Text></Text>
             </Box>}
             <Box key="h-sessions" hover={{ scope: 'help-sessions' }}>
               <Text color={C.dim}>其他工作階段 <Text color={s.blocked.length ? C.amber : C.green}>● {s.blocked.length ? `${s.blocked.length} 個停住` : '無'}</Text></Text>
             </Box>
           </Box>
           {/* Quota grouped per tool, each in its own titled frame. */}
-          <Box key="quota" flexWrap="wrap" gap={1} marginTop={1}>
+          <Box key="quota" flexWrap="wrap" gap={1}>
             <Box key="q-claude" flexDirection="column" borderStyle="round" borderColor={C.faint} paddingX={1}>
               <Text bold color={C.strong}>Claude</Text>
               {ctx !== null && <Battery id="ctx" label="上下文" used={ctx} hint={ctx >= ROTATE_PERCENT ? '建議換新主控台' : ''} />}
-              {limits.map(l => <Battery key={'lim' + l.kind} id={/five/.test(l.kind) ? 'five_hour' : 'seven_day'} label={limitName(l.kind)} used={l.percent} hint="" note={resetText(l.resetsAt, Date.now())} />)}
+              {limits.map(l => <Battery key={'lim' + l.kind} id={/five/.test(l.kind) ? 'five_hour' : 'seven_day'} label={limitName(l.kind)} used={l.percent} hint="" note={resetText(l.resetsAt, now)} />)}
             </Box>
-            {dispatch.settings.executor === 'codex' && (
+            {(s.demo || dispatch.settings.executor === 'codex') && ((s.codexQuota?.limits.length ?? 0) > 0 || s.codexQuota?.credits) && (
               <Box key="q-codex" flexDirection="column" borderStyle="round" borderColor={C.faint} paddingX={1}>
                 <Box gap={1}>
                   <Text bold color={C.strong}>Codex</Text>
@@ -865,29 +995,33 @@ export const register: Register = (on, options) => {
                 {s.codexQuota?.credits ? <Text color={C.dim}>餘額 {s.codexQuota.credits} credits</Text> : null}
                 {(s.codexQuota?.limits ?? []).map(l => (
                   <Battery key={'cq' + l.label} id="codex_quota" label={l.label === 'Codex 週' ? '本週' : l.label.replace('Codex ', '')} used={l.percent} hint=""
-                    note={resetText(l.resetsAt, Date.now())} />
+                    note={resetText(l.resetsAt, now)} />
                 ))}
               </Box>
             )}
           </Box>
-          {s.blocked.map(b => <Text key={'b' + b.name} color={C.amber} wrap="truncate-end">{`  ・${b.name}：${b.why}`}</Text>)}
-          {dispatch.settings.executor === 'codex' && health !== 'ok' && <Text color={health === 'stale' ? C.red : C.amber} wrap="truncate-end">{`  ・${s.codex}`}</Text>}
+          {s.blocked.map((b, i) => <Text key={'b' + i + '-' + b.name} color={C.amber} wrap="truncate-end">{`  ・${b.name}：${b.why}`}</Text>)}
+          {dispatch.settings.executor === 'codex' && health !== 'ok' && s.codex.trim() && <Text color={health === 'stale' ? C.red : C.dim} wrap="truncate-end">{`  ・${s.codex}`}</Text>}
         </Box>
 
+        <Box key="footer" flexDirection="column" gap={1}>
         {helpStrip}
-
         <Box gap={2}>
           <Button key="detail" plain dimColor label={detail ? '↥ 精簡' : '↧ 各專案詳細'} onPress={() => void update($, isDetail, v => !v)} />
+          <Box gap={1}>
+          {refreshing && rich && <ui.Client key="refresh-spin" module="./spinner.tsx" width={1} height={1} props={{ color: C.dim }} />}
           <Button key="refresh" plain dimColor label={refreshing ? '⟳ 更新中…' : '↻ 更新'} onPress={async () => {
             if (await read($, isRefreshing)) return
             await update($, isRefreshing, () => true)
             try { await refresh($, options, true) } finally { await update($, isRefreshing, () => false) }
             $.ui.toast('主控台已更新', { timeoutMs: 3000 })
           }} />
+          </Box>
           <Button key="close" plain dimColor label="✕ 關閉" onPress={async () => {
             await $.ui.close({ id: PANE }).catch(() => {})
             await update($, isPaneOpen, () => false)
           }} />
+        </Box>
         </Box>
       </Box>
     )

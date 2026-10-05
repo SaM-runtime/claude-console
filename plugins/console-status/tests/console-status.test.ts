@@ -141,7 +141,7 @@ test('running job line: elapsed time and the last log line', () => {
   expect(lastLogLine(['start', '[12:00:01] reading files', '----', ''].join('\n'))).toBe('reading files')
   const now = Date.parse('2030-01-05T10:30:00Z')
   expect(runLine({ kind: 'running', id: 'x', status: 'running', summary: '', startedAt: '2030-01-05T10:18:00Z', last: '跑測試' }, now)).toBe('已跑 12m・跑測試')
-  expect(runLine({ kind: 'running', id: 'x', status: 'running', summary: '' }, now)).toBe('執行者執行中')
+  expect(runLine({ kind: 'running', id: 'x', status: 'running', summary: '' }, now)).toBe('執行中')
 })
 
 test('executor tasks: titles from the prompt, live first, three latest finished', () => {

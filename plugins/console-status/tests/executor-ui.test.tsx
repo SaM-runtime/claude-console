@@ -44,12 +44,13 @@ test('executor control defaults to Claude, persists switches, resets settings an
   }
   const calls: any[] = []
   const reads: string[] = []
+  let quota = ''
   on('fs.read', (_, e) => { const path = e.path.replace(/\\/g, '/'); reads.push(path); return { value: files[path] ?? '' } })
   on('fs.write', (_, e) => { files[e.path.replace(/\\/g, '/')] = e.text; return { value: undefined } })
   on('fs.list', () => ({ value: [] }))
   on('process.run', (_, e) => {
     calls.push(e)
-    return { value: { exitCode: 0, stdout: e.argv[0] === 'claude' ? '[]' : 'OK codex=0.0.0-test', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    return { value: { exitCode: 0, stdout: e.argv[0] === 'claude' ? '[]' : e.argv.some((arg: string) => arg.endsWith('codex-quota.ps1')) ? quota : 'OK codex=0.0.0-test', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.usage', () => ({ value: null }))
   on('session.id', () => ({ value: 'console-session' }))
@@ -66,6 +67,9 @@ test('executor control defaults to Claude, persists switches, resets settings an
   await ui.press({ key: 'dispatch-executor' })
   expect(JSON.parse(files[SETTINGS])).toEqual({ executor: 'codex', model: '', effort: '' })
   expect((await ui.find({ key: 'dispatch-executor' }))?.text).toBe('codex')
+  expect(await ui.find({ key: 'q-codex' })).toBeUndefined()
+  quota = '{"rate_limits":{"primary":{"used_percent":20,"window_minutes":300}}}'
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
   expect(await ui.find({ key: 'q-codex' })).toBeDefined()
   expect(calls.some(call => call.argv.includes('-File'))).toBe(true)
   await ui.press({ key: 'dispatch-model' })

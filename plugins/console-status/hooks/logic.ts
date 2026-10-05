@@ -76,7 +76,7 @@ export function jobFlags(jobs: Job[], cardMs: number | null): JobFlag[] {
     // A successful sync already incorporates results into CARD; observation time is not new work.
     if (j.executor === 'claude' && j.kind === 'sync' && j.status === 'completed') continue
     const t = Date.parse(j.completedAt ?? j.createdAt ?? '')
-    if (cardMs === null || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, status: j.status ?? '?', summary })
+    if (cardMs === null || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary })
   }
   return flags
 }
@@ -153,8 +153,15 @@ export function codexHealth(line: string): 'ok' | 'stale' | 'unknown' {
 /** Sessions waiting on a person: blocked on a permission prompt, or waiting for input. */
 export function blockedSessions(agents: Agent[], selfName?: string): Blocked[] {
   return agents
-    .filter(a => a.name && a.name !== selfName && (a.state === 'blocked' || a.status === 'waiting'))
-    .map(a => ({ name: a.name as string, why: a.state === 'blocked' ? '等批准' : (a.waitingFor ?? '等輸入') }))
+    .filter(a => {
+      const name = a.name?.trim() ?? ''
+      const hasIdentity = Boolean(name || a.sessionId?.trim() || a.cwd?.trim() || a.waitingFor?.trim())
+      return hasIdentity && name !== selfName && (a.state === 'blocked' || a.status === 'waiting')
+    })
+    .map(a => ({
+      name: a.name?.trim() || '(未命名 session)',
+      why: a.state === 'blocked' ? '等批准' : (a.waitingFor?.trim() || '等輸入'),
+    }))
 }
 
 export function bandText(s: Snapshot): string {
@@ -204,20 +211,49 @@ export function diffToasts(prev: Snapshot | null, cur: Snapshot): string[] {
 }
 
 /** Example data for `/console demo` and the UI tests; clearly not the person's real projects. */
-export function demoSnapshot(now: number): Snapshot {
-  const card = (ask: string, state: string) =>
-    `<!-- CARD -->\n- 更新：2000-01-01 00:00（示範）\n- 狀態：${state}\n- 驗證：\`php tests/run.php\` → PASS\n- 等使用者：${ask}\n- 下一步：示範資料，/console refresh 換回實際狀態\n<!-- /CARD -->`
+export function demoSnapshot(now: number): Snapshot & { demo: true } {
+  const localMinute = (time: number) => {
+    const d = new Date(time)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+  const card = (ask: string, state: string, age: number, gate = '') =>
+    `<!-- CARD -->\n- 更新：${localMinute(now - age)}（示範）\n- 狀態：${state}\n- 驗證：\`php tests/run.php\` → PASS\n- 等使用者：${ask}\n${gate ? `- 關卡：${gate}\n` : ''}- 下一步：示範資料，/console refresh 換回實際狀態\n<!-- /CARD -->`
   return {
+    demo: true,
     at: now,
     projects: [
-      buildProject({ name: 'Project-Alpha', statusPath: 'demo/a' }, card('選擇示範介面配色', '示範測試通過；等待配色選擇'), [], now),
-      buildProject({ name: 'Project-Beta', statusPath: 'demo/b' }, card('無；示範結果等待整理', '示範文件已整理'),
+      buildProject({ name: 'Project-Alpha', statusPath: 'demo/a' }, card('選擇示範介面配色', '示範測試通過；等待配色選擇', 12 * 60_000), [], now),
+      buildProject({ name: 'Project-Beta', statusPath: 'demo/b' }, card('無；示範結果等待整理', '示範文件已整理', 3 * 3_600_000),
         [{ id: 'task-demo-new', jobClass: 'task', status: 'completed', completedAt: new Date(now - 60_000).toISOString() }], now),
-      buildProject({ name: 'Sample-Docs', statusPath: 'demo/c' }, card('無', '示範工作執行中'), [{ id: 'task-demo-run', jobClass: 'task', status: 'running' }], now),
+      buildProject({ name: 'Project-Gamma', statusPath: 'demo/gamma' }, card('無', '示範證據已備妥', 86_400_000, 'review: 確認示範審核結果'), [], now),
+      buildProject({ name: 'Sample-Docs', statusPath: 'demo/c' }, card('無', '示範工作執行中', 4 * 86_400_000),
+        [
+          { id: 'task-demo-run', jobClass: 'task', status: 'running', executor: 'codex', startedAt: new Date(now - 8 * 60_000).toISOString(), request: { prompt: '示範任務：檢查合成 API 文件', model: 'codex-demo-running', effort: 'medium' } },
+          { id: 'task-demo-done', jobClass: 'task', status: 'completed', executor: 'codex', completedAt: new Date(now - 60 * 60_000).toISOString(), request: { prompt: '示範任務：整理合成測試結果', model: 'codex-demo-completed', effort: 'high' } },
+        ], now),
+      buildProject({ name: 'Sample-API', statusPath: 'demo/api' }, card('無', '示範 API 穩定', 2 * 86_400_000), [], now),
     ],
     blocked: [{ name: '示範 session', why: '等批准' }],
-    executor: 'claude', codex: '', contextPercent: 62, error: null,
+    executor: 'claude', codex: 'OK demo', contextPercent: 62, error: null,
+    limits: [
+      { kind: 'five_hour', percent: 31, resetsAt: new Date(now + 4 * 3_600_000).toISOString() },
+      { kind: 'seven_day', percent: 75, resetsAt: new Date(now + 2 * 86_400_000).toISOString() },
+    ],
+    codexQuota: {
+      at: new Date(now).toISOString(),
+      limits: [{ label: 'Codex 週', percent: 12, resetsAt: new Date(now + 5 * 86_400_000).toISOString() }],
+      credits: '1,000',
+    },
   }
+}
+
+/** Two recent, synthetic feed entries shown when demo mode opens. */
+export function demoEvents(now: number): Event[] {
+  return [
+    { at: now - 45_000, text: '示範：Codex 任務正在執行', tone: 'teal' },
+    { at: now - 2 * 60_000, text: '示範：審核關卡已建立', tone: 'amber' },
+  ]
 }
 
 /** First clause of a CARD ask, short enough for one line (ADHD-style: action, not context). */
@@ -299,17 +335,50 @@ export type State = 'ACTION' | 'GATE' | 'RUNNING' | 'SYNC' | 'IDLE' | 'NOCARD'
 export type Row = { state: State; project: string; item: string; age: string; full: string }
 export const STATE_ORDER: State[] = ['ACTION', 'GATE', 'RUNNING', 'SYNC', 'IDLE', 'NOCARD']
 
-/** `now - t` as 12m / 3h / 4d. */
+/** `now - t` as now / 12m / 3h / 4d / >99d; a future timestamp has no age. */
 export function ago(t: number | null, now: number): string {
-  if (t === null || Number.isNaN(t)) return '—'
-  const m = Math.max(0, Math.round((now - t) / 60000))
-  return m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`
+  if (t === null || !Number.isFinite(t) || !Number.isFinite(now)) return '—'
+  if (t > now) return '—'
+  const m = Math.floor((now - t) / 60000)
+  if (m === 0) return 'now'
+  if (m < 60) return `${m}m`
+  if (m < 1440) return `${Math.floor(m / 60)}h`
+  const days = Math.floor(m / 1440)
+  return days > 99 ? '>99d' : `${days}d`
+}
+
+/** Terminal display width: CJK and other wide glyphs occupy two columns. */
+export function displayWidth(value: string): number {
+  let width = 0
+  for (const char of value) {
+    const cp = char.codePointAt(0) ?? 0
+    if (cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f) ||
+        (cp >= 0x300 && cp <= 0x36f) || (cp >= 0x1ab0 && cp <= 0x1aff) ||
+        (cp >= 0x1dc0 && cp <= 0x1dff) || (cp >= 0x20d0 && cp <= 0x20ff) ||
+        (cp >= 0xfe20 && cp <= 0xfe2f)) continue
+    const wide = cp >= 0x1100 && (
+      cp <= 0x115f || cp === 0x2329 || cp === 0x232a ||
+      (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
+      (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) ||
+      (cp >= 0xfe10 && cp <= 0xfe19) || (cp >= 0xfe30 && cp <= 0xfe6f) ||
+      (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6) ||
+      (cp >= 0x1f300 && cp <= 0x1faff) || (cp >= 0x20000 && cp <= 0x3fffd)
+    )
+    width += wide ? 2 : 1
+  }
+  return width
+}
+
+/** Width of the project column, fitted to content while leaving room for the item column. */
+export function projectColumnWidth(names: string[]): number {
+  const widest = names.reduce((max, name) => Math.max(max, displayWidth(name)), 0)
+  return Math.max(8, Math.min(18, widest))
 }
 
 /** One row per project, its most urgent state first; neutral, system-style wording. */
 export function rows(s: Snapshot): Row[] {
   const out = s.projects.map((p): Row => {
-    const name = p.name.replace(/\s.*$/, '')
+    const name = p.name
     const age = ago(cardTime(p.updated), s.at)
     const full = p.name
     if (!p.hasCard) return { state: 'NOCARD', project: name, item: 'STATUS 卡不存在', age: '—', full }
@@ -317,7 +386,7 @@ export function rows(s: Snapshot): Row[] {
     if (parseGate(p.gate)) return { state: 'GATE', project: name, item: shortAsk(p.gate ?? '', 30), age, full }
     const running = p.jobs.filter(j => j.kind === 'running')
     if (running.length) return { state: 'RUNNING', project: name, item: (running.length > 1 ? `${running.length} 個任務・` : '') + runLine(running[0], s.at), age, full }
-    if (p.jobs.some(j => j.kind === 'newer')) return { state: 'SYNC', project: name, item: '執行者結果未同步至 STATUS', age, full }
+    if (p.jobs.some(j => j.kind === 'newer')) return { state: 'SYNC', project: name, item: '結果未同步至 STATUS', age, full }
     return { state: 'IDLE', project: name, item: shortAsk(p.state || '—', 30), age, full }
   })
   return out.sort((a, b) => STATE_ORDER.indexOf(a.state) - STATE_ORDER.indexOf(b.state))
@@ -418,7 +487,8 @@ export function events(prev: Snapshot | null, cur: Snapshot): Event[] {
       if (j.kind === 'running' && was !== 'running') out.push({ at: cur.at, text: `${short(p.name)}　執行者開始執行`, tone: 'teal' })
       if (j.kind === 'newer' && was !== 'newer') {
         const result = jobResult(j.status)
-        out.push({ at: cur.at, text: `${short(p.name)}　執行者 ${result.event}`, tone: result.tone })
+        const executor = j.executor === 'codex' ? 'Codex' : j.executor === 'claude' ? 'Claude' : '執行者'
+        out.push({ at: cur.at, text: `${short(p.name)}　${executor} ${result.event}`, tone: result.tone })
       }
     }
   }
@@ -473,8 +543,11 @@ export function lastLogLine(log: string): string {
 /** `已跑 12m・<last log line or phase>` for a running job. */
 export function runLine(j: JobFlag, now: number): string {
   const t = Date.parse(j.startedAt ?? '')
-  const took = Number.isNaN(t) ? '' : `已跑 ${ago(t, now)}・`
-  return (j.executor ? j.executor + ' · ' : '') + took + (j.last || (j.phase && j.phase !== 'running' ? j.phase : '') || '執行者執行中')
+  const elapsed = Number.isNaN(t) ? '' : `已跑 ${ago(t, now)}`
+  const detail = j.last || (j.phase && j.phase !== 'running' ? j.phase : '') || ''
+  if (!elapsed && !detail) return j.executor ? `${j.executor} 執行中` : '執行中'
+  const body = elapsed && detail ? `${elapsed}・${detail}` : elapsed || detail
+  return (j.executor ? `${j.executor} · ` : '') + body
 }
 
 /** A task's name: the prompt's first meaningful line, without markdown and a leading `任務：`. */

@@ -7,6 +7,7 @@ const PANE = (bodyColumns: number) => ({
 }) as const
 
 async function demo($: any, on: any) {
+  on('clock.now', () => ({ value: Date.parse('2030-01-05T12:00:00Z') }))
   on('env.get', () => ({ value: '/home/example' }))
   on('fs.read', () => ({ value: '{}' }))
   on('ui.open', () => ({ value: {} }) as any)
@@ -65,10 +66,10 @@ test('band: next action and non-zero counters only', async ($, on) => {
     props: { hasSurvey: false, bodyColumns: 120, maxRows: 3, bodyRows: 3, scroll } as any,
   } as any)
   // Pane open (demo opened it): the band keeps counters only, the pane carries the next step.
-  expect(await band.find({ type: 'Text', text: /^ 下一步 $/ })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: /^下一步/ })).toBeUndefined()
   await $.command.run({ command: 'console', args: '' } as any)
-  expect(await band.find({ type: 'Text', text: /^ 下一步 $/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^下一步/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /^● 需決策 1$/ })).toBeDefined()
-  expect(await band.find({ type: 'Text', text: /閒置/ })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: /^○ 閒置 1$/ })).toBeDefined()
   await band.unmount()
 })

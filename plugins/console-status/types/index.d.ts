@@ -4,6 +4,7 @@ export type JobFlag = { executor?: 'claude' | 'codex'; kind: 'running' | 'newer'
 export type ExecutorTask = { id: string; status: string; title: string; model: string; effort: string; startedAt?: string; completedAt?: string }
 
 export type Project = {
+  changedAt?: number
   executor?: 'claude' | 'codex'
   name: string
   statusPath: string
@@ -30,6 +31,7 @@ export type ReviewRequest = { text: string; projectName: string; at: number; tur
 export type Blocked = { name: string; why: string }
 
 export type Snapshot = {
+  demo?: boolean
   executor?: 'claude' | 'codex'
   at: number
   projects: Project[]
@@ -46,6 +48,7 @@ declare module 'claude-code' {
   interface PluginState {
     'console-status': {
       snapshot: Snapshot | null
+      isDemo: boolean
       isPaneOpen: boolean
       isBandHidden: boolean
       isDetail: boolean
