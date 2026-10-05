@@ -1,5 +1,8 @@
 # claude-console
 
+<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" alt="claude-console demo: console pane with project table, actions, quota batteries" width="900"></a></p>
+<p align="center"><a href="docs/demo.mp4">▶ Watch the 30-second demo (MP4, demo data)</a> · <a href="README.zh-TW.md">繁體中文</a></p>
+
 `claude-console` is a local, multi-project Claude Code mod. One console session owns specification, supervision, and review gates across registered projects; the operator supplies decisions and performs the final release approval.
 
 The `console-status` mod reads compact STATUS cards and managed executor state, then exposes trigger-style actions. Verification, dispatch, STATUS sync, and review start from one button and report their outcome in the activity feed. The panel never performs a release or formal-environment change.
