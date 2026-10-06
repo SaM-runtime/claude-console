@@ -26,12 +26,24 @@ export type RowsProps = {
   changed: string[]
 }
 type Local = { hover: number; phase: number; now: number }
-type Runtime = { fallback: Local; latestPropNow: number; stop?: () => void }
+type Runtime = {
+  /** Authoritative local state; `surface.state` only mirrors it to schedule a redraw. */
+  local: Local
+  latestPropNow: number
+  props: RowsProps
+  /** Signature of the last frame handed to setState (or drawn), so idle ticks write nothing. */
+  frame: string
+  interval: number
+  stop?: () => void
+}
 
 const TICK_MS = 100
+/** Breath steps last 200 ms, so a breath-only table never needs a faster clock. */
+const BREATH_TICK_MS = 200
 const CHANGE_MS = 1_500
 const runtimes = new WeakMap<object, Runtime>()
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+const BREATH = [0, 0, 1, 2, 2, 1, 0, 0]
 
 function shade(i: number, phase: number, len: number, palette: string[]): string {
   const band = ((phase * 1.4) % (len + 8)) - 4
@@ -39,72 +51,131 @@ function shade(i: number, phase: number, len: number, palette: string[]): string
   return palette[d < 0.8 ? 3 : d < 1.8 ? 2 : d < 2.8 ? 1 : 0] ?? palette[0] ?? '#8BD5CA'
 }
 
-function breathColor(palette: string[], now: number): string | undefined {
+function breathIndex(now: number): number {
   // Eight calm steps make one 1.6 s cycle: low → middle → high → middle → low.
-  const step = Math.floor((now % 1_600) / 200)
-  const index = [0, 0, 1, 2, 2, 1, 0, 0][step] ?? 0
-  return palette[index] ?? palette[0]
+  return BREATH[Math.floor((now % 1_600) / 200)] ?? 0
+}
+
+function breathColor(palette: string[], now: number): string | undefined {
+  return palette[breathIndex(now)] ?? palette[0]
+}
+
+function changedIndex(changedAt: number | undefined, now: number, steps: number): number {
+  if (changedAt === undefined) return -1
+  const age = now - changedAt
+  if (age < 0 || age >= CHANGE_MS) return -1
+  return Math.min(steps - 1, Math.floor(age / 500))
 }
 
 function changedColor(changedAt: number | undefined, now: number, palette: string[]): string | undefined {
-  if (changedAt === undefined) return undefined
-  const age = now - changedAt
-  if (age < 0 || age >= CHANGE_MS) return undefined
-  return palette[Math.min(palette.length - 1, Math.floor(age / 500))]
+  const index = changedIndex(changedAt, now, palette.length)
+  return index < 0 ? undefined : palette[index]
 }
 
-function fit(text: string, columns: number): string {
+/** Clips `text` to `columns` display cells with a trailing ellipsis; linear in the text length. */
+export function fit(text: string, columns: number): string {
   if (columns <= 0) return ''
   if (displayWidth(text) <= columns) return text
+  // displayWidth sums per code point, so a running total equals displayWidth(result + char).
   let result = ''
+  let used = 0
   for (const char of text) {
-    if (displayWidth(result + char) > columns - 1) break
+    used += displayWidth(char)
+    if (used > columns - 1) break
     result += char
   }
   return result + '…'
+}
+
+// Fitted cell bodies, shared by every instance: only colours change between ticks.
+const FIT_CACHE_MAX = 512
+const fitCache = new Map<string, string>()
+export function fittedCell(text: string, width: number, right: boolean | undefined): string {
+  const key = (right ? 'r' : 'l') + width + '|' + text
+  const hit = fitCache.get(key)
+  if (hit !== undefined) return hit
+  const clipped = fit(text, width)
+  const body = right ? ' '.repeat(Math.max(0, width - displayWidth(clipped))) + clipped : clipped
+  if (fitCache.size >= FIT_CACHE_MAX) fitCache.clear()
+  fitCache.set(key, body)
+  return body
+}
+
+/** Which clock the rows need: 100 ms for shimmer or a change highlight, 200 ms for breath alone, none when still. */
+function wantedInterval(rows: RowSpec[], now: number, changed: string[]): number {
+  let breath = false
+  for (const r of rows) {
+    if (r.shimmer || changedIndex(r.changedAt, now, changed.length) >= 0) return TICK_MS
+    if (r.breathe?.length) breath = true
+  }
+  return breath ? BREATH_TICK_MS : 0
+}
+
+/**
+ * Everything a tick can change on screen, as a short string: shimmer moves every tick,
+ * breath every 200 ms step, change highlights every 500 ms. Hover and props redraw on their own.
+ */
+function frameOf(props: RowsProps, local: Local, now: number): string {
+  let frame = ''
+  let breathe = false
+  for (const r of props.rows) {
+    if (r.shimmer) return 's' + local.phase
+    if (r.breathe?.length) breathe = true
+    if (r.changedAt !== undefined) frame += changedIndex(r.changedAt, now, props.changed.length) + ','
+  }
+  return (breathe ? 'b' + breathIndex(local.phase * TICK_MS) : '') + '|' + frame
 }
 
 const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
   const { Box, Text } = surface.elements
   let runtime = runtimes.get(surface)
   if (!runtime) {
-    runtime = { fallback: { hover: -1, phase: 0, now: props.now }, latestPropNow: props.now }
+    runtime = { local: { hover: -1, phase: 0, now: props.now }, latestPropNow: props.now, props, frame: '', interval: 0 }
     runtimes.set(surface, runtime)
   }
-  runtime.latestPropNow = Math.max(runtime.latestPropNow, props.now)
-  const state = surface.state ?? runtime.fallback
-  const renderNow = Math.max(state.now, runtime.latestPropNow)
-  const live = props.rows.some(r => r.shimmer || Boolean(r.breathe?.length) || changedColor(r.changedAt, renderNow, props.changed) !== undefined)
-  if (live && !runtime.stop) {
-    runtime.stop = surface.every(TICK_MS, () => {
-      const cur = surface.state ?? runtime!.fallback
-      const next = {
-        ...cur,
-        phase: cur.phase + 1,
-        now: Math.max(cur.now, runtime!.latestPropNow) + TICK_MS,
+  const rt = runtime
+  rt.latestPropNow = Math.max(rt.latestPropNow, props.now)
+  rt.props = props
+  const state = rt.local
+  const renderNow = Math.max(state.now, rt.latestPropNow)
+  rt.frame = frameOf(props, state, renderNow)
+  const interval = wantedInterval(props.rows, renderNow, props.changed)
+  if (rt.stop && rt.interval !== interval) {
+    rt.stop()
+    rt.stop = undefined
+  }
+  if (interval && !rt.stop) {
+    rt.interval = interval
+    const steps = interval / TICK_MS
+    rt.stop = surface.every(interval, () => {
+      // A tick is O(rows) and allocation-free unless the visible frame moved, so a burst of
+      // catch-up ticks after a suspend costs next to nothing and coalesces into one redraw.
+      const cur = rt.local
+      cur.phase += steps
+      cur.now = Math.max(cur.now, rt.latestPropNow) + interval
+      const frame = frameOf(rt.props, cur, cur.now)
+      if (frame === rt.frame) return
+      rt.frame = frame
+      if (!wantedInterval(rt.props.rows, cur.now, rt.props.changed)) {
+        rt.stop?.()
+        rt.stop = undefined
       }
-      runtime!.fallback = next
-      surface.setState(next)
+      surface.setState({ ...cur })
     })
-  } else if (!live && runtime.stop) {
-    runtime.stop()
-    runtime.stop = undefined
   }
   surface.onPointer(e => {
-    const cur = surface.state ?? runtime!.fallback
+    const cur = rt.local
     if (e.type === 'leave' || e.y < 0 || e.y >= props.rows.length) {
       if (cur.hover !== -1) {
-        const next = { ...cur, hover: -1 }
-        runtime!.fallback = next
-        surface.setState(next)
+        cur.hover = -1
+        surface.setState({ ...cur })
         surface.post({ hover: null })
       }
       return
     }
     if ((e.type === 'move' || e.type === 'enter') && cur.hover !== e.y) {
-      const next = { ...cur, hover: e.y }
-      runtime!.fallback = next
-      surface.setState(next)
+      cur.hover = e.y
+      surface.setState({ ...cur })
       surface.post({ hover: props.rows[e.y]?.id ?? null })
     }
     const row = props.rows[e.y]
@@ -127,8 +198,7 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
   const cell = (c: Cell, i: number, r: RowSpec) => {
     const width = c.w === undefined ? flex : widths[i] ?? 0
     const spin = r.shimmer && i === 2 ? ` ${SPIN[state.phase % SPIN.length]}` : ''
-    const clipped = fit(c.t + spin, width)
-    const body = c.right ? ' '.repeat(Math.max(0, width - displayWidth(clipped))) + clipped : clipped
+    const body = fittedCell(c.t + spin, width, c.right)
     const backgroundColor = i === 0 && r.breathe?.length ? breathColor(r.breathe, state.phase * TICK_MS) : c.bg
     if (r.shimmer && i === 0) {
       const chars = [...body]
