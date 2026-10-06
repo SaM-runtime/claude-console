@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -18,7 +18,7 @@
     "companionScript": {
       "type": "string",
       "title": "Companion script",
-      "description": "Absolute path or ~/ path to codex-companion.mjs; blank disables the dispatch template.",
+      "description": "Absolute path or ~/ path to codex-companion.mjs; blank or stale auto-resolves to the newest installed Codex plugin.",
       "default": ""
     },
     "companionStateDir": {
@@ -62,6 +62,18 @@
       "title": "Default effort",
       "description": "Fallback when the settings file or effort field is unavailable; blank uses the selected executor default.",
       "default": ""
+    },
+    "codexFallback": {
+      "type": "string",
+      "title": "Codex fallback",
+      "description": "When Codex quota is low or its broker/companion is unusable: ask (hold and offer Claude), claude (dispatch with Claude), or off.",
+      "default": "ask"
+    },
+    "codexMinQuotaPercent": {
+      "type": "string",
+      "title": "Codex minimum quota",
+      "description": "Remaining Codex quota percent below which the fallback applies; readings older than 6 hours count as unknown.",
+      "default": "10"
     },
     "companionStateRoots": {
       "type": "string",

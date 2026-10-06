@@ -50,7 +50,9 @@ Marketplace 管理請參考官方 [plugin marketplace 文件](https://code.claud
   "companionScript": "",
   "companionStateDir": "",
   "companionStateRoots": "",
-  "modelsCachePath": "~/.codex/models_cache.json"
+  "modelsCachePath": "~/.codex/models_cache.json",
+  "codexFallback": "ask",
+  "codexMinQuotaPercent": "10"
 }
 '@ | claude plugin configure console-status@claude-console --values-stdin
 ```
@@ -62,20 +64,46 @@ Marketplace 管理請參考官方 [plugin marketplace 文件](https://code.claud
 | `claudeSessionsPath` | 受管理的 Claude session 對應檔 | `~/.claude/handoffs/claude-sessions.json` |
 | `executor` | 設定檔缺少或無效時的執行器 | `claude` |
 | `defaultModel` / `defaultEffort` | 模型備援值；空白交給執行器原生預設 | 空白 |
-| `companionScript` | `executor: codex` 使用的 Companion 腳本 | 空白 |
+| `companionScript` | `executor: codex` 使用的 Companion 腳本；空白或已失效時自動改用最新安裝的 Codex plugin | 空白 |
 | `companionStateDir` | 舊版 companion state 根目錄，也傳給 Codex preflight | 系統 Temp 的 `codex-companion` |
 | `companionStateRoots` | 以字串編碼的 JSON 路徑陣列，覆寫 Codex job 來源 | 先 plugin data，再舊版 Temp |
 | `modelsCachePath` | Codex 模型與 effort 快取 | `~/.codex/models_cache.json` |
+| `codexFallback` | Codex 無法使用時的處理：`ask`、`claude`、`off` | `ask` |
+| `codexMinQuotaPercent` | Codex 額度剩餘百分比低於此值時啟用備援 | `10` |
 
 Windows、macOS、Linux 都會展開開頭的 `~`。變更 plugin 設定後，請執行 `/reload-plugins` 或開新 Claude Code session。登錄表格式見 [範例](workflow/projects-scope.example.md)。
 
 ## Dispatch settings（派工設定）
 
-共用檔案包含三個字串：
+正式檔案是 `~/.claude/handoffs/dispatch.json`（`dispatchSettingsPath`），保存全域 executor、model、effort，以及可選的專案覆寫：
 
 ```json
-{ "executor": "claude", "model": "", "effort": "" }
+{
+  "executor": "claude", "model": "", "effort": "",
+  "projects": {
+    "D:/Projects/api": { "executor": "codex", "model": "", "effort": "high" },
+    "D:/Projects/legacy-portal": { "executor": "manual" }
+  }
+}
 ```
+
+沒有 `projects` 的 0.1 平面格式照常可用。`dispatch.json` 不存在時，會讀取同目錄的舊版 `codex-dispatch.json`（唯讀；舊檔沒有 `executor` 時視為 `codex`）。所有寫入都寫到 `dispatch.json`。
+
+### 專案執行者
+
+每個專案依下列順序決定執行者：
+
+1. 面板覆寫：`dispatch.json` 的 `projects["<根目錄>"]`。Key 是專案根目錄；Windows 磁碟與 UNC 路徑不分大小寫比對。
+2. 登錄表：登錄表表格可選的 `Executor` 欄（`claude`、`codex`、`manual` 或空白）。沒有此欄的登錄表照舊解析。
+3. 全域：`executor` 欄位。
+
+Model 與 effort 依相同順序。專案執行者與全域不同時，不沿用全域的 model 與 effort，因為那些值屬於另一個執行器。
+
+`manual` 代表面板永不派工該專案：隱藏同步與繼續，卡片顯示交接提示；CARD、驗證、決策與關卡照常。
+
+展開的專案卡與右鍵選單中的 `執行者` Button 會輪換該專案的覆寫：沿用、`claude`、`codex`、`manual`。標籤會標示來源（`・面板` 是面板覆寫、`・登錄表` 是登錄表）。`/console project executor|model|effort <值|inherit> <專案名稱>` 設定相同欄位，`/console project` 列出實際生效的設定。
+
+同一專案可能同時有兩種執行器的工作（切換執行者或 Claude 備援之後）。工作清單會合併兩種執行器；任一執行器有執行中或排隊中的工作，就顯示 RUNNING 並阻止重複派工。
 
 面板標題下方的 executor、model、effort 都是 plain Button。點一下會輪換可選值、寫入檔案並顯示 toast；手機沒有 Client 時也會呈現 Button。設定套用到下一次派工，執行中的任務保留自己的請求值。
 
@@ -115,12 +143,40 @@ Job 預設先讀 `~/.claude/plugins/data/codex-openai-codex/state`，再讀舊�
 
 內附 preflight 會在 Codex 派工前檢查 companion 與 broker。Quota 取自本機最新可用 Codex 紀錄，可能過期。派工受理只代表 companion 收到工作；完成與審核仍要看 STATUS 證據與本機驗證。
 
-若其他工具也會派 Codex，可把以下規則放進使用者 `CLAUDE.md`：
+#### Companion 自動選用
+
+`companionScript` 空白，或 preflight 回報設定的檔案 `MISSING`（Codex plugin 每個版本安裝在各自的快取資料夾，更新後固定路徑會失效）時，mod 會在 `~/.claude/plugins/installed_plugins.json` 中 `codex@openai-codex` 的 installPath 與 `~/.claude/plugins/cache/openai-codex/codex/<版本>/scripts/codex-companion.mjs` 之間，選出實際存在腳本的最新語意版本。頁尾會顯示使用中的路徑並標示 `自動選用`；設定路徑失效時附上警告。
+
+#### 額度與 broker 備援
+
+每次 Codex 派工前會檢查最近的探測結果：
+
+- Codex 額度電池顯示剩餘量（取最低的時間窗）低於 `codexMinQuotaPercent`，或
+- preflight 回報此專案 workspace 的 broker 過期、找不到 Codex app／broker，或找不到 companion 腳本。
+
+超過六小時的額度資料仍會顯示，但視為未知，不會單獨觸發備援。接著：
+
+| `codexFallback` | 行為 |
+| --- | --- |
+| `ask`（預設） | 不派工。Toast 與專案卡說明原因，並提供 `⇢ 改用 Claude 派工`，把同一個提示交給 Claude。 |
+| `claude` | 把同一個提示交給 Claude 執行器，並在工作上記錄 `fallbackFrom: "codex"` 與原因。 |
+| `off` | 0.1 行為：一律派給 Codex。 |
+
+Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全域執行器是 `claude` 時才沿用其 model 與 effort，否則使用 Claude Code 預設。
+
+#### CLAUDE.md 片段
+
+把以下內容貼進使用者 `CLAUDE.md`，讓手動派工的主控台也依同一份檔案：
 
 ```markdown
-dispatch.json 選擇 executor "codex" 時，讀取其中 model 與 effort。
-非空值各自以單一 --model 或 --effort 參數傳入；空值省略旗標。
-檔案不存在時使用執行器原生預設。
+## 派工設定
+派工給任何執行器前，先讀 ~/.claude/handoffs/dispatch.json
+（不存在時讀 ~/.claude/handoffs/codex-dispatch.json；不要寫入它）。
+- 全域："executor"（claude | codex）、"model"、"effort"。
+- 專案："projects"["<專案根目錄>"] 可設定 "executor"（claude | codex | manual）、
+  "model"、"effort"；Windows 路徑不分大小寫比對。優先序：projects > 登錄表 Executor 欄 > 全域。
+- 非空的 model/effort 各以單一 --model / --effort 傳入；空值省略。
+- "manual" 代表不派工該專案，改為整理交接內容給使用者。
 ```
 
 ## STATUS 卡
@@ -136,8 +192,9 @@ dispatch.json 選擇 executor "codex" 時，讀取其中 model 與 effort。
 | 動作 | 出現條件 | 行為 |
 | --- | --- | --- |
 | ▶ 執行驗證 | CARD 有 `驗證` | 在專案根目錄執行，最長五分鐘；不花模型額度 |
-| ⇢ 同步 STATUS | SYNC | 派所選執行器只更新 CARD 與歷程 |
-| ⇢ 繼續下一步 | IDLE、有下一步、無待決或關卡 | 三秒內再按一次後派所選執行器 |
+| ⇢ 同步 STATUS | SYNC，且執行者不是 `manual` | 派該專案的執行器只更新 CARD 與歷程 |
+| ⇢ 繼續下一步 | IDLE、有下一步、無待決或關卡，且執行者不是 `manual` | 三秒內再按一次後派該專案的執行器 |
+| ⇢ 改用 Claude 派工 | `codexFallback: ask` 擋下的 Codex 派工 | 把同一動作交給 Claude，並記錄為備援 |
 | ✎ 做決定 | `等使用者` 非空 | 預填草稿並附一次性專案 context；送出時才使用 Claude |
 | ⚑ 審核關卡／最終審核 | 可辨識的 spec、review、release | 交主控台 Claude 審核；release 審核不會執行 release |
 | ↗ 開啟 STATUS.md | 一律 | 請編輯器開啟檔案 |
@@ -158,6 +215,8 @@ dispatch.json 選擇 executor "codex" 時，讀取其中 model 與 effort。
 | `/console executor [claude|codex]` | 顯示或選擇執行器 |
 | `/console model [name]` | 顯示選項或指定模型 |
 | `/console effort [level]` | 顯示選項或指定 effort |
+| `/console project` | 列出每個專案實際生效的執行者、model、effort |
+| `/console project executor\|model\|effort <值\|inherit> <名稱>` | 設定或清除單一專案的覆寫 |
 
 選取專案只套用到下一則被接受的提示；下游拒絕提示時會保留選取，供重試使用。
 
@@ -174,6 +233,15 @@ dispatch.json 選擇 executor "codex" 時，讀取其中 model 與 effort。
 - 檔案每 60 秒刷新；process 探測會快取五分鐘，除非強制 refresh。
 - Companion state 以根目錄最後一段名稱配對；同名根目錄可能混淆。
 - 選取專案只附加一次 context，不會改變目前 cwd。
+
+## 升級
+
+```powershell
+claude plugin marketplace update claude-console
+claude plugin update console-status@claude-console
+```
+
+接著執行 `/reload-plugins` 或開新 session。變更內容見 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 開發檢查
 

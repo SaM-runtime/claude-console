@@ -50,7 +50,9 @@ Marketplace management is covered by the official [plugin marketplace documentat
   "companionScript": "",
   "companionStateDir": "",
   "companionStateRoots": "",
-  "modelsCachePath": "~/.codex/models_cache.json"
+  "modelsCachePath": "~/.codex/models_cache.json",
+  "codexFallback": "ask",
+  "codexMinQuotaPercent": "10"
 }
 '@ | claude plugin configure console-status@claude-console --values-stdin
 ```
@@ -62,20 +64,46 @@ Marketplace management is covered by the official [plugin marketplace documentat
 | `claudeSessionsPath` | Managed Claude session mapping | `~/.claude/handoffs/claude-sessions.json` |
 | `executor` | Fallback executor when settings are missing or invalid | `claude` |
 | `defaultModel` / `defaultEffort` | Fallback model settings; empty uses the executor's native default | Empty |
-| `companionScript` | Codex Companion script used by `executor: codex` | Empty |
+| `companionScript` | Codex Companion script used by `executor: codex`; empty or stale paths auto-resolve to the newest installed Codex plugin | Empty |
 | `companionStateDir` | Legacy companion state root, also passed to Codex preflight | System Temp `codex-companion` directory |
 | `companionStateRoots` | JSON array encoded as a string; overrides Codex job roots | Plugin data first, then legacy Temp |
 | `modelsCachePath` | Codex model and effort cache | `~/.codex/models_cache.json` |
+| `codexFallback` | What to do when Codex is unusable: `ask`, `claude`, or `off` | `ask` |
+| `codexMinQuotaPercent` | Codex quota (percent remaining) below which the fallback applies | `10` |
 
 Paths beginning with `~` expand on Windows, macOS, and Linux. Run `/reload-plugins` or start another Claude Code session after plugin configuration changes. See [the registry example](workflow/projects-scope.example.md).
 
 ## Dispatch settings
 
-The shared file contains three strings:
+The canonical file is `~/.claude/handoffs/dispatch.json` (`dispatchSettingsPath`). It holds the global executor, model, and effort, plus optional per-project overrides:
 
 ```json
-{ "executor": "claude", "model": "", "effort": "" }
+{
+  "executor": "claude", "model": "", "effort": "",
+  "projects": {
+    "D:/Projects/api": { "executor": "codex", "model": "", "effort": "high" },
+    "D:/Projects/legacy-portal": { "executor": "manual" }
+  }
+}
 ```
+
+The 0.1 flat file without `projects` keeps working unchanged. When `dispatch.json` is missing, the mod reads the legacy `codex-dispatch.json` next to it (read-only; a legacy file without `executor` means `codex`). Every write goes to `dispatch.json`.
+
+### Per-project executor
+
+Each project resolves its executor in this order:
+
+1. Pane override: `projects["<root>"]` in `dispatch.json`. Keys are project roots; Windows drive and UNC paths match case-insensitively.
+2. Registry: the optional `Executor` column of the registry table (`claude`, `codex`, `manual`, or blank). Registries without the column parse as before.
+3. Global: the `executor` field.
+
+Model and effort follow the same chain. A project whose executor differs from the global one does not inherit the global model and effort, because those values belong to the other executor.
+
+`manual` means the panel never dispatches that project: Sync and Continue are hidden, the card shows a handoff note, and CARD, verification, decisions, and gates still work.
+
+In the expanded project card and the right-click menu, the `執行者` Button cycles that project's override: inherit, `claude`, `codex`, `manual`. The label shows the source (`・面板` for a pane override, `・登錄表` for the registry). `/console project executor|model|effort <value|inherit> <project name>` sets the same fields, and `/console project` lists the effective settings.
+
+A project may hold jobs from both executors (after an executor change or a Claude fallback). Job listing merges both executors for every project; any running or queued job from either executor marks the project RUNNING and blocks a second dispatch.
 
 The executor, model, and effort controls beneath the panel title are plain Buttons. Each press cycles the available values, writes the file, and shows a toast. The same Buttons render on mobile without Client support. Settings apply to the next dispatch; each running task keeps its requested values.
 
@@ -115,12 +143,41 @@ Jobs are read from `~/.claude/plugins/data/codex-openai-codex/state` before the 
 
 With the Codex executor selected, refresh runs the bundled companion and broker preflight on its probe interval. Quota comes from the newest locally available Codex record and may be stale. Dispatch acceptance only means the companion accepted the job. Completion and review still require STATUS evidence and the configured local verification.
 
-Copy this optional rule into the user `CLAUDE.md` when other tools also dispatch Codex:
+#### Companion auto-resolve
+
+When `companionScript` is empty, or the preflight reports the configured file `MISSING` (the Codex plugin installs each version into its own cache folder, so a pinned path goes stale after an update), the mod picks the newest semantic version among `~/.claude/plugins/installed_plugins.json` install paths for `codex@openai-codex` and `~/.claude/plugins/cache/openai-codex/codex/<version>/scripts/codex-companion.mjs` that actually contains the script. The footer shows the path in use, marked `自動選用`, with a warning when the configured path was stale.
+
+#### Quota and broker fallback
+
+Before each Codex dispatch the mod checks the latest probes:
+
+- the Codex quota battery reports less than `codexMinQuotaPercent` remaining (lowest window), or
+- the preflight reports a stale broker for this project's workspace, the Codex app or broker missing, or the companion script missing.
+
+A quota reading older than six hours is shown but treated as unknown; it never triggers the fallback by itself. Then:
+
+| `codexFallback` | Behavior |
+| --- | --- |
+| `ask` (default) | Does not dispatch. A toast and the project card state why and offer `⇢ 改用 Claude 派工`, which sends the same prompt to Claude. |
+| `claude` | Sends the same prompt to the Claude executor and records `fallbackFrom: "codex"` and the reason on the job. |
+| `off` | 0.1 behavior: always dispatch to Codex. |
+
+Claude stand-in jobs show `codex→claude` in the task list. They use Claude's own model and effort only when the global executor is `claude`; otherwise Claude Code defaults.
+
+#### CLAUDE.md snippet
+
+Paste this into the user `CLAUDE.md` so a console that dispatches by hand follows the same file:
 
 ```markdown
-When dispatch.json selects executor "codex", read its model and effort.
-Pass each nonempty value as one --model or --effort argument. Omit the flag for
-an empty value. If the file is missing, use the executor's native defaults.
+## Dispatch settings
+Before dispatching to any executor, read ~/.claude/handoffs/dispatch.json
+(if it is missing, read ~/.claude/handoffs/codex-dispatch.json; never write it).
+- Global: "executor" (claude | codex), "model", "effort".
+- Per project: "projects"["<project root>"] may set "executor"
+  (claude | codex | manual), "model", "effort". Match the root case-insensitively
+  on Windows. Precedence: projects entry > registry Executor column > global.
+- Pass each nonempty model/effort as one --model / --effort argument; omit empty ones.
+- "manual" means: never dispatch that project; prepare a handoff for the user instead.
 ```
 
 ## STATUS cards
@@ -136,8 +193,9 @@ The right-click menu and expanded project cards expose the same actions. Mobile 
 | Action | Availability | Behavior |
 | --- | --- | --- |
 | ▶ Run verification | CARD has `驗證` | Runs in the project root with a five-minute timeout; no model quota |
-| ⇢ Sync STATUS | SYNC | Dispatches the selected executor to update only CARD and history |
-| ⇢ Continue | IDLE, with a next step and no decision or gate | Requires a second press within three seconds, then dispatches the selected executor |
+| ⇢ Sync STATUS | SYNC, executor not `manual` | Dispatches the project's executor to update only CARD and history |
+| ⇢ Continue | IDLE, with a next step and no decision or gate; executor not `manual` | Requires a second press within three seconds, then dispatches the project's executor |
+| ⇢ 改用 Claude 派工 | A Codex dispatch held by `codexFallback: ask` | Sends the same action to Claude, recorded as a fallback |
 | ✎ Decide | `等使用者` is nonempty | Prefills a draft and one-shot project context; Claude runs only when submitted |
 | ⚑ Review gate / final review | Recognized spec, review, or release gate | Sends evidence to the console Claude; release review cannot execute release |
 | ↗ Open STATUS.md | Always | Requests the editor to open the file |
@@ -158,6 +216,8 @@ A dispatch shows RUNNING optimistically until managed state is refreshed. Accept
 | `/console executor [claude|codex]` | Show or choose the executor |
 | `/console model [name]` | Show choices or set a model |
 | `/console effort [level]` | Show choices or set effort |
+| `/console project` | List each project's effective executor, model, and effort |
+| `/console project executor\|model\|effort <value\|inherit> <name>` | Set or clear one project's override |
 
 Selecting a project applies only to the next accepted prompt. A downstream rejection retains the selection for retry.
 
@@ -174,6 +234,15 @@ Selecting a project applies only to the next accepted prompt. A downstream rejec
 - Refresh runs every 60 seconds; process probes are cached for five minutes unless forced.
 - Roots with the same final directory name can collide in companion-state matching.
 - A selected project adds context to one prompt and does not change the active working directory.
+
+## Upgrade
+
+```powershell
+claude plugin marketplace update claude-console
+claude plugin update console-status@claude-console
+```
+
+Then run `/reload-plugins` or start a new session. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Development checks
 

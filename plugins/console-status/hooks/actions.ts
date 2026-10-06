@@ -16,13 +16,17 @@ export function dispatchBlockReason(project: Project): string {
   return active.length ? `${[...new Set(active.map(job => job.executor ?? '執行者'))].join(' / ')} 工作尚未結束` : ''
 }
 
+/** A `manual` project is handoff-only: the panel never dispatches it, CARD/verify/gates still work. */
+export const isManual = (project: Project) => project.executor === 'manual'
+
 export function actionKinds(project: Project, state: State): ActionKind[] {
   const kinds: ActionKind[] = []
+  const dispatchable = !isManual(project)
   if (project.verify.trim()) kinds.push('verify')
-  if (state === 'SYNC' && !dispatchBlockReason(project)) kinds.push('sync')
+  if (dispatchable && state === 'SYNC' && !dispatchBlockReason(project)) kinds.push('sync')
   const gate = parseGate(project.gate)
   const next = project.next.trim()
-  if (state === 'IDLE' && !dispatchBlockReason(project) && next && !/^(?:無|沒有|none|n\/a|-)(?:$|[；;，,。\s])/i.test(next) && !hasAsk(project) && !gate) kinds.push('continue')
+  if (dispatchable && state === 'IDLE' && !dispatchBlockReason(project) && next && !/^(?:無|沒有|none|n\/a|-)(?:$|[；;，,。\s])/i.test(next) && !hasAsk(project) && !gate) kinds.push('continue')
   if (hasAsk(project)) kinds.push('decide')
   if (gate && gate.kind !== 'unknown') kinds.push('gate')
   return [...kinds, 'open']

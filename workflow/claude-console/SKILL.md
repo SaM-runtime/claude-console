@@ -1,87 +1,114 @@
 ---
 name: claude-console
-description: Run one Claude Code session as a compact multi-project console for specification, supervision, decisions, and review gates.
+description: Run one Claude Code session as a compact multi-project console that writes specs, dispatches an executor (Claude or Codex) per project, verifies results, and holds review gates.
 ---
 
 # Claude console workflow
 
-The console owns cross-project specification, supervision, and review gates. It is an index rather than a project workspace: keep detailed implementation inside the managed project session. The operator supplies decisions and gives the final release approval. No panel action deploys or changes a formal environment.
+One Claude Code session is the console for every registered project. It owns specs, acceptance contracts, review gates, and reports. Executors (Claude background agents or Codex) implement inside each project. The user supplies decisions and approves releases. Nothing in the console deploys or changes a formal environment.
 
-| Role | Responsibility |
+## Role split
+
+If a mistake needs judgment to see, the console decides. If tests would catch it, the executor implements.
+
+| Role | Owns |
 | --- | --- |
-| Claude console | Own cross-project specification, supervision, decision drafts, and review gates |
-| Selected executor | Implement and verify work inside the authorized project scope, then sync evidence to STATUS |
-| Operator | Supply project decisions, handle required approvals or input, and give final release approval |
+| Console (Claude) | Spec, acceptance contract, gate decisions, diagnosis after repeated failures, short reports |
+| Executor | Acceptance tests (for big tasks), implementation until green, CARD updates |
+| Review job | Independent automatic review of the executor's change |
+| User | Business decisions, approvals, release authorization |
 
-## Start the console
+## Executor selection
 
-1. Read the configured registry.
-2. Read only the `<!-- CARD -->` block of each registered STATUS file.
-3. Reconcile each CARD with the selected executor's managed task or session state.
-4. Do not dispatch when that project already has a running or queued action.
-5. When completed work is newer than the CARD, use Sync STATUS before starting more work.
+Read `~/.claude/handoffs/dispatch.json` before every dispatch (if it is missing, read the legacy `codex-dispatch.json` beside it; never write the legacy file).
 
-Keep normal reads to the registry, CARD blocks, and short task summaries. Run the CARD's one-line local verification command when checking a claim. Move detailed requirements, debugging, and design work to the project's managed session.
+- Global `executor` (`claude` | `codex`), `model`, `effort`.
+- Per project: `projects["<root>"]` may set `executor` (`claude` | `codex` | `manual`), `model`, `effort`.
+- Precedence: `projects` entry > registry `Executor` column > global.
+- `manual`: never dispatch that project. Prepare a handoff (task file plus acceptance) for the user; CARD, verification, and gates still apply.
+- Pass each nonempty model/effort as one flag; omit empty ones.
 
-## Dispatch
+## Every task has an executable contract
 
-The shared dispatch file selects one executor and optional model settings:
+A task file states scope, an executable acceptance check, a done criterion, and the report format. Acceptance is one of: a test file, a parity command against a fixed baseline, or an expected output or exit code. "It works" is not acceptance.
 
-```json
-{ "executor": "claude", "model": "", "effort": "" }
+Task file skeleton (`.task/<name>.md`):
+
+```markdown
+Scope: <files/modules in and out of scope>
+Acceptance: `<command>` -> <expected output or exit code> (baseline: <ref>)
+Done when: acceptance passes and CARD is updated (rev + 1, 關卡 set per rules)
+Report: .task/REPORT.md, at most 15 lines: result, acceptance output, changed files, open risks
 ```
 
-Use the panel's Sync STATUS or Continue action. Continue requires a second press within three seconds. Each task stays within the project's authorized local scope and updates the CARD, including `關卡`, when it ends.
+## Order of work
 
-### executor: claude
+1. Console writes the spec and acceptance.
+2. Big tasks: the executor first writes the acceptance tests; the console reviews them (`spec` gate).
+3. Executor implements until acceptance is green.
+4. Independent automatic review job runs (see below).
+5. Console clears the gate or the work is done.
 
-This is the default and uses Claude Code's native background agents. It does not require a Codex account or companion installation.
+Never relax acceptance silently. A contract change goes back to the spec step and its gate.
 
-- Keep one managed full Claude session ID and the latest 20 managed job records per project in the configured sessions file. Treat it as mod-owned state and fail closed when it is malformed.
-- Start new work with native background mode in the project root. Resume later work with the mapped full session ID.
-- Do not substitute `--continue`: with background mode it copies the most recent session for the working directory instead of reliably selecting the managed session.
-- Give every launch a unique `--name`. Reconcile exact-root background agents with `claude agents --json --all --cwd <project-root>` and read output with `claude logs <id>`. The returned `sessionId` is the full value used for resume.
-- Require the launch name and returned short ID to resolve to exactly one new full session UUID. Keep ambiguous launches unresolved and block a duplicate dispatch while a launch is unresolved or its managed session is active; a later refresh may recover a uniquely named launch.
-- Treat `done`, recognized failures, and recognized stopped states as terminal. Keep blocked or waiting agents running, and do not infer completion when an agent is absent from the query result. Attach to a blocked agent to handle its approval or input.
-- Use one console process as the sessions-file writer. Writes are serialized within that process, but cross-process writes are not guaranteed atomic.
-- Inherit normal Claude Code permissions; do not add a permission-bypass flag.
-- Empty model or effort values use Claude Code's native defaults. The panel offers its verified aliases and also accepts a free-form model value.
+## Effort
 
-See the official [agent view](https://code.claude.com/docs/en/agent-view) and [CLI reference](https://code.claude.com/docs/en/cli-reference) for the upstream interface.
+- `medium` by default.
+- `high` for complex specs, parity work, or hard bugs.
+- `xhigh` only after medium or high has failed.
+- Two consecutive failures: the console diagnoses the cause instead of raising effort again.
 
-### executor: codex
+## Gates
 
-Use this optional route when Claude quota is limited. It requires Codex Companion, its configured script, and a Codex account.
+The CARD `關卡` line holds exactly one value: `無`, `spec：…`, `review：…`, or `release：…`. These are the only three gates.
 
-1. Run the included Codex preflight before dispatching.
-2. Read model choices from the configured Codex model cache; use the fallback effort list only when the cache has no per-model list.
-3. Dispatch through the companion with the configured model and effort. Empty values omit their flags and use Codex defaults.
-4. Read job state from the configured companion roots, with plugin data ahead of the legacy Temp root by default.
-5. Treat dispatch acceptance and quota records as status evidence, never as proof that the task or its verification passed.
-6. Resume the managed project task for follow-up. Use a fresh task history only when intentionally separating work, and record that decision in STATUS.
+- `spec`: spec or acceptance contract needs approval, or changed.
+- `review`: acceptance is green and the review job finished.
+- `release`: ready to ship. Return **ready / not ready + reasons + one sentence for the user to confirm**. Release also needs the user's explicit approval of the exact scope.
 
-The console still owns decisions and review gates. The executor must stop at `spec`, `review`, or `release` and return evidence to the console; it never performs a release.
+A gate approval never substitutes for user authorization. Only the console clears a gate. The executor stops at a gate and returns evidence; it never releases.
 
-## Decisions and gates
+## Reading discipline
 
-Use `等使用者` only for a decision that needs the operator. The decision action prefills a draft and attaches the selected project to the next accepted prompt.
+- Normal reads: the registry, CARD blocks, and at most ~15 lines of `.task/REPORT*.md`.
+- Spot-check only the diffs the report names; at most ~20 lines per read. Never pull raw logs or full diffs into the console.
+- Refresh the console session when its context is about half full or after more than three project switches, after confirming every CARD is current.
 
-Every task writes `關卡` as `無`, `spec：<scope and evidence>`, `review：<changes and verification>`, or `release：<readiness evidence>`. A gate or decision blocks continuation.
+## Codex executor
 
-- For spec and review, judge the selected project's evidence and state the result and reasons. Do not claim checks that were not run.
-- For release, return **ready / not ready + reasons + one sentence asking the operator to confirm**. This does not authorize release, deployment, or a formal-environment change.
-- Verification commands must be local checks. Never place deployment or formal-environment mutations in the CARD.
+- Dispatch from a task file: `codex-companion task --background --write --resume-last --cwd <root> --prompt-file .task/<name>.md` plus `--model`/`--effort` when set.
+- One main thread per project: continue with `--resume-last`. Do not use `task --fresh` inside a project; resume picks the newest task, so a side task steals the main line.
+- Codex reviews Codex: after acceptance passes, dispatch an independent review:
+  - `codex-companion review --background --cwd <root> --scope working-tree --model <m>`
+  - `--scope branch --base <ref>` for a branch, or `adversarial-review` for a harder pass.
+  - The review subcommand has no `--effort`.
+  - An unfinished or failed review never counts as passed.
+  - Non-git project: record the limitation in STATUS; do not initialize git.
+- Quota or broker trouble: the panel's `codexFallback` setting holds the dispatch (`ask`), sends it to Claude (`claude`, recorded as `fallbackFrom: codex`), or ignores it (`off`).
+
+### Known failures
+
+- A job ends after about a minute with `missing codex-windows-sandbox-setup.exe`: the Codex app auto-updated. The user stops only the stale companion brokers of the target workspace, by PID (the panel shows them), never by image name.
+- A job marked running whose process PID no longer exists blocks resume. Back up, then mark `jobs/<id>.json` and the job in `state.json` as failed.
+
+## Claude executor
+
+- Native background agents in the project root; the mod keeps one managed session per project and resumes it.
+- Normal Claude Code permissions apply; attach to a blocked agent to answer it.
+- Review: dispatch a separate review task with the same contract (acceptance output, diff named by the report); its verdict goes to the `review` gate.
+
+## Decisions
+
+Use `等使用者` only for a decision the user must make. The panel's decide action prefills a draft and attaches the project to the next prompt.
 
 ## Add a project
 
-1. Copy [the STATUS template](../STATUS-template.md) to the project.
-2. Fill in its scope and first CARD.
-3. Add one row under `## STATUS 卡位置` using [the registry example](../projects-scope.example.md).
-4. For a Git repository, a local `.console/STATUS.md` may be excluded through that repository's `.git/info/exclude`.
+1. Copy [the STATUS template](../STATUS-template.md) to the project (for git projects, `.console/STATUS.md`, optionally excluded via `.git/info/exclude`).
+2. Fill in scope and the first CARD.
+3. Add a row under `## STATUS 卡位置` in the registry ([example](../projects-scope.example.md)); set `Executor` if the project should not use the global one.
 
-## Report results
+## Report
 
-- Lead with the current state, one short line per project.
-- Report only results supported by current evidence.
-- Ask for a decision only when work cannot proceed without it.
-- Keep commit, publication, deployment, database writes, installations, and security changes behind their own authority and project procedure.
+- State first, one line per project, at most five bullets, one next step.
+- Report only what current evidence supports; never claim checks that were not run.
+- Ask the user only for decisions, approvals, and actions that need them: commit, push, PR, merge, deploy, database writes, installs, security changes.

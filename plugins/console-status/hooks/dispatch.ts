@@ -1,6 +1,16 @@
 
 export type Executor = 'claude' | 'codex'
-export type DispatchSettings = { executor: Executor; model: string; effort: string }
+/** A project may also be `manual`: the panel never dispatches it (CARD, verify and gates still work). */
+export type ProjectExecutor = Executor | 'manual'
+export type ProjectOverride = { executor?: ProjectExecutor; model?: string; effort?: string }
+/**
+ * The canonical dispatch file. `projects` is optional and keyed by project root;
+ * a file without it (the 0.1 flat shape) keeps working unchanged.
+ */
+export type DispatchSettings = { executor: Executor; model: string; effort: string; projects?: Record<string, ProjectOverride> }
+export type ExecutorSource = 'pane' | 'registry' | 'global'
+export type EffectiveDispatch = { executor: ProjectExecutor; model: string; effort: string; source: ExecutorSource }
+export const PROJECT_EXECUTORS: ProjectExecutor[] = ['claude', 'codex', 'manual']
 export type ModelOption = { model: string; efforts: string[] }
 const CLAUDE_MODELS: ModelOption[] = ['fable', 'opus', 'sonnet'].map(model => ({ model, efforts: [] }))
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -13,10 +23,117 @@ export function parseSettings(text: string | null, defaults: DispatchSettings): 
     const data = JSON.parse((text ?? '').replace(/^\uFEFF/, ''))
     if (object(data)) {
       const executor = data.executor === 'claude' || data.executor === 'codex' ? data.executor : defaults.executor
-      return { executor, model: clean(data.model) ?? defaults.model, effort: clean(data.effort) ?? defaults.effort }
+      const settings: DispatchSettings = { executor, model: clean(data.model) ?? defaults.model, effort: clean(data.effort) ?? defaults.effort }
+      const projects = parseProjects(data.projects)
+      if (projects) settings.projects = projects
+      return settings
     }
   } catch { /* Missing or partially written file: use user defaults. */ }
   return { ...defaults }
+}
+
+export type SettingsSource = 'canonical' | 'legacy' | 'defaults'
+
+/**
+ * `canonical` / `legacy` are file texts, or null when that file is missing (unreadable).
+ * The legacy codex-dispatch.json is read only when the canonical file is missing; it is never
+ * written. A legacy file without an `executor` field was a Codex-only file, so it means codex.
+ */
+export function readSettingsFiles(canonical: string | null, legacy: string | null, defaults: DispatchSettings): { settings: DispatchSettings; source: SettingsSource } {
+  if (canonical !== null) return { settings: parseSettings(canonical, defaults), source: 'canonical' }
+  if (legacy !== null) {
+    try {
+      if (object(JSON.parse(legacy.replace(/^﻿/, '')))) return { settings: parseSettings(legacy, { ...defaults, executor: 'codex' }), source: 'legacy' }
+    } catch { /* Malformed legacy file: defaults. */ }
+  }
+  return { settings: { ...defaults }, source: 'defaults' }
+}
+
+function parseProjects(value: unknown): Record<string, ProjectOverride> | null {
+  if (!object(value)) return null
+  const out: Record<string, ProjectOverride> = {}
+  for (const [root, raw] of Object.entries(value)) {
+    if (!root.trim() || !object(raw)) continue
+    const override: ProjectOverride = {}
+    if (raw.executor === 'claude' || raw.executor === 'codex' || raw.executor === 'manual') override.executor = raw.executor
+    const model = clean(raw.model)
+    const effort = clean(raw.effort)
+    if (model) override.model = model
+    if (effort) override.effort = effort
+    if (Object.keys(override).length) out[root] = override
+  }
+  return Object.keys(out).length ? out : null
+}
+
+/** Parse a registry `Executor` cell; blank or unknown text means the global default. */
+export function parseProjectExecutor(value: string | undefined): ProjectExecutor | undefined {
+  const text = (value ?? '').trim().toLowerCase()
+  return text === 'claude' || text === 'codex' || text === 'manual' ? text : undefined
+}
+
+const slashRoot = (root: string) => root.replace(/\\/g, '/').replace(/\/+$/, '')
+
+/** Same normalization as the executors use: forward slashes, Windows drive and UNC paths case-folded. */
+export function projectKey(root: string): string {
+  const normalized = slashRoot(root)
+  return /^(?:[a-z]:\/|\/\/)/i.test(normalized) ? normalized.toLowerCase() : normalized
+}
+
+export function projectOverride(settings: DispatchSettings, root: string): ProjectOverride | undefined {
+  const key = projectKey(root)
+  const entry = Object.entries(settings.projects ?? {}).find(([candidate]) => projectKey(candidate) === key)
+  return entry?.[1]
+}
+
+/**
+ * Precedence: pane override in dispatch.json > registry `Executor` column > global executor.
+ * Model and effort follow the same chain; a project whose executor differs from the global one
+ * does not inherit the global model/effort (they belong to the other executor).
+ */
+export function effectiveDispatch(settings: DispatchSettings, root: string, registry?: ProjectExecutor): EffectiveDispatch {
+  const override = projectOverride(settings, root)
+  const executor = override?.executor ?? registry ?? settings.executor
+  const source: ExecutorSource = override?.executor ? 'pane' : registry ? 'registry' : 'global'
+  const inherit = executor === settings.executor
+  return {
+    executor, source,
+    model: override?.model ?? (inherit ? settings.model : ''),
+    effort: override?.effort ?? (inherit ? settings.effort : ''),
+  }
+}
+
+/** Set (or with an empty value, clear) one field of a project's override, keeping the file minimal. */
+export function setProjectOverride(settings: DispatchSettings, root: string, field: keyof ProjectOverride, value: string): DispatchSettings {
+  const key = projectKey(root)
+  const projects: Record<string, ProjectOverride> = {}
+  let storedKey = slashRoot(root)
+  for (const [candidate, override] of Object.entries(settings.projects ?? {})) {
+    if (projectKey(candidate) === key) storedKey = candidate
+    else projects[candidate] = { ...override }
+  }
+  const current = { ...projectOverride(settings, root) }
+  if (field === 'executor') {
+    const next = parseProjectExecutor(value)
+    if (value.trim() && !next) throw new Error('executor 可選：claude, codex, manual（空白＝沿用預設）')
+    if (next !== current.executor) { delete current.model; delete current.effort }
+    if (next) current.executor = next
+    else delete current.executor
+  } else if (value.trim()) current[field] = value.trim()
+  else delete current[field]
+  if (Object.keys(current).length) projects[storedKey] = current
+  const { projects: _old, ...rest } = settings
+  return Object.keys(projects).length ? { ...rest, projects } : rest
+}
+
+/** Pane cycle for one project: inherit -> claude -> codex -> manual -> inherit. */
+export function nextProjectExecutor(current: ProjectExecutor | undefined): ProjectExecutor | '' {
+  const order: (ProjectExecutor | '')[] = ['', ...PROJECT_EXECUTORS]
+  return order[(order.indexOf(current ?? '') + 1) % order.length] ?? ''
+}
+
+/** Executor selections only: a refresh that sees this change mid-flight is redone. */
+export function executorSignature(settings: DispatchSettings): string {
+  return JSON.stringify([settings.executor, Object.entries(settings.projects ?? {}).map(([root, o]) => [projectKey(root), o.executor ?? ''])])
 }
 
 export function parseModels(text: string | null): ModelOption[] {

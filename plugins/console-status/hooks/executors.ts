@@ -3,7 +3,7 @@ import { isActiveJob } from './logic'
 import { readJobs } from './jobs'
 
 export type ExecutorKind = 'codex' | 'claude'
-export type DispatchOptions = { model?: string; effort?: string; kind?: 'sync' | 'continue' }
+export type DispatchOptions = { model?: string; effort?: string; kind?: 'sync' | 'continue'; fallbackFrom?: 'codex'; fallbackReason?: string }
 export type ExecutorJob = Job & { executor?: ExecutorKind; nativeId?: string; sessionId?: string }
 
 type RunResult = { exitCode: number; stdout: string; stderr: string }
@@ -42,6 +42,9 @@ type Agent = {
 type ClaudeJob = {
   id: string
   kind?: 'sync' | 'continue'
+  /** Set when a Codex dispatch was sent to Claude by the quota/broker fallback. */
+  fallbackFrom?: 'codex'
+  fallbackReason?: string
   nativeId?: string
   launchName?: string
   sessionId?: string
@@ -153,6 +156,8 @@ async function readState(deps: ExecutorDeps, path: string): Promise<ClaudeState>
           ...(typeof job.warning === 'string' ? { warning: job.warning } : {}),
           ...(typeof job.nativeId === 'string' ? { nativeId: job.nativeId } : {}),
           ...(typeof job.launchName === 'string' ? { launchName: job.launchName } : {}),
+          ...(job.fallbackFrom === 'codex' ? { fallbackFrom: 'codex' as const } : {}),
+          ...(typeof job.fallbackReason === 'string' ? { fallbackReason: job.fallbackReason } : {}),
           ...(typeof job.model === 'string' ? { model: job.model } : {}),
           ...(typeof job.effort === 'string' ? { effort: job.effort } : {}),
           ...(typeof job.updatedAt === 'string' ? { updatedAt: job.updatedAt } : {}),
@@ -276,6 +281,7 @@ function asJob(value: ClaudeJob): ExecutorJob {
   return {
     id: value.id, kind: value.kind, executor: 'claude', jobClass: 'task', status: value.status, summary: value.prompt,
     nativeId: value.nativeId, sessionId: value.sessionId,
+    ...(value.fallbackFrom ? { fallbackFrom: value.fallbackFrom, fallbackReason: value.fallbackReason } : {}),
     unmanagedSessionId: value.unmanagedSessionId, warning: value.warning,
     createdAt: value.startedAt, startedAt: value.startedAt, updatedAt: value.updatedAt, completedAt: value.completedAt,
     phase: value.phase, request: { prompt: value.prompt, model: value.model, effort: value.effort },
@@ -338,7 +344,10 @@ function createClaude(deps: ExecutorDeps, config: ExecutorConfig): Executor {
         const suffix = root.jobs.length.toString(36)
         const pendingId = `starting:${now}:${suffix}`
         const launchName = `console-${now.toString(36)}-${suffix}`
-        root.jobs.push({ id: pendingId, kind: opts.kind ?? 'continue', launchName, sessionId: root.sessionId, root: rootName, prompt, model: opts.model, effort: opts.effort, startedAt: nowIso, status: 'running', phase: 'starting' })
+        root.jobs.push({
+          id: pendingId, kind: opts.kind ?? 'continue', launchName, sessionId: root.sessionId, root: rootName, prompt, model: opts.model, effort: opts.effort, startedAt: nowIso, status: 'running', phase: 'starting',
+          ...(opts.fallbackFrom ? { fallbackFrom: opts.fallbackFrom, ...(opts.fallbackReason ? { fallbackReason: opts.fallbackReason } : {}) } : {}),
+        })
         return { value: { sessionId: root.sessionId, pendingId, launchName }, changed: true }
       })
 
@@ -439,7 +448,10 @@ export function createExecutor(kind: ExecutorKind, deps: ExecutorDeps, config: E
   return kind === 'codex' ? createCodex(deps, config) : createClaude(deps, config)
 }
 
-/** Read both executors, including terminal records that release pending launch holds. */
+/**
+ * Read both executors and merge them: a project can hold jobs from either one (per-project executor
+ * changes, Claude fallback for a Codex dispatch), and RUNNING detection must see all of them.
+ */
 export async function listWorkspaceJobs(kind: ExecutorKind, deps: ExecutorDeps, config: ExecutorConfig, root: string): Promise<ExecutorJob[]> {
   const other = kind === 'claude' ? 'codex' : 'claude'
   const [selected, background] = await Promise.all([

@@ -3,14 +3,17 @@
 // Band above the prompt + `/console` pane; toasts on changes. Shows on phones via Remote Control.
 import { atom, read, update } from 'claude-code'
 import type { Register, PluginOptions } from 'claude-code'
-import { resolveConfig } from './config'
+import { resolveConfig, resolveFallbackOptions, legacyDispatchPath } from './config'
 import type { ConsoleConfig } from './config'
 import { codexHealth, isActiveJob } from './logic'
-import { parseSettings, parseModels, modelOptions, nextOption, effortOptions } from './dispatch'
-import type { DispatchSettings } from './dispatch'
+import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles, effectiveDispatch, setProjectOverride, nextProjectExecutor, executorSignature, projectOverride } from './dispatch'
+import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs } from './executors'
-import type { ExecutorDeps, ExecutorJob, ExecutorKind } from './executors'
-import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail } from './actions'
+import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
+import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual } from './actions'
+import { resolveCompanion } from './companion'
+import type { CompanionResolution } from './companion'
+import { decideCodexDispatch } from './fallback'
 
 import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
 import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
@@ -24,6 +27,8 @@ import { layoutBand } from './band'
 const dispatchRevision = atom({ plugin: 'console-status', key: 'dispatchRevision' } as const, 0)
 
 const PANE = 'console-status'
+type GlobalField = 'executor' | 'model' | 'effort'
+const SOURCE_LABEL: Record<string, string> = { pane: '面板覆寫', registry: '登錄表', global: '全域' }
 const TICK_MS = 60_000
 const SLOW_MS = 5 * 60_000
 const snapshot = atom({ plugin: 'console-status', key: 'snapshot' } as const, null)
@@ -43,6 +48,7 @@ const continueConfirmations = atom({ plugin: 'console-status', key: 'continueCon
 const verificationResults = atom({ plugin: 'console-status', key: 'verificationResults' } as const, {})
 const actionPulse = atom({ plugin: 'console-status', key: 'actionPulse' } as const, 0)
 const reviewRequests = atom({ plugin: 'console-status', key: 'reviewRequests' } as const, {})
+const fallbackOffers = atom({ plugin: 'console-status', key: 'fallbackOffers' } as const, {})
 const actionLocks = new Set<string>()
 const earlyReviewStarts = new Map<string, string>()
 let selectionClaim: string | null = null
@@ -52,6 +58,7 @@ const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', 
 let codex = '…'
 let agents: Agent[] = []
 let codexQuotaText = ''
+let companion: CompanionResolution | null = null
 let lastSlow = 0
 let demoActive = false
 let dataGeneration = 0
@@ -98,8 +105,13 @@ async function workspaceJobs(kind: ExecutorKind, deps: ExecutorDeps, config: Con
     if (jobs.some(job => jobKey(job) === jobKey(pending.job))) unpublishedLaunches.delete(id)
     else jobs.push(pending.job)
   }
-  return jobs.filter(job => job.executor === kind || isActiveJob(job))
+  // Every active job of either executor counts, so RUNNING never misses one. Finished jobs count
+  // for the project's own executor and for Claude jobs that stood in for a Codex dispatch.
+  return jobs.filter(job => job.executor === kind || isActiveJob(job) || !!job.fallbackFrom)
 }
+
+/** Config with the companion script actually in use (configured, or auto-resolved when stale). */
+const withCompanion = (config: ConsoleConfig): ConsoleConfig => companion?.path ? { ...config, companionScript: companion.path } : config
 
 async function paths($: any, options: PluginOptions) {
   const home = ((await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '').replace(/\\/g, '/')
@@ -110,13 +122,30 @@ async function paths($: any, options: PluginOptions) {
 
 async function readDispatch($: any, config: ConsoleConfig) {
   const text = await $.fs.read(config.dispatchSettingsPath).catch(() => null)
-  const settings = parseSettings(text, { executor: config.executor, model: config.defaultModel, effort: config.defaultEffort })
+  // Legacy codex-dispatch.json is read-only compatibility, consulted only when dispatch.json is missing.
+  const legacy = text === null ? await $.fs.read(legacyDispatchPath(config.dispatchSettingsPath)).catch(() => null) : null
+  const { settings, source } = readSettingsFiles(text, legacy, { executor: config.executor, model: config.defaultModel, effort: config.defaultEffort })
   const cache = settings.executor === 'codex' ? await $.fs.read(config.modelsCachePath).catch(() => null) : null
-  return { settings, models: modelOptions(settings.executor, parseModels(cache)) }
+  return { settings, source, models: modelOptions(settings.executor, parseModels(cache)) }
+}
+
+/** One project's override, serialized with the global settings writes. */
+async function changeProjectDispatch($: any, config: ConsoleConfig, root: string, field: keyof ProjectOverride, value: string): Promise<DispatchSettings> {
+  const previous = settingsWrite
+  let release = () => {}
+  settingsWrite = new Promise<void>(resolve => { release = resolve })
+  await previous
+  try {
+    if (/[\r\n\x00]/.test(value)) throw new Error('設定值必須是單行文字。')
+    const { settings } = await readDispatch($, config)
+    const updated = setProjectOverride(settings, root, field, value)
+    await $.fs.write(config.dispatchSettingsPath, JSON.stringify(updated, null, 2) + '\n')
+    return updated
+  } finally { release() }
 }
 
 /** Read at mutation time so changing one field preserves the other field on disk. */
-async function changeDispatch($: any, config: ConsoleConfig, field: keyof DispatchSettings, value?: string): Promise<DispatchSettings> {
+async function changeDispatch($: any, config: ConsoleConfig, field: GlobalField, value?: string): Promise<DispatchSettings> {
   const previous = settingsWrite
   let release = () => {}
   settingsWrite = new Promise<void>(resolve => { release = resolve })
@@ -124,7 +153,7 @@ async function changeDispatch($: any, config: ConsoleConfig, field: keyof Dispat
   try { return await saveDispatch($, config, field, value) } finally { release() }
 }
 
-async function saveDispatch($: any, config: ConsoleConfig, field: keyof DispatchSettings, value?: string): Promise<DispatchSettings> {
+async function saveDispatch($: any, config: ConsoleConfig, field: GlobalField, value?: string): Promise<DispatchSettings> {
   const { settings, models } = await readDispatch($, config)
   const options = field === 'executor' ? ['claude', 'codex'] : field === 'model' ? models.map(m => m.model) : effortOptions(settings.executor, models, settings.model)
   if (field === 'model' && value === undefined && !models.length) throw new Error('模型快取無法讀取；請用 /console model <name> 或 /console effort <level> 設定。')
@@ -140,15 +169,27 @@ async function saveDispatch($: any, config: ConsoleConfig, field: keyof Dispatch
   return updated
 }
 
-async function slowProbes($: any, config: ConsoleConfig, executor: DispatchSettings['executor']) {
+async function slowProbes($: any, config: ConsoleConfig, needCodex: boolean, home: string) {
   let probeCodex = ''
   let quotaText = ''
   let probeAgents: Agent[] = []
-  if (executor === 'codex') {
-    const ps = await $.process
-      .run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `${$.plugin.root}/scripts/codex-preflight.ps1`, ...(config.companionScript ? ['-CompanionScript', config.companionScript] : []), '-CompanionStateDir', config.companionStateDir], { timeoutMs: 30_000 })
-      .catch(() => null)
-    probeCodex = ps ? (ps.stdout.trim().split('\n').pop() ?? '').trim() || 'unknown' : 'unknown'
+  let resolved: CompanionResolution | null = null
+  if (needCodex) {
+    const preflight = async (script: string) => {
+      const ps = await $.process
+        .run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `${$.plugin.root}/scripts/codex-preflight.ps1`, ...(script ? ['-CompanionScript', script] : []), '-CompanionStateDir', config.companionStateDir], { timeoutMs: 30_000 })
+        .catch(() => null)
+      return ps ? (ps.stdout.trim().split('\n').pop() ?? '').trim() || 'unknown' : 'unknown'
+    }
+    // An empty companionScript is resolved from the installed Codex plugin before the preflight;
+    // a configured one is trusted until the preflight reports it MISSING (a stale version folder).
+    resolved = await resolveCompanion({ read: (path: string) => $.fs.read(path), list: (path: string) => $.fs.list(path) }, home, config.companionScript).catch(() => null)
+    probeCodex = await preflight(resolved?.path || config.companionScript)
+    if (config.companionScript && /\bcompanion=MISSING\b/.test(probeCodex)) {
+      const retry = await resolveCompanion({ read: (path: string) => $.fs.read(path), list: (path: string) => $.fs.list(path) }, home, config.companionScript, true).catch(() => null)
+      if (retry) resolved = retry
+      if (retry && retry.source !== 'configured') probeCodex = await preflight(retry.path)
+    }
     const q = await $.process
       .run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `${$.plugin.root}/scripts/codex-quota.ps1`], { timeoutMs: 30_000 })
       .catch(() => null)
@@ -156,7 +197,7 @@ async function slowProbes($: any, config: ConsoleConfig, executor: DispatchSetti
   }
   const ag = await $.process.run(['claude', 'agents', '--json'], { timeoutMs: 30_000 }).catch(() => null)
   try { probeAgents = ag ? JSON.parse(ag.stdout) : [] } catch { probeAgents = [] }
-  return { codex: probeCodex, quotaText, agents: probeAgents }
+  return { codex: probeCodex, quotaText, agents: probeAgents, companion: resolved }
 }
 
 async function refresh($: any, options: PluginOptions, force = false) {
@@ -185,19 +226,26 @@ async function refresh($: any, options: PluginOptions, force = false) {
     session: { usage: () => guarded(() => $.session.usage()), id: () => guarded(() => $.session.id()) },
   }
   const startingGeneration = launchGeneration
-  let refreshingExecutor: DispatchSettings['executor'] | undefined
+  let refreshingExecutor: string | undefined
   let refreshConfig: ConsoleConfig | undefined
   try {
     const now = await io.clock.now() as number
     const { home, config } = await paths(io, options)
     const { settings } = await readDispatch(io, config)
-    refreshingExecutor = settings.executor
+    refreshingExecutor = executorSignature(settings)
     refreshConfig = config
+    let error: string | null = null
+    const registry = await io.fs.read(config.registryPath).catch(() => null) as string | null
+    if (registry === null) error = '找不到登錄表'
+    const registryRows = parseRegistry(registry ?? '', home).map(row => ({ row, root: projectRoot(row.statusPath) }))
+    const effective = registryRows.map(({ row, root }) => effectiveDispatch(settings, root, row.executor))
+    const codexInUse = settings.executor === 'codex' || effective.some(item => item.executor === 'codex')
     if (force || now - lastSlow > SLOW_MS) {
-      const probes = await guarded(() => slowProbes(io, config, settings.executor))
+      const probes = await guarded(() => slowProbes(io, config, codexInUse, home))
       codex = probes.codex
       codexQuotaText = probes.quotaText
       agents = probes.agents
+      if (probes.companion) companion = probes.companion
       lastSlow = now
     }
     const deps: ExecutorDeps = {
@@ -205,40 +253,43 @@ async function refresh($: any, options: PluginOptions, force = false) {
       files: { read: path => guarded(() => $.fs.read(path)), list: path => guarded(() => $.fs.list(path)), write: (path, text) => guarded(() => $.fs.write(path, text)) },
       now: () => guarded(() => $.clock.now()),
     }
-    let error: string | null = null
-    const registry = await io.fs.read(config.registryPath).catch(() => null) as string | null
-    if (registry === null) error = '找不到登錄表'
     const projects: Project[] = []
     const bases: string[] = []
     const roots: string[] = []
     const warnings: string[] = []
-    for (const row of parseRegistry(registry ?? '', home)) {
+    for (const [index, { row, root }] of registryRows.entries()) {
       const card = await io.fs.read(row.statusPath).catch(() => null) as string | null
-      const root = projectRoot(row.statusPath)
+      const eff = effective[index]!
       bases.push(root.replace(/\/+$/, '').split('/').pop() ?? '')
       roots.push(root)
-      const jobs = await guarded(() => workspaceJobs(settings.executor, deps, config, root))
+      const listing: ExecutorKind = eff.executor === 'manual' ? settings.executor : eff.executor
+      const jobs = await guarded(() => workspaceJobs(listing, deps, withCompanion(config), root))
       for (const job of jobs) {
         if (!job.warning) continue
         const text = `${row.name}：${job.warning}`
         warnings.push(text)
       }
-      const project = { ...buildProject(row, card, jobs, now), executor: settings.executor }
+      const project: Project = {
+        ...buildProject(row, card, jobs, now), executor: eff.executor, executorSource: eff.source,
+        ...(row.executor ? { registryExecutor: row.executor } : {}),
+      }
       for (const j of project.jobs) {
         if (j.kind !== 'running') continue
         const job = jobs.find(item => item.id === j.id && item.executor === j.executor)
-        if (job) j.last = await createExecutor(job.executor ?? settings.executor, deps, config).lastLine(job).catch(() => '')
+        if (job) j.last = await createExecutor(job.executor ?? listing, deps, withCompanion(config)).lastLine(job).catch(() => '')
       }
       projects.push(project)
     }
     const usage: any = await io.session.usage().catch(() => null)
     const cur: Snapshot = {
-      at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, await io.session.id().catch(() => null) as string | null, roots, home), codex: settings.executor === 'codex' ? relevantCodex(codex, bases) : '',
+      at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, await io.session.id().catch(() => null) as string | null, roots, home), codex: codexInUse ? relevantCodex(codex, bases) : '',
+      ...(codexInUse ? { codexInUse: true } : {}),
+      ...(codexInUse && companion ? { companion: { path: companion.path, source: companion.source, ...(companion.warning ? { warning: companion.warning } : {}) } } : {}),
       contextPercent: usage?.context?.percent ?? null, error,
       codexQuota: parseCodexQuota(codexQuotaText, now),
       limits: (usage?.rateLimits ?? []).map((l: any) => ({ kind: String(l.kind), percent: Number(l.percentUsed) || 0, ...(l.resetsAt ? { resetsAt: String(l.resetsAt) } : {}) })),
     }
-    if ((await readDispatch(io, config)).settings.executor !== settings.executor) { owner.queued = true; return }
+    if (executorSignature((await readDispatch(io, config)).settings) !== refreshingExecutor) { owner.queued = true; return }
     await publishDisplay(async () => {
       if (!current()) return
       const prev = await guarded(() => read($, snapshot))
@@ -265,7 +316,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
     })
   } catch (error) {
     if (!current() || error === DISCARDED_REFRESH) return
-    if (refreshConfig && (await readDispatch(io, refreshConfig)).settings.executor !== refreshingExecutor) { owner.queued = true; return }
+    if (refreshConfig && executorSignature((await readDispatch(io, refreshConfig)).settings) !== refreshingExecutor) { owner.queued = true; return }
     if (!current()) return
     const message = `執行者狀態讀取失敗：${error instanceof Error ? error.message : String(error)}`
     await publishDisplay(async () => {
@@ -298,7 +349,7 @@ async function actionNotice($: any, text: string, ok: boolean) {
 }
 
 /** All entry points share this lock and re-check the latest state, including stale rendered buttons. */
-async function triggerAction($: any, options: PluginOptions, statusPath: string, kind: ActionKind) {
+async function triggerAction($: any, options: PluginOptions, statusPath: string, kind: ActionKind, request: { useClaude?: boolean } = {}) {
   if (await demoEnabled($)) {
     $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。')
     return
@@ -323,7 +374,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     if ((kind === 'sync' || kind === 'continue') && current?.error) throw new Error('請先成功更新執行者狀態，再派工。')
     const name = p.name.replace(/\s.*$/, '')
     const now = await $.clock.now()
-    if (kind === 'continue') {
+    if (kind === 'continue' && !request.useClaude) {
       const signature = workSignature(p)
       const confirmations = await read($, continueConfirmations)
       if (!confirmationMatches(confirmations[statusPath], signature, now)) {
@@ -344,7 +395,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       if (!(await read($, pendingActions))[statusPath]) { timer?.cancel(); return }
       await update($, actionPulse, value => (value + 1) % SPINNER.length)
     })
-    const { config } = await paths($, options)
+    const { home, config } = await paths($, options)
     const root = projectRoot(p.statusPath)
     if (kind === 'verify') {
       let result: VerificationResult
@@ -359,21 +410,50 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       await actionNotice($, `${name}：${result.ok ? '✓ 驗證通過' : '✕ 驗證失敗'}${result.exitCode === null ? '（逾時或無法執行）' : `（exit ${result.exitCode}）`}`, result.ok)
     } else if (kind === 'sync' || kind === 'continue') {
       const { settings } = await readDispatch($, config)
-      if (current.executor && current.executor !== settings.executor) throw new Error('執行者已變更，請更新面板後再操作。')
+      const eff = effectiveDispatch(settings, root, p.registryExecutor)
+      if ((p.executor ?? current?.executor) && (p.executor ?? current?.executor) !== eff.executor) throw new Error('執行者已變更，請更新面板後再操作。')
+      if (eff.executor === 'manual') throw new Error('此專案設為 manual：面板不派工，請手動交接。')
       const deps: ExecutorDeps = {
         run: (argv, init) => $.process.run(argv, init),
         files: { read: path => $.fs.read(path), list: path => $.fs.list(path), write: (path, text) => $.fs.write(path, text) },
         now: () => $.clock.now(),
       }
-      const jobs = await workspaceJobs(settings.executor, deps, config, root)
+      if (eff.executor === 'codex' && !companion?.path && !config.companionScript) companion = await resolveCompanion({ read: (path: string) => $.fs.read(path), list: (path: string) => $.fs.list(path) }, home, config.companionScript).catch(() => null)
+      const execConfig = withCompanion(config)
+      // Claude stand-in for Codex uses the global model/effort only when they are Claude's own.
+      const claudeOpts = { model: settings.executor === 'claude' ? settings.model : '', effort: settings.executor === 'claude' ? settings.effort : '' }
+      let chosen: ExecutorKind = eff.executor
+      let dispatchOpts: DispatchOptions = { model: eff.model, effort: eff.effort, kind }
+      const offer = (await read($, fallbackOffers))[statusPath]
+      if (eff.executor === 'codex' && request.useClaude) {
+        chosen = 'claude'
+        dispatchOpts = { ...claudeOpts, kind, fallbackFrom: 'codex', fallbackReason: offer?.reason ?? '使用者選擇改用 Claude' }
+      } else if (eff.executor === 'codex') {
+        const fallback = resolveFallbackOptions(options)
+        const base = root.replace(/\/+$/, '').split('/').pop() ?? ''
+        const decision = decideCodexDispatch({
+          mode: fallback.codexFallback, minPercent: fallback.codexMinQuotaPercent, quota: current?.codexQuota,
+          preflight: relevantCodex(codex, [base]), companionPath: execConfig.companionScript, now,
+        })
+        if (decision.action === 'ask') {
+          await update($, fallbackOffers, values => ({ ...values, [statusPath]: { kind, reason: decision.reason, at: now } }))
+          throw new Error(`Codex 未派工：${decision.reason}。可按「改用 Claude 派工」。`)
+        }
+        if (decision.action === 'claude') {
+          chosen = 'claude'
+          dispatchOpts = { ...claudeOpts, kind, fallbackFrom: 'codex', fallbackReason: decision.reason }
+        }
+      }
+      const jobs = await workspaceJobs(chosen, deps, execConfig, root)
       const protection = buildProject({ name: p.name, statusPath }, null, jobs, now)
       const reason = dispatchBlockReason(protection)
       if (reason) {
         await refresh($, options, true)
         throw new Error(reason)
       }
-      const executor = createExecutor(settings.executor, deps, config)
-      const job = await executor.dispatch(root, dispatchPrompt(p, kind), { ...settings, kind })
+      const executor = createExecutor(chosen, deps, execConfig)
+      const job = await executor.dispatch(root, dispatchPrompt(p, kind), dispatchOpts)
+      await update($, fallbackOffers, values => { if (!values[statusPath]) return values; const next = { ...values }; delete next[statusPath]; return next })
       if (isActiveJob(job)) unpublishedLaunches.set(`${workspaceKey(root)}:${jobKey(job)}`, { root: workspaceKey(root), job })
       const acceptedAt = await $.clock.now()
       const id = job.id
@@ -382,10 +462,11 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       launchGeneration++
       await update($, snapshot, value => value ? trackRowChanges(value, { ...value, projects: value.projects.map(item => item.statusPath === statusPath ? {
         ...item,
-        jobs: [{ kind: 'running' as const, id, executor: settings.executor, status: 'queued', summary: actionLabel(kind, p), startedAt, phase: '等待任務狀態' }, ...item.jobs.filter(j => j.id !== id || j.executor !== settings.executor)],
-        tasks: [{ id, status: 'queued', title: actionLabel(kind, p), model: settings.model, effort: settings.effort, startedAt }, ...(item.tasks ?? []).filter(t => t.id !== id)],
+        jobs: [{ kind: 'running' as const, id, executor: chosen, status: 'queued', summary: actionLabel(kind, p), startedAt, phase: '等待任務狀態' }, ...item.jobs.filter(j => j.id !== id || j.executor !== chosen)],
+        tasks: [{ id, executor: chosen, ...(dispatchOpts.fallbackFrom ? { fallbackFrom: dispatchOpts.fallbackFrom } : {}), status: 'queued', title: actionLabel(kind, p), model: dispatchOpts.model ?? '', effort: dispatchOpts.effort ?? '', startedAt }, ...(item.tasks ?? []).filter(t => t.id !== id)],
       } : item) }, acceptedAt) : value)
-      await actionNotice($, `${name}：${settings.executor} 已接受${kind === 'sync' ? '同步 STATUS' : '繼續下一步'}，等待執行結果`, true)
+      const fallbackNote = dispatchOpts.fallbackFrom ? `（Codex 改由 Claude：${dispatchOpts.fallbackReason}）` : ''
+      await actionNotice($, `${name}：${chosen} 已接受${kind === 'sync' ? '同步 STATUS' : '繼續下一步'}${fallbackNote}，等待執行結果`, true)
     } else if (kind === 'decide') {
       const filled = await $.prompt.fill({ text: `「${p.name}」決策：`, mode: 'replace' })
       if (!filled.isFilled) throw new Error(filled.refusal === 'no_composer' ? '此介面沒有可預填的輸入框；請在主控台輸入決策。' : '輸入框目前無法預填，請關閉對話框後重試。')
@@ -447,6 +528,7 @@ export const register: Register = (on, options) => {
     await update($, reviewRequests, values => Object.fromEntries(Object.entries(values).filter(([path]) => actionLocks.has(path))))
     await update($, pendingActions, values => Object.fromEntries(Object.entries(values).filter(([path]) => actionLocks.has(path))))
     await update($, continueConfirmations, () => ({}))
+    await update($, fallbackOffers, () => ({}))
     await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；band 橫帶；demo 示範' })
     refreshTimer = $.clock.every(TICK_MS, () => void refresh($, options))
     void refresh($, options, true)
@@ -507,9 +589,39 @@ export const register: Register = (on, options) => {
   on('command.run', async ($, e, next) => {
     if (e.command !== 'console') return next(e)
     const arg = e.args.trim()
+    const projectSetting = arg.match(/^project(?:\s+(executor|model|effort)\s+(\S+)\s+([\s\S]+))?$/)
+    if (projectSetting) {
+      const { config } = await paths($, options)
+      const snap = await read($, snapshot)
+      const projects = snap && !snap.demo ? snap.projects : []
+      if (!projectSetting[1]) {
+        const { settings } = await readDispatch($, config)
+        const lines = projects.map(p => {
+          const eff = effectiveDispatch(settings, projectRoot(p.statusPath), p.registryExecutor)
+          return `${p.name}：${eff.executor}（${SOURCE_LABEL[eff.source]}）· ${eff.model || '預設'} · ${eff.effort || '預設'}`
+        })
+        return { text: [...(lines.length ? lines : ['（尚無專案資料；先 /console refresh）']), '設定：/console project executor|model|effort <值|inherit> <專案名稱>'].join('\n') }
+      }
+      const name = projectSetting[3]!.trim()
+      const target = projects.find(p => p.name === name) ?? projects.find(p => p.name.toLowerCase().startsWith(name.toLowerCase()))
+      if (!target) return { text: `找不到專案「${name}」。` }
+      const field = projectSetting[1] as keyof ProjectOverride
+      const raw = projectSetting[2]!
+      const value = raw === '""' || raw.toLowerCase() === 'inherit' ? '' : raw
+      try {
+        const saved = await changeProjectDispatch($, config, projectRoot(target.statusPath), field, value)
+        if (field === 'executor') await update($, fallbackOffers, values => { const rest = { ...values }; delete rest[target.statusPath]; return rest })
+        await update($, dispatchRevision, v => v + 1)
+        await refresh($, options, true)
+        const eff = effectiveDispatch(saved, projectRoot(target.statusPath), target.registryExecutor)
+        const text = `${target.name} 派工設定：${eff.executor}（${SOURCE_LABEL[eff.source]}）· ${eff.model || '預設'} · ${eff.effort || '預設'}`
+        $.ui.toast(text)
+        return { text }
+      } catch (error) { return { text: `設定未儲存：${error instanceof Error ? error.message : String(error)}` } }
+    }
     const setting = arg.match(/^(executor|model|effort)(?:\s+([\s\S]*))?$/)
     if (setting) {
-      const field = setting[1] as keyof DispatchSettings
+      const field = setting[1] as GlobalField
       const { config } = await paths($, options)
       try {
         if (setting[2] !== undefined) {
@@ -585,6 +697,8 @@ export const register: Register = (on, options) => {
   const HELP: Record<string, string> = {
     dispatch_executor: '執行者：claude 使用原生背景 session；codex 使用 Companion。切換時清空模型與 effort，已派出的工作繼續使用原執行者。',
     dispatch_model: '派工模型：點一下輪換並存入 dispatch.json；影響後續觸發的派工。也可用 /console model <name> 自由輸入。',
+    project_executor: '專案執行者：點一下輪換此專案的覆寫（沿用 → claude → codex → manual），存入 dispatch.json 的 projects。優先序：面板覆寫 > 登錄表 Executor 欄 > 全域。manual 代表面板不派工，只做 CARD、驗證與關卡。',
+    fallback: 'Codex 不可用（額度低於門檻、broker 過期或找不到 companion）時，codexFallback=ask 不會派工；按此改由 Claude 執行同一個提示，任務會標記 codex→claude。',
     dispatch_effort: '派工 effort：點一下輪換模型支援的推理強度並儲存；也可用 /console effort <level>。切換模型時不支援的 effort 會清空。',
     ACTION: '需決策：專案 STATUS 卡片的「等使用者」欄有內容，代表該專案有業務決策需由使用者拍板。',
     GATE: '待審核：STATUS 的 spec／review 關卡送交主控台判斷；release 只整理可否上線與理由，最後由你決定，不會自動上線。',
@@ -615,6 +729,7 @@ export const register: Register = (on, options) => {
   const FG: Record<State, string> = { ACTION: C.amber, GATE: C.purple, RUNNING: C.teal, SYNC: C.blue, IDLE: C.grey, NOCARD: C.red }
   const BG: Record<State, string | undefined> = { ACTION: C.amberBg, GATE: C.purpleBg, RUNNING: C.tealBg, SYNC: C.blueBg, IDLE: undefined, NOCARD: undefined }
   const SHOWN: State[] = ['ACTION', 'GATE', 'RUNNING', 'SYNC', 'IDLE']
+  const EXECUTOR_TAG: Record<string, string> = { pane: '・面板', registry: '・登錄表', global: '' }
   const TONE: Record<string, string> = { amber: C.amber, teal: C.teal, blue: C.blue, red: C.red, green: C.green }
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, nextHook) => {
@@ -694,10 +809,11 @@ export const register: Register = (on, options) => {
     const confirmations = await read($, continueConfirmations)
     const verified = await read($, verificationResults)
     const pulse = await read($, actionPulse)
+    const offers = demo ? {} : await read($, fallbackOffers)
     const { config } = demo ? demoContext ?? { config: resolveConfig(options, '', '', '/tmp') } : await paths($, options)
     await read($, dispatchRevision)
     const dispatch = demo ? demoContext?.dispatch ?? { settings: { executor: s.executor ?? 'claude', model: '', effort: '' }, models: [] } : await readDispatch($, config)
-    const cycle = async (field: keyof DispatchSettings) => {
+    const cycle = async (field: GlobalField) => {
       try {
         const saved = await changeDispatch($, config, field)
         if (await demoEnabled($)) demoContext = { config, dispatch: await readDispatch($, config) }
@@ -706,6 +822,20 @@ export const register: Register = (on, options) => {
         $.ui.toast(`派工設定已儲存：${saved.executor} · ${saved.model || '預設'} · ${saved.effort || '預設'}`)
       } catch (error) { $.ui.toast(`設定未儲存：${error instanceof Error ? error.message : String(error)}`) }
     }
+    const cycleProject = async (p: Project) => {
+      if (await demoEnabled($)) { $.ui.toast('示範資料：不變更專案設定。'); return }
+      try {
+        const root = projectRoot(p.statusPath)
+        const nextExecutor = nextProjectExecutor(projectOverride(dispatch.settings, root)?.executor)
+        const saved = await changeProjectDispatch($, config, root, 'executor', nextExecutor)
+        await update($, fallbackOffers, values => { const rest = { ...values }; delete rest[p.statusPath]; return rest })
+        await update($, dispatchRevision, v => v + 1)
+        await refresh($, options, true)
+        const eff = effectiveDispatch(saved, root, p.registryExecutor)
+        $.ui.toast(`${p.name.replace(/\s.*$/, '')} 執行者：${eff.executor}（${SOURCE_LABEL[eff.source]}）`)
+      } catch (error) { $.ui.toast(`設定未儲存：${error instanceof Error ? error.message : String(error)}`) }
+    }
+    const codexShown = dispatch.settings.executor === 'codex' || !!s.codexInUse
     const n = next(s)
     const c = counts(s)
     const ctx = s.contextPercent
@@ -798,7 +928,7 @@ export const register: Register = (on, options) => {
     const target = nextProject(s)
     const targetProject = s.projects.find(p => p.name === target)
     const targetState = list.find(r => r.full === target)?.state
-    const primaryAction: ActionKind | null = targetState === 'ACTION' ? 'decide' : targetState === 'GATE' && parseGate(targetProject?.gate)?.kind !== 'unknown' ? 'gate' : targetState === 'SYNC' ? 'sync' : null
+    const primaryAction: ActionKind | null = targetState === 'ACTION' ? 'decide' : targetState === 'GATE' && parseGate(targetProject?.gate)?.kind !== 'unknown' ? 'gate' : targetState === 'SYNC' && targetProject && !isManual(targetProject) ? 'sync' : null
     const focus = sel ?? list[Math.max(0, cur)]?.full ?? null
     const menuProject = menu === null ? null : s.projects.find(x => x.name === menu) ?? null
     const actionButton = (p: Project, kind: ActionKind, key: string) => {
@@ -816,10 +946,28 @@ export const register: Register = (on, options) => {
     const projectActions = (p: Project, prefix: string) => {
       const state = list.find(r => r.full === p.name)?.state ?? 'NOCARD'
       const kinds = actionKinds(p, state)
-      if (dispatchBlockReason(p) && !kinds.includes('continue')) kinds.unshift('continue')
+      if (!isManual(p) && dispatchBlockReason(p) && !kinds.includes('continue')) kinds.unshift('continue')
       const active = pending[p.statusPath]?.kind
       if (active && !kinds.includes(active)) kinds.unshift(active)
-      return <Box gap={2} flexWrap="wrap">{kinds.map(kind => actionButton(p, kind, prefix + kind))}</Box>
+      const offer = p.executor === 'codex' ? offers[p.statusPath] : undefined
+      return <Box flexDirection="column">
+        <Box gap={2} flexWrap="wrap">
+          {kinds.map(kind => actionButton(p, kind, prefix + kind))}
+          {offer && <Box key={'help-' + prefix + 'fallback'} hover={{ scope: 'help-fallback' }}>
+            <Button key={prefix + 'fallback'} plain dimColor={!!pending[p.statusPath]} label={`⇢ 改用 Claude 派工（${actionLabel(offer.kind, p).replace(/^⇢\s*/, '')}）`} onPress={async () => {
+              if (!pending[p.statusPath]) await triggerAction($, options, p.statusPath, offer.kind, { useClaude: true })
+            }} />
+          </Box>}
+        </Box>
+        <Box gap={1} flexWrap="wrap">
+          <Text color={C.dim}>執行者</Text>
+          <Box hover={{ scope: 'help-project_executor' }}>
+            <Button key={prefix + 'executor'} plain label={`${p.executor ?? dispatch.settings.executor}${EXECUTOR_TAG[p.executorSource ?? 'global'] ?? ''}`} onPress={() => cycleProject(p)} />
+          </Box>
+          {isManual(p) && <Text color={C.dim}>手動交接：面板不派工（CARD、驗證、關卡照常）</Text>}
+          {offer && <Text color={C.amber} wrap="truncate-end">Codex 未派工：{offer.reason}</Text>}
+        </Box>
+      </Box>
     }
     const verificationView = (p: Project) => {
       const result = verified[p.statusPath]
@@ -973,7 +1121,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column">
           {rule}
           <Box gap={3} flexWrap="wrap">
-            {dispatch.settings.executor === 'codex' && <Box key="h-codex" hover={{ scope: 'help-codex' }}>
+            {codexShown && <Box key="h-codex" hover={{ scope: 'help-codex' }}>
               <Text color={C.dim}>Codex <Text color={health === 'stale' ? C.red : health === 'ok' ? C.green : C.dim}>● {health === 'stale' ? '需處理' : health === 'ok' ? '正常' : '未檢查'}</Text></Text>
             </Box>}
             <Box key="h-sessions" hover={{ scope: 'help-sessions' }}>
@@ -987,7 +1135,7 @@ export const register: Register = (on, options) => {
               {ctx !== null && <Battery id="ctx" label="上下文" used={ctx} hint={ctx >= ROTATE_PERCENT ? '建議換新主控台' : ''} />}
               {limits.map(l => <Battery key={'lim' + l.kind} id={/five/.test(l.kind) ? 'five_hour' : 'seven_day'} label={limitName(l.kind)} used={l.percent} hint="" note={resetText(l.resetsAt, now)} />)}
             </Box>
-            {(s.demo || dispatch.settings.executor === 'codex') && ((s.codexQuota?.limits.length ?? 0) > 0 || s.codexQuota?.credits) && (
+            {(s.demo || codexShown) && ((s.codexQuota?.limits.length ?? 0) > 0 || s.codexQuota?.credits) && (
               <Box key="q-codex" flexDirection="column" borderStyle="round" borderColor={C.faint} paddingX={1}>
                 <Box gap={1}>
                   <Text bold color={C.strong}>Codex</Text>
@@ -1001,7 +1149,10 @@ export const register: Register = (on, options) => {
             )}
           </Box>
           {s.blocked.map((b, i) => <Text key={'b' + i + '-' + b.name} color={C.amber} wrap="truncate-end">{`  ・${b.name}：${b.why}`}</Text>)}
-          {dispatch.settings.executor === 'codex' && health !== 'ok' && s.codex.trim() && <Text color={health === 'stale' ? C.red : C.dim} wrap="truncate-end">{`  ・${s.codex}`}</Text>}
+          {codexShown && health !== 'ok' && s.codex.trim() && <Text color={health === 'stale' ? C.red : C.dim} wrap="truncate-end">{`  ・${s.codex}`}</Text>}
+          {codexShown && s.companion && (s.companion.source !== 'configured' || s.companion.warning) && (
+            <Text key="companion" color={s.companion.warning ? C.amber : C.dim} wrap="truncate-end">{`  ・companion：${s.companion.path || '（無）'}${s.companion.source === 'installed' || s.companion.source === 'cache' ? '（自動選用）' : ''}${s.companion.warning ? `　⚠ ${s.companion.warning}` : ''}`}</Text>
+          )}
         </Box>
 
         <Box key="footer" flexDirection="column" gap={1}>

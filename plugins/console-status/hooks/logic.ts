@@ -1,23 +1,41 @@
 // Pure logic for console-status: no I/O, so tests can exercise it directly.
 import type { Blocked, ExecutorTask, JobFlag, Project, Snapshot } from '../types'
+import { parseProjectExecutor } from './dispatch'
+import type { ProjectExecutor } from './dispatch'
 
 export const STALE_DAYS = 3
 export const ROTATE_PERCENT = 50
 const NONE = new Set(['', '無', '沒有', '-', '未知'])
 
-export type RegistryRow = { name: string; statusPath: string }
-export type Job = { id: string; kind?: 'sync' | 'continue'; unmanagedSessionId?: string; warning?: string; executor?: 'claude' | 'codex'; nativeId?: string; sessionId?: string; jobClass?: string; status?: string; summary?: string; createdAt?: string; updatedAt?: string; completedAt?: string; startedAt?: string; phase?: string; logFile?: string; request?: { prompt?: string; effort?: string; model?: string } }
+export type RegistryRow = { name: string; statusPath: string; executor?: ProjectExecutor }
+export type Job = { id: string; kind?: 'sync' | 'continue'; fallbackFrom?: 'codex'; fallbackReason?: string; unmanagedSessionId?: string; warning?: string; executor?: 'claude' | 'codex'; nativeId?: string; sessionId?: string; jobClass?: string; status?: string; summary?: string; createdAt?: string; updatedAt?: string; completedAt?: string; startedAt?: string; phase?: string; logFile?: string; request?: { prompt?: string; effort?: string; model?: string } }
 export type Agent = { name?: string; kind?: string; status?: string; state?: string; waitingFor?: string; sessionId?: string; cwd?: string }
 
-/** Rows of the "STATUS 卡位置" table in projects-scope.md; `~` expanded to `home`. */
+/**
+ * Rows of the "STATUS 卡位置" table in projects-scope.md; `~` expanded to `home`.
+ * An optional `Executor` header column (claude | codex | manual | blank) sets a project's executor;
+ * tables without that column parse exactly as before.
+ */
 export function parseRegistry(text: string, home: string): RegistryRow[] {
   const parts = text.split('## STATUS 卡位置')
   if (parts.length < 2) return []
   const section = parts[1].split('\n## ')[0]
   const rows: RegistryRow[] = []
+  const cells = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim())
+  let executorColumn = -1
   for (const line of section.split('\n')) {
     const m = line.match(/^\|\s*([^|]+?)\s*\|\s*`([^`]+)`/)
-    if (m) rows.push({ name: m[1], statusPath: m[2].replace(/^~/, home).replace(/\\/g, '/') })
+    if (!m) {
+      if (/^\s*\|/.test(line) && !/^\s*\|[\s|:-]*$/.test(line)) {
+        const header = cells(line).findIndex(cell => /^executor$/i.test(cell))
+        if (header >= 0) executorColumn = header
+      }
+      continue
+    }
+    const row: RegistryRow = { name: m[1], statusPath: m[2].replace(/^~/, home).replace(/\\/g, '/') }
+    const executor = executorColumn >= 0 ? parseProjectExecutor(cells(line)[executorColumn]?.replace(/`/g, '')) : undefined
+    if (executor) row.executor = executor
+    rows.push(row)
   }
   return rows
 }
@@ -563,6 +581,8 @@ export function jobTasks(jobs: Job[]): ExecutorTask[] {
   const tasks = jobs.filter(j => j.jobClass === 'task').map((j): ExecutorTask => ({
     id: j.id,
     status: j.status ?? '?',
+    ...(j.executor ? { executor: j.executor } : {}),
+    ...(j.fallbackFrom ? { fallbackFrom: j.fallbackFrom } : {}),
     title: taskTitle(j.request?.prompt, j.summary ?? j.id),
     model: j.request?.model ?? '',
     effort: j.request?.effort ?? '',
@@ -585,7 +605,7 @@ export function shortModel(model: string, max = 14): string {
 
 /** Icon, tone and the short right-hand meta of one task line. */
 export function taskMeta(t: ExecutorTask, now: number): { icon: string; tone: 'teal' | 'dim' | 'green' | 'red'; meta: string } {
-  const settings = [shortModel(t.model ?? ''), t.effort].filter(Boolean).join(' · ')
+  const settings = [shortModel(t.model ?? ''), t.effort, t.fallbackFrom ? `${t.fallbackFrom}→claude` : ''].filter(Boolean).join(' · ')
   const suffix = settings ? ` · ${settings}` : ''
   if (t.status === 'running') return { icon: '●', tone: 'teal', meta: `已跑 ${ago(Date.parse(t.startedAt ?? ''), now)}${suffix}` }
   if (t.status === 'queued') return { icon: '○', tone: 'dim', meta: `排隊中${suffix}` }
