@@ -64,6 +64,10 @@ test('rows Client changes state only from a tick and stops when no animation rem
   const animated = harness(props([row({ breathe: ['#3A3120', '#51452D', '#67583A'] })]))
   animated.render()
   expect(animated.stats()).toEqual({ starts: 1, stops: 0, setStates: 0, running: true })
+  // Breath-only rows tick every 200 ms and write state only when the chip colour moves:
+  // the first tick stays on the low step, the second reaches the middle one.
+  animated.tick()
+  expect(animated.stats().setStates).toBe(0)
   animated.tick()
   expect(animated.stats().setStates).toBe(1)
   animated.render(props([row()], 10_110))

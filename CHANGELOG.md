@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- **Rows stay inside the client render budget.** The project table no longer redraws every 100 ms while a 需決策/review chip breathes: the frame clock runs at 200 ms for breath-only tables, and a tick calls `setState` only when the visible frame changed (shimmer phase, breath step, change-highlight step). Idle ticks, including a burst of catch-up ticks after a suspend, write nothing and coalesce into at most one redraw. Cell clipping (`fit`) is linear instead of quadratic, fitted cell text is cached per text/width, and the timer stops by itself once a change highlight fades. Fixes `console-status: Client hooks/rows.tsx: ran longer than its 1000ms budget` after the pane sat idle with several decision rows.
+
 ## 0.2.0
 
 - **Per-project executor.** Registry tables accept an optional `Executor` column (`claude`, `codex`, `manual`, blank). The pane cycles a per-project override stored in `dispatch.json` under `projects`. Precedence: pane override > registry column > global. `manual` projects are never dispatched. Job listing merges both executors so RUNNING never misses a job. `/console project` lists and sets overrides.
