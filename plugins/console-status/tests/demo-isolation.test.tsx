@@ -1,7 +1,8 @@
 import { expect, test, mock } from 'claude-code/testing'
+import { fixturePath } from './fixture-path'
 
-const OPTIONS = { options: { executor: 'claude', registryPath: '/volD/Fixtures/registry.md', companionStateRoots: '["/volD/State"]' } }
-const STATUS = '/volD/Private Fixture/.console/STATUS.md'
+const OPTIONS = { options: { executor: 'claude', registryPath: 'D:/Fixtures/registry.md', companionStateRoots: '["D:/State"]' } }
+const STATUS = 'D:/Private Fixture/.console/STATUS.md'
 const NOW = Date.parse('2030-01-05T12:00:00Z')
 const PANE = { plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
   props: { title: 'Console', isFocused: true, bodyColumns: 70, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any
@@ -11,7 +12,7 @@ const result = (stdout = '') => ({ exitCode: 0, stdout, stderr: '', isStdoutTrun
 
 function fixture(on: any) {
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { USERPROFILE: '/Users/example', LOCALAPPDATA: '/volD/Local', OS: 'Windows_NT' })
+  mock.env(on, { USERPROFILE: 'C:/Users/example', LOCALAPPDATA: 'D:/Local', OS: 'Windows_NT' })
   const data = {
     state: {} as Record<string, any>, toasts: [] as string[], fsReads: 0, fsLists: 0, privateReads: 0, processCalls: 0, usageCalls: 0, promptFills: 0,
     ask: 'Choose a synthetic value',
@@ -19,21 +20,21 @@ function fixture(on: any) {
     sessionDelay: 0, sessionReadStarted: 0, sessionReadSettled: 0, failSession: false,
   }
   on('fs.read', async (_: any, e: any) => {
-    const path = e.path.replace(/\\/g, '/')
+    const path = fixturePath(e.path)
     data.fsReads += 1
     const files: Record<string, string> = {
-      '/volD/Fixtures/registry.md': [
+      'D:/Fixtures/registry.md': [
         '# Synthetic registry',
         '## STATUS 卡位置',
         '| 專案 | STATUS 路徑 |',
         '|---|---|',
         `| Private Fixture | \`${STATUS}\` |`,
       ].join('\n'),
-      '/Users/example/.claude/handoffs/dispatch.json': '{"executor":"claude"}',
-      '/Users/example/.claude/handoffs/claude-sessions.json': '{"version":1,"roots":{}}',
-      '/Users/example/.codex/models_cache.json': '{}',
+      'C:/Users/example/.claude/handoffs/dispatch.json': '{"executor":"claude"}',
+      'C:/Users/example/.claude/handoffs/claude-sessions.json': '{"version":1,"roots":{}}',
+      'C:/Users/example/.codex/models_cache.json': '{}',
     }
-    if (path === '/volD/Fixtures/registry.md' || path === STATUS || path.startsWith('/volD/State/')) data.privateReads += 1
+    if (path === 'D:/Fixtures/registry.md' || path === STATUS || path.startsWith('D:/State/')) data.privateReads += 1
     if (path === STATUS) return { value: [
       '<!-- CARD：開始 -->',
       '- 更新：2030-01-05 11:55',
@@ -42,7 +43,7 @@ function fixture(on: any) {
       '- 下一步：Keep fixture private',
       '<!-- /CARD -->',
     ].join('\n') }
-    if (path === '/Users/example/.claude/handoffs/claude-sessions.json' && data.sessionDelay) {
+    if (path === 'C:/Users/example/.claude/handoffs/claude-sessions.json' && data.sessionDelay) {
       data.sessionReadStarted += 1
       await clock.sleep(data.sessionDelay)
       data.sessionReadSettled += 1
@@ -91,7 +92,7 @@ test('demo ignores session, timer, turn and refresh-button probes without leakin
   await $.command.run({ command: 'console', args: 'demo' } as any)
   const baseline = { reads: data.fsReads, lists: data.fsLists, processes: data.processCalls, usage: data.usageCalls, prompts: data.promptFills }
 
-  await $.session.start({ cwd: '/volD/Console', surface: 'terminal', isInteractive: true })
+  await $.session.start({ cwd: 'D:/Console', surface: 'terminal', isInteractive: true })
   await clock.settle()
   await clock.advance(60_000)
   await $.turn.complete({ turnId: 'synthetic-turn', answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' })

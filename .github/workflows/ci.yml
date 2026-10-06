@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # The plugin hooks API is versioned with the CLI; bump together with the README's tested version.
+  CLAUDE_CODE_VERSION: 2.1.291
+
+jobs:
+  check:
+    name: plugin checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@${{ env.CLAUDE_CODE_VERSION }}
+      - name: Validate marketplace
+        run: claude plugin validate .
+      - name: Validate plugin
+        run: claude plugin validate plugins/console-status
+      - name: Test plugin
+        run: claude plugin test plugins/console-status
+      - name: Check docs
+        run: node scripts/check-docs.mjs

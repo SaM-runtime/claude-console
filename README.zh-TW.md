@@ -70,6 +70,7 @@ Marketplace 管理請參考官方 [plugin marketplace 文件](https://code.claud
 | `modelsCachePath` | Codex 模型與 effort 快取 | `~/.codex/models_cache.json` |
 | `codexFallback` | Codex 無法使用時的處理：`ask`、`claude`、`off` | `ask` |
 | `codexMinQuotaPercent` | Codex 額度剩餘百分比低於此值時啟用備援 | `10` |
+| `projectMode` | `auto`：在已登錄專案內開啟的 session 會切到專案模式（見[流程管線與專案模式](#流程管線與專案模式)）；`off`：一律是多專案主控台 | `auto` |
 
 Windows、macOS、Linux 都會展開開頭的 `~`。變更 plugin 設定後，請執行 `/reload-plugins` 或開新 Claude Code session。登錄表格式見 [範例](workflow/projects-scope.example.md)。
 
@@ -187,19 +188,19 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 ## 專案動作
 
-右鍵選單與展開的專案卡提供相同動作；手機使用卡片 Button。每個觸發會立即 toast、執行中轉圈並拒絕重複啟動，結束後把結果寫入動態。
+右鍵選單（鍵盤可在游標所在列按 `m` 開啟、Esc 關閉）與展開的專案卡提供相同動作；手機使用卡片 Button。每個觸發會立即 toast、執行中顯示已經過秒數並拒絕重複啟動，結束後把結果寫入動態。
 
 | 動作 | 出現條件 | 行為 |
 | --- | --- | --- |
 | ▶ 執行驗證 | CARD 有 `驗證` | 在專案根目錄執行，最長五分鐘；不花模型額度 |
 | ⇢ 同步 STATUS | SYNC，且執行者不是 `manual` | 派該專案的執行器只更新 CARD 與歷程 |
-| ⇢ 繼續下一步 | IDLE、有下一步、無待決或關卡，且執行者不是 `manual` | 三秒內再按一次後派該專案的執行器 |
+| ⇢ 繼續下一步 | IDLE、有下一步、無待決或關卡，且執行者不是 `manual` | 六秒內再按一次後派該專案的執行器（面板會顯示將派出的下一步） |
 | ⇢ 改用 Claude 派工 | `codexFallback: ask` 擋下的 Codex 派工 | 把同一動作交給 Claude，並記錄為備援 |
 | ✎ 做決定 | `等使用者` 非空 | 預填草稿並附一次性專案 context；送出時才使用 Claude |
 | ⚑ 審核關卡／最終審核 | 可辨識的 spec、review、release | 交主控台 Claude 審核；release 審核不會執行 release |
 | ↗ 開啟 STATUS.md | 一律 | 請編輯器開啟檔案 |
 
-驗證會保存每個專案最新時間、exit status 與最後三行輸出。`驗證` 只能放可信任的本機檢查；它會透過 shell 執行，不得包含部署或正式環境操作。
+驗證會保存每個專案最新時間、exit status 與最後三行輸出。`驗證` 只能放可信任的本機檢查；它會透過 shell 執行，不得包含部署或正式環境操作。CARD 由背景執行者寫入，因此面板會顯示完整指令；此專案未執行過的指令（新的或已被修改）須在 10 秒內再按一次才會執行，已確認的指令會依專案記住、跨 session 保留。
 
 派工後會先樂觀顯示 RUNNING，直到受管理狀態刷新。受理不代表完成。GATE 為紫色，排序在 ACTION 之後、RUNNING 之前，直到對應 Claude 審核回合結束才解除。`prompt.fill` 在沒有 composer 或對話框佔用時可能拒絕；面板會回報失敗，不會代送決策。Remote Control composer 仍需實機驗收。
 
@@ -217,8 +218,34 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | `/console effort [level]` | 顯示選項或指定 effort |
 | `/console project` | 列出每個專案實際生效的執行者、model、effort |
 | `/console project executor\|model\|effort <值\|inherit> <名稱>` | 設定或清除單一專案的覆寫 |
+| `/console mode [auto\|console\|project]` | 顯示或選擇此 session 的專案模式 |
 
 選取專案只套用到下一則被接受的提示；下游拒絕提示時會保留選取，供重試使用。
+
+## 流程管線與專案模式
+
+每個專案都會以管線顯示它在 [workflow](workflow/claude-console/SKILL.md) 中的位置：**規格 → 實作 → 同步 → 驗證 → 審核 → 上線**。
+
+| 標記 | 意義 |
+| --- | --- |
+| `●` 綠 | 已完成 |
+| `◉` 青 | 執行者正在處理（在 `spec` 或 `review` 關卡下的工作算該關卡） |
+| `◆` 琥珀／藍／紫 | 等待中：等使用者或等繼續（琥珀）、等同步（藍）、等關卡判斷（紫） |
+| `✕` 紅 | 驗證失敗：以主控台最近一次執行同一指令的結果為準，否則看 CARD `驗證` 欄 `→` 後的結論 |
+| `○` 灰 | 尚未到達 |
+
+位置只由主控台已讀取的資料推得，優先序：執行中的工作 → 未同步的結果 → 關卡 → 驗證失敗 → 下一步。「等使用者」有內容時，目前階段會停在等待。依 workflow，`review` 與 `release` 關卡只在驗收通過後設定，因此視為驗證已完成。
+
+專案表在寬度 64 欄以上會多一欄六個標記的「流程」；專案卡與動作選單會顯示含階段名稱的完整管線。
+
+**專案模式。** Claude Code session 在已登錄專案的根目錄（或其子目錄）啟動時，主控台會跟隨該專案：
+
+- 橫帶顯示該專案的管線與目前步驟，以及其他有待決或關卡的專案數；
+- 面板最上方多一張專案卡（管線、下一步、動作、驗證），下方仍是原本的主控台；
+- system prompt 多一段固定內容：專案的 STATUS 路徑與 CARD 規約（寫入前重讀、`rev + 1`、關卡只填一個值、到關卡就停、不做 release）。只要 session 還在同一個專案，這段內容就不會變，不會破壞 prompt 快取；
+- 進度（各階段、目前步驟、下一步、待決、關卡）只在和上一次不同時，才附在下一則提示上。
+
+`/console mode console` 在此 session 關閉專案模式，`/console mode project` 強制開啟，`/console mode auto` 依 `projectMode` 設定。
 
 ## Workflow
 
@@ -234,6 +261,8 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 - 檔案每 60 秒刷新；process 探測會快取五分鐘，除非強制 refresh。
 - Companion state 以根目錄最後一段名稱配對；同名根目錄可能混淆。
 - 選取專案只附加一次 context，不會改變目前 cwd。
+- Codex 支援會讀取 Codex 外掛內部的 `state.json` 與 plugin cache 目錄結構。state 結構無法辨識時，companion 那一行會顯示警告；出現時請更新 console-status。
+- 同一時間只讓一個主控台 session 派工。`claude-sessions.json` 的寫入在同一個 Claude Code process 內會排隊，若檔案被其他 process 改過也會拒絕覆寫；但外掛檔案 API 沒有 rename 或獨占建立，兩個主控台在同一瞬間寫入仍不保證安全。
 
 ## 升級
 
@@ -250,7 +279,7 @@ claude plugin update console-status@claude-console
 claude plugin validate .
 claude plugin validate plugins/console-status
 claude plugin test plugins/console-status
-node .task/check-docs.mjs
+node scripts/check-docs.mjs
 ```
 
 ## License

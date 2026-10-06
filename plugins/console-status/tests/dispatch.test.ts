@@ -1,21 +1,22 @@
 import { expect, test, mock } from 'claude-code/testing'
 import { parseSettings, parseModels, nextOption, effortOptions, modelOptions } from '../hooks/dispatch'
 import { resolveConfig } from '../hooks/config'
+import { fixturePath } from './fixture-path'
 
 test('settings file round trip and failed write are observable through the filesystem API', async ($, on) => {
-  const config = resolveConfig({}, '/Users/example', '', '/tmp')
-  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/example' : undefined }))
+  const config = resolveConfig({}, 'C:/Users/example', '', '/tmp')
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? 'C:/Users/example' : undefined }))
   const files: Record<string, string> = {}
   let deny = false
   on('ui.toast', () => ({ value: undefined }) as any)
   on('fs.read', (_, e) => {
-    const path = e.path.replace(/\\/g, '/')
+    const path = fixturePath(e.path)
     if (!(path in files)) throw new Error('missing')
     return { value: files[path] }
   })
   on('fs.write', (_, e) => {
     if (deny) throw new Error('read only')
-    files[e.path.replace(/\\/g, '/')] = e.text
+    files[fixturePath(e.path)] = e.text
     return { value: undefined } as any
   })
   expect(JSON.stringify(await $.command.run({ command: 'console', args: 'model' } as any)).includes('claude · 預設')).toBe(true)
@@ -69,7 +70,7 @@ test('terminal and mobile buttons cycle persisted settings, including model-spec
     { slug: 'fiction-beta', supported_reasoning_levels: [{ effort: 'medium' }, { effort: 'max' }] },
   ] })
   const toasts: string[] = []
-  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/example' : undefined }))
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? 'C:/Users/example' : undefined }))
   on('fs.read', (_, e) => ({ value: e.path.endsWith('models_cache.json') ? cache : settings }))
   on('fs.write', (_, e) => { settings = e.text; return { value: undefined } as any })
   on('ui.toast', (_, e) => { toasts.push(JSON.stringify(e)); return { value: undefined } as any })
@@ -100,14 +101,14 @@ test('terminal and mobile buttons cycle persisted settings, including model-spec
 })
 
 test('row sync trigger reads latest file and omits each empty dispatch flag independently', {
-  options: { companionScript: '/volD/Tools/run.mjs', executor: 'codex' },
+  options: { companionScript: 'D:/Tools/run.mjs', executor: 'codex' },
 }, async ($, on) => {
   let settings = '{"executor":"codex","model":"fiction-current","effort":"high"}'
   let dispatched: string[] = []
   let completedJobs = '{"jobs":[{"id":"fixture-result","jobClass":"task","status":"completed","completedAt":"2030-01-05T11:00:00Z"}]}'
   mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
-  on('env.get', () => ({ value: '/Users/example' }))
-  on('fs.read', (_, e) => ({ value: e.path.endsWith('projects-scope.md') ? '## STATUS 卡位置\n| Demo Fixture | `/volD/demo/STATUS.md` |'
+  on('env.get', () => ({ value: 'C:/Users/example' }))
+  on('fs.read', (_, e) => ({ value: e.path.endsWith('projects-scope.md') ? '## STATUS 卡位置\n| Demo Fixture | `D:/demo/STATUS.md` |'
     : e.path.endsWith('STATUS.md') ? '<!-- CARD -->\n- 更新：2030-01-04 08:00\n- 等使用者：無\n<!-- /CARD -->'
     : e.path.endsWith('state.json') ? completedJobs : e.path.endsWith('claude-sessions.json') ? '{"version":1,"roots":{}}' : e.path.endsWith('models_cache.json') ? '{}' : settings }))
   on('fs.list', () => ({ value: [{ name: 'demo-hash', kind: 'dir' }] }))
@@ -134,7 +135,7 @@ test('row sync trigger reads latest file and omits each empty dispatch flag inde
     await $.command.run({ command: 'console', args: 'refresh' } as any)
     await ui.pointer({ in: 'rows', type: 'down', button: 'right', x: 12, y: 0 } as any)
     await ui.press({ key: 'm-sync' })
-    expect(dispatched.slice(0, -1)).toEqual(['node', '/volD/Tools/run.mjs', 'task', '--background', '--write', '--resume-last', '--cwd', '/volD/demo', '--json', ...flags])
+    expect(dispatched.slice(0, -1)).toEqual(['node', 'D:/Tools/run.mjs', 'task', '--background', '--write', '--resume-last', '--cwd', 'D:/demo', '--json', ...flags])
     expect(dispatched[dispatched.length - 1].includes('只改 CARD 與歷程')).toBe(true)
     await ui.press({ key: 'm-close' })
   }

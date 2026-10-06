@@ -52,9 +52,19 @@ export function workSignature(project: Project): string {
   return JSON.stringify([project.statusPath, project.updated, project.next, project.ask, project.gate ?? ''])
 }
 
-export function confirmationMatches(value: ContinueConfirmation | undefined, signature: string, now: number): boolean {
-  return !!value && value.signature === signature && now >= value.at && now - value.at < 3000
+export function confirmationMatches(value: ContinueConfirmation | undefined, signature: string, now: number, windowMs = 3000): boolean {
+  return !!value && value.signature === signature && now >= value.at && now - value.at < windowMs
 }
+
+/**
+ * The CARD's 驗證 command is written by background executors, so a command the user has not
+ * approved for this project (new, or changed since) needs a second press after it is shown in full.
+ */
+export const VERIFY_CONFIRM_MS = 10_000
+/** Long enough to reach the button again on a phone over Remote Control. */
+export const CONTINUE_CONFIRM_MS = 6_000
+export const verifySignature = (command: string) => `verify\u0000${command}`
+export const verifyTrusted = (trusted: Record<string, string>, statusPath: string, command: string) => trusted[statusPath] === command
 
 /** CARD verification is a shell command, run in the project's directory, not the console's. */
 export function verificationArgs(command: string, windows: boolean): string[] {

@@ -8,13 +8,17 @@ import type { ConsoleConfig } from './config'
 import { codexHealth, isActiveJob } from './logic'
 import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles, effectiveDispatch, setProjectOverride, nextProjectExecutor, executorSignature, projectOverride } from './dispatch'
 import type { DispatchSettings, ProjectOverride } from './dispatch'
-import { createExecutor, listWorkspaceJobs } from './executors'
+import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual } from './actions'
+import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
 import { isWindowsOs, openFallbackArgs, preflightArgs, quotaArgs } from './platform'
+import { stateFormatIssues, stateFormatWarning } from './jobs'
+import { pipeline, projectForCwd, projectModeSection, progressContext, progressSignature } from './pipeline'
+import type { Pipeline } from './pipeline'
+import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
 
 import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
 import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
@@ -47,13 +51,21 @@ const menuFor = atom({ plugin: 'console-status', key: 'menuFor' } as const, null
 const pendingActions = atom({ plugin: 'console-status', key: 'pendingActions' } as const, {})
 const continueConfirmations = atom({ plugin: 'console-status', key: 'continueConfirmations' } as const, {})
 const verificationResults = atom({ plugin: 'console-status', key: 'verificationResults' } as const, {})
+/** statusPath → the 驗證 command the user approved; mirrored from `$.store` so drawing can read it. */
+const trustedVerify = atom({ plugin: 'console-status', key: 'trustedVerify' } as const, {})
+const TRUST_KEY = 'trustedVerify'
+/** `/console mode`: this session's choice over the `projectMode` option. */
+const modeOverride = atom({ plugin: 'console-status', key: 'modeOverride' } as const, 'auto')
+/** Where this Claude Code session runs; a registered project here turns on project mode. */
+let sessionCwd: string | null = null
+/** The progress last attached to a prompt in project mode, so an unchanged one is not repeated. */
+let lastProgress = ''
 const actionPulse = atom({ plugin: 'console-status', key: 'actionPulse' } as const, 0)
 const reviewRequests = atom({ plugin: 'console-status', key: 'reviewRequests' } as const, {})
 const fallbackOffers = atom({ plugin: 'console-status', key: 'fallbackOffers' } as const, {})
 const actionLocks = new Set<string>()
 const earlyReviewStarts = new Map<string, string>()
 let selectionClaim: string | null = null
-const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
 // Slow probes (spawn processes) are cached between ticks; they reset on a reload, which is fine.
 let codex = '…'
@@ -111,6 +123,16 @@ async function workspaceJobs(kind: ExecutorKind, deps: ExecutorDeps, config: Con
   return jobs.filter(job => job.executor === kind || isActiveJob(job) || !!job.fallbackFrom)
 }
 
+const REFRESH_CONCURRENCY = 4
+/** `work` over `items` with at most `limit` running at once; results keep the input order. */
+async function mapLimit<T, R>(items: readonly T[], limit: number, work: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const lane = async () => { while (next < items.length) { const index = next++; results[index] = await work(items[index]!, index) } }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane))
+  return results
+}
+
 /** Config with the companion script actually in use (configured, or auto-resolved when stale). */
 const withCompanion = (config: ConsoleConfig): ConsoleConfig => companion?.path ? { ...config, companionScript: companion.path } : config
 
@@ -128,6 +150,17 @@ async function readDispatch($: any, config: ConsoleConfig) {
   const { settings, source } = readSettingsFiles(text, legacy, { executor: config.executor, model: config.defaultModel, effort: config.defaultEffort })
   const cache = settings.executor === 'codex' ? await $.fs.read(config.modelsCachePath).catch(() => null) : null
   return { settings, source, models: modelOptions(settings.executor, parseModels(cache)) }
+}
+
+let renderCache: { key: string; value: Promise<{ config: ConsoleConfig; dispatch: Awaited<ReturnType<typeof readDispatch>> }> } | null = null
+/** Paths and dispatch settings for drawing, read once per settings revision and refresh. */
+function renderDispatch($: any, options: PluginOptions, key: string) {
+  if (renderCache?.key !== key) {
+    const value = paths($, options).then(async ({ config }) => ({ config, dispatch: await readDispatch($, config) }))
+    renderCache = { key, value }
+    value.catch(() => { if (renderCache?.value === value) renderCache = null })
+  }
+  return renderCache.value
 }
 
 /** One project's override, serialized with the global settings writes. */
@@ -238,7 +271,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
     refreshConfig = config
     let error: string | null = null
     const registry = await io.fs.read(config.registryPath).catch(() => null) as string | null
-    if (registry === null) error = '找不到登錄表'
+    if (registry === null) error = `找不到登錄表 ${config.registryPath}；依 README 建立（範例 workflow/projects-scope.example.md），或 /console demo 先看示範`
     const registryRows = parseRegistry(registry ?? '', home).map(row => ({ row, root: projectRoot(row.statusPath) }))
     const effective = registryRows.map(({ row, root }) => effectiveDispatch(settings, root, row.executor))
     const codexInUse = settings.executor === 'codex' || effective.some(item => item.executor === 'codex')
@@ -250,43 +283,47 @@ async function refresh($: any, options: PluginOptions, force = false) {
       if (probes.companion) companion = probes.companion
       lastSlow = now
     }
+    const run: ExecutorDeps['run'] = (argv, init) => guarded(() => $.process.run(argv, init))
     const deps: ExecutorDeps = {
-      run: (argv, init) => guarded(() => $.process.run(argv, init)),
-      files: { read: path => guarded(() => $.fs.read(path)), list: path => guarded(() => $.fs.list(path)), write: (path, text) => guarded(() => $.fs.write(path, text)) },
+      run,
+      files: {
+        read: path => guarded(() => $.fs.read(path)), list: path => guarded(() => $.fs.list(path)), write: (path, text) => guarded(() => $.fs.write(path, text)),
+        stat: path => guarded(() => $.fs.stat(path)),
+      },
       now: () => guarded(() => $.clock.now()),
+      agents: sharedAgents(run),
     }
-    const projects: Project[] = []
-    const bases: string[] = []
-    const roots: string[] = []
-    const warnings: string[] = []
-    for (const [index, { row, root }] of registryRows.entries()) {
-      const card = await io.fs.read(row.statusPath).catch(() => null) as string | null
+    stateFormatIssues.clear()
+    const bases = registryRows.map(({ root }) => root.replace(/\/+$/, '').split('/').pop() ?? '')
+    const roots = registryRows.map(({ root }) => root)
+    // Projects are independent: read them a few at a time instead of one after another.
+    const loaded = await mapLimit(registryRows, REFRESH_CONCURRENCY, async ({ row, root }, index) => {
       const eff = effective[index]!
-      bases.push(root.replace(/\/+$/, '').split('/').pop() ?? '')
-      roots.push(root)
       const listing: ExecutorKind = eff.executor === 'manual' ? settings.executor : eff.executor
-      const jobs = await guarded(() => workspaceJobs(listing, deps, withCompanion(config), root))
-      for (const job of jobs) {
-        if (!job.warning) continue
-        const text = `${row.name}：${job.warning}`
-        warnings.push(text)
-      }
+      const [card, jobs] = await Promise.all([
+        io.fs.read(row.statusPath).catch(() => null) as Promise<string | null>,
+        guarded(() => workspaceJobs(listing, deps, withCompanion(config), root)),
+      ])
+      const warnings = jobs.filter(job => job.warning).map(job => `${row.name}：${job.warning}`)
       const project: Project = {
         ...buildProject(row, card, jobs, now), executor: eff.executor, executorSource: eff.source,
         ...(row.executor ? { registryExecutor: row.executor } : {}),
       }
-      for (const j of project.jobs) {
-        if (j.kind !== 'running') continue
+      await Promise.all(project.jobs.filter(j => j.kind === 'running').map(async j => {
         const job = jobs.find(item => item.id === j.id && item.executor === j.executor)
         if (job) j.last = await createExecutor(job.executor ?? listing, deps, withCompanion(config)).lastLine(job).catch(() => '')
-      }
-      projects.push(project)
-    }
+      }))
+      return { project, warnings }
+    })
+    const projects = loaded.map(item => item.project)
+    const warnings = loaded.flatMap(item => item.warnings)
     const usage: any = await io.session.usage().catch(() => null)
+    const formatWarning = stateFormatWarning()
+    const companionWarning = [companion?.warning, formatWarning].filter(Boolean).join('；')
     const cur: Snapshot = {
       at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, await io.session.id().catch(() => null) as string | null, roots, home), codex: codexInUse ? relevantCodex(codex, bases) : '',
       ...(codexInUse ? { codexInUse: true } : {}),
-      ...(codexInUse && companion ? { companion: { path: companion.path, source: companion.source, ...(companion.warning ? { warning: companion.warning } : {}) } } : {}),
+      ...(codexInUse && (companion || formatWarning) ? { companion: { path: companion?.path ?? '', source: companion?.source ?? 'none', ...(companionWarning ? { warning: companionWarning } : {}) } } : {}),
       contextPercent: usage?.context?.percent ?? null, error,
       codexQuota: parseCodexQuota(codexQuotaText, now),
       limits: (usage?.rateLimits ?? []).map((l: any) => ({ kind: String(l.kind), percent: Number(l.percentUsed) || 0, ...(l.resetsAt ? { resetsAt: String(l.resetsAt) } : {}) })),
@@ -351,6 +388,44 @@ async function actionNotice($: any, text: string, ok: boolean) {
 }
 
 /** All entry points share this lock and re-check the latest state, including stale rendered buttons. */
+type ModeChoice = 'auto' | 'console' | 'project'
+async function projectModeOn($: any, options: PluginOptions): Promise<boolean> {
+  const choice = await read($, modeOverride) as ModeChoice
+  if (choice === 'console') return false
+  if (choice === 'project') return true
+  return String((options as any).projectMode ?? 'auto') !== 'off'
+}
+
+/** Project mode's project and its pipeline, or null (mode off, demo, no match). */
+async function focused($: any, options: PluginOptions, s: Snapshot | null): Promise<{ project: Project; pipeline: Pipeline } | null> {
+  if (!s || s.demo || !(await projectModeOn($, options))) return null
+  const project = projectForCwd(s.projects, sessionCwd, projectRoot)
+  if (!project) return null
+  return { project, pipeline: pipeline(project, (await read($, verificationResults))[project.statusPath]) }
+}
+
+async function loadTrust($: any): Promise<Record<string, string>> {
+  const value = await Promise.resolve().then(() => $.store.get(TRUST_KEY)).catch(() => undefined)
+  if (value === undefined) return read($, trustedVerify)
+  const trusted = value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) : {}
+  await update($, trustedVerify, () => trusted)
+  return trusted
+}
+
+/** First press arms a confirmation for `signature`; returns true only for a matching press inside the window. */
+async function confirmed($: any, statusPath: string, signature: string, now: number, windowMs: number, message: string): Promise<boolean> {
+  const confirmations = await read($, continueConfirmations)
+  if (confirmationMatches(confirmations[statusPath], signature, now, windowMs)) return true
+  await update($, continueConfirmations, values => ({ ...values, [statusPath]: { at: now, signature } }))
+  $.ui.toast(message, { timeoutMs: windowMs })
+  $.clock.after(windowMs, () => void update($, continueConfirmations, values => {
+    if (values[statusPath]?.at !== now) return values
+    const next = { ...values }; delete next[statusPath]; return next
+  }))
+  return false
+}
+
 async function triggerAction($: any, options: PluginOptions, statusPath: string, kind: ActionKind, request: { useClaude?: boolean } = {}) {
   if (await demoEnabled($)) {
     $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。')
@@ -377,25 +452,30 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     const name = p.name.replace(/\s.*$/, '')
     const now = await $.clock.now()
     if (kind === 'continue' && !request.useClaude) {
-      const signature = workSignature(p)
-      const confirmations = await read($, continueConfirmations)
-      if (!confirmationMatches(confirmations[statusPath], signature, now)) {
-        await update($, continueConfirmations, values => ({ ...values, [statusPath]: { at: now, signature } }))
-        $.ui.toast(`${name}：再按一次確認（3 秒內）`, { timeoutMs: 3000 })
-        $.clock.after(3000, () => void update($, continueConfirmations, values => {
-          if (values[statusPath]?.at !== now) return values
-          const next = { ...values }; delete next[statusPath]; return next
-        }))
-        return
+      if (!await confirmed($, statusPath, workSignature(p), now, CONTINUE_CONFIRM_MS,
+        `${name}：${CONTINUE_CONFIRM_MS / 1000} 秒內再按一次派工：${p.next}`)) return
+    }
+    if (kind === 'verify') {
+      const trusted = await loadTrust($)
+      if (!verifyTrusted(trusted, statusPath, p.verify)) {
+        const why = trusted[statusPath] === undefined ? '首次執行此驗證指令' : '驗證指令已變更'
+        if (!await confirmed($, statusPath, verifySignature(p.verify), now, VERIFY_CONFIRM_MS,
+          `${name}：${why}，確認後 ${VERIFY_CONFIRM_MS / 1000} 秒內再按一次執行：${p.verify}`)) return
+        const approved = { ...trusted, [statusPath]: p.verify }
+        await update($, trustedVerify, () => approved)
+        // Not remembered across sessions when the store refuses; the confirmed run still goes ahead.
+        await Promise.resolve().then(() => $.store.set(TRUST_KEY, approved)).catch(() => {})
       }
     }
     await update($, continueConfirmations, values => { const next = { ...values }; delete next[statusPath]; return next })
     $.ui.toast(`${name}：${actionLabel(kind, p)}…`, { timeoutMs: 3000 })
     await update($, pendingActions, values => ({ ...values, [statusPath]: { kind, at: now } }))
     ownsPending = true
-    timer = $.clock.every(150, async () => {
+    // Once a second: the label shows elapsed seconds; terminal/desktop animate a client spinner beside it,
+    // so the whole pane is not redrawn several times a second (or sent to a phone that often).
+    timer = $.clock.every(1000, async () => {
       if (!(await read($, pendingActions))[statusPath]) { timer?.cancel(); return }
-      await update($, actionPulse, value => (value + 1) % SPINNER.length)
+      await update($, actionPulse, value => value + 1)
     })
     const { home, config } = await paths($, options)
     const root = projectRoot(p.statusPath)
@@ -523,6 +603,8 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
 
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
+    sessionCwd = typeof e.cwd === 'string' ? e.cwd.replace(/\\/g, '/') : null
+    lastProgress = ''
     dataGeneration++
     refreshTimer?.cancel()
     if (actionLocks.size === 0) earlyReviewStarts.clear()
@@ -531,14 +613,33 @@ export const register: Register = (on, options) => {
     await update($, pendingActions, values => Object.fromEntries(Object.entries(values).filter(([path]) => actionLocks.has(path))))
     await update($, continueConfirmations, () => ({}))
     await update($, fallbackOffers, () => ({}))
+    await loadTrust($)
     await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；band 橫帶；demo 示範' })
     refreshTimer = $.clock.every(TICK_MS, () => void refresh($, options))
     void refresh($, options, true)
     return next(e)
   })
 
+  // Project mode: the CARD contract in the system prompt, stable for the session (cache-friendly).
+  on('prompt.compose', async ($, e, next) => {
+    const result = await next(e)
+    const here = await focused($, options, await read($, snapshot)).catch(() => null)
+    if (!here) return result
+    return { ...result, sections: [...result.sections, { id: 'console-status:project', text: projectModeSection(here.project), scope: 'session' as const }] }
+  })
+
   on('prompt.submit', async ($, e, next) => {
     if (e.origin?.kind === 'plugin') return next(e)
+    // Project mode: the pipeline position rides along with a prompt only when it changed.
+    // A failure here must never hold the person's prompt back.
+    const here = await focused($, options, await read($, snapshot)).catch(() => null)
+    if (here) {
+      const signature = progressSignature(here.project, here.pipeline)
+      if (signature !== lastProgress) {
+        lastProgress = signature
+        e = { ...e, context: [...(e.context ?? []), progressContext(here.project, here.pipeline)] }
+      }
+    }
     const selectedProject = await read($, selected)
     if (!selectedProject || selectionClaim !== null) return next(e)
     const ctx = selectionContext(await read($, snapshot), selectedProject)
@@ -591,6 +692,15 @@ export const register: Register = (on, options) => {
   on('command.run', async ($, e, next) => {
     if (e.command !== 'console') return next(e)
     const arg = e.args.trim()
+    const modeArg = arg.match(/^mode(?:\s+(auto|console|project))?$/)
+    if (modeArg) {
+      if (modeArg[1]) await update($, modeOverride, () => modeArg[1] as ModeChoice)
+      const choice = await read($, modeOverride) as ModeChoice
+      const here = await focused($, options, await read($, snapshot))
+      const text = `模式：${choice === 'auto' ? '自動' : choice === 'console' ? '主控台' : '專案'}（${here ? `專案模式：${here.project.name}` : '主控台模式'}）。可用 /console mode auto|console|project`
+      if (modeArg[1]) $.ui.toast(text)
+      return { text }
+    }
     const projectSetting = arg.match(/^project(?:\s+(executor|model|effort)\s+(\S+)\s+([\s\S]+))?$/)
     if (projectSetting) {
       const { config } = await paths($, options)
@@ -704,9 +814,10 @@ export const register: Register = (on, options) => {
     dispatch_effort: '派工 effort：點一下輪換模型支援的推理強度並儲存；也可用 /console effort <level>。切換模型時不支援的 effort 會清空。',
     ACTION: '需決策：專案 STATUS 卡片的「等使用者」欄有內容，代表該專案有業務決策需由使用者拍板。',
     GATE: '待審核：STATUS 的 spec／review 關卡送交主控台判斷；release 只整理可否上線與理由，最後由你決定，不會自動上線。',
-    action_verify: '執行 CARD 驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。只應填入本機驗證，不可填正式環境操作。',
+    action_verify: '執行 CARD 驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。新的或被修改過的指令會先完整顯示，10 秒內再按一次才執行。只應填入本機驗證，不可填正式環境操作。',
     action_sync: '直接請所選執行者將最近結果同步回 STATUS CARD 與歷程，使用派工模型設定與該執行者額度。',
-    action_continue: '3 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
+    pipeline: '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線。● 完成　◉ 執行中　◆ 等待（主控台、使用者或同步）　✕ 驗證失敗　○ 未到。由 CARD、執行者工作與最近一次驗證推得。',
+    action_continue: '6 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
     action_gate: '把關卡與專案 context 送給主控台審核，使用 Claude 額度；不會執行 release。',
     action_open: '用編輯器開啟專案 STATUS.md，不使用模型額度。',
@@ -727,6 +838,7 @@ export const register: Register = (on, options) => {
     blue: '#8AADF4', blueBg: '#212D45', purple: '#CA9EE6', purpleBg: '#33283F', grey: '#8A93A0', green: '#A6D189', red: '#E78284', orange: '#EF9F76',
   }
   const SHIMMER = ['#4E8F87', '#6FB3AA', '#9EE0D6', '#E6FFFB']
+  const PIPE = { green: C.green, teal: C.teal, amber: C.amber, purple: C.purple, blue: C.blue, red: C.red, faint: C.faint, dim: C.dim, text: C.text }
   const LABEL: Record<State, string> = { ACTION: '需決策', GATE: '待審核', RUNNING: '執行中', SYNC: '待同步', IDLE: '閒　置', NOCARD: '無狀態' }
   const FG: Record<State, string> = { ACTION: C.amber, GATE: C.purple, RUNNING: C.teal, SYNC: C.blue, IDLE: C.grey, NOCARD: C.red }
   const BG: Record<State, string | undefined> = { ACTION: C.amberBg, GATE: C.purpleBg, RUNNING: C.tealBg, SYNC: C.blueBg, IDLE: undefined, NOCARD: undefined }
@@ -743,6 +855,27 @@ export const register: Register = (on, options) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const paneOpen = await read($, isPaneOpen)
     const columns = Math.max(0, Math.floor(e.props.bodyColumns ?? 80))
+    const here = await focused($, options, s)
+    if (here && generation === dataGeneration) {
+      const button = paneOpen ? '主控台 ▾' : '主控台 ▸'
+      const buttonWidth = button.length + 1
+      const others = s.projects.filter(p => p !== here.project && (hasAsk(p) || parseGate(p.gate))).length
+      return (
+        <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
+          <Box flexShrink={0} height={1}><Text bold color={C.strong}>{here.project.name} </Text></Box>
+          <Box flexGrow={1} flexShrink={1} height={1} overflow="hidden">
+            <Text wrap="truncate-end">
+              {pipelineParts(here.pipeline, PIPE).map((part, index) => <Text key={'bp-' + index} color={part.c}>{part.t}</Text>)}
+              <Text color={C.text}> {pipelineText(here.pipeline).replace(/^\S+\s?/, '')}</Text>
+              {others > 0 && <Text color={C.amber}>{`　其他 ${others} 個專案待處理`}</Text>}
+            </Text>
+          </Box>
+          <Box width={buttonWidth} flexShrink={0} height={1} overflow="hidden">
+            <Button key="pane" plain dimColor label={button} onPress={() => void openPane($)} />
+          </Box>
+        </Box>
+      )
+    }
     const band = layoutBand(s, { columns, demo, paneOpen })
     if (generation !== dataGeneration) return <Box height={1} width={columns} overflow="hidden"><Text color={C.dim} wrap="truncate-end">{demoActive ? ' 示範資料 ' : '讀取中…'}</Text></Box>
     return (
@@ -764,7 +897,7 @@ export const register: Register = (on, options) => {
   // Rows drawn by the Client module report presses, right-clicks and keys here.
   on('ui.message', async ($, e, nextHook) => {
     if (e.requestId !== PANE || e.element !== 'rows' || !e.data || typeof e.data !== 'object') return nextHook(e)
-    const data = e.data as { press?: unknown; copy?: unknown; key?: unknown; hover?: unknown }
+    const data = e.data as { press?: unknown; menu?: unknown; key?: unknown; hover?: unknown }
     const s = await read($, snapshot)
     const list = s ? rows(s) : []
     if (typeof data.press === 'string') {
@@ -774,8 +907,8 @@ export const register: Register = (on, options) => {
     } else if ('hover' in data) {
       const id = typeof data.hover === 'string' ? data.hover : null
       await update($, hovered, () => id)
-    } else if (typeof data.copy === 'string') {
-      const id = data.copy
+    } else if (typeof data.menu === 'string') {
+      const id = data.menu
       await update($, menuFor, v => (v === id ? null : id))
     } else if (typeof data.key === 'string' && list.length) {
       const k = data.key.toLowerCase()
@@ -786,7 +919,14 @@ export const register: Register = (on, options) => {
         const id = list[Math.max(0, at)]?.full
         if (id) await update($, selected, v => (v === id ? null : id))
       }
-      if (k === 'escape') await update($, selected, () => null)
+      if (k === 'm' || k === '.') {
+        const id = list[Math.max(0, await read($, cursor))]?.full
+        if (id) await update($, menuFor, v => (v === id ? null : id))
+      }
+      if (k === 'escape') {
+        if (await read($, menuFor)) await update($, menuFor, () => null)
+        else await update($, selected, () => null)
+      }
     }
     return {}
   })
@@ -810,11 +950,15 @@ export const register: Register = (on, options) => {
     const pending = await read($, pendingActions)
     const confirmations = await read($, continueConfirmations)
     const verified = await read($, verificationResults)
-    const pulse = await read($, actionPulse)
+    const trusted = await read($, trustedVerify)
+    await read($, actionPulse) // redraws running action labels once a second
     const offers = demo ? {} : await read($, fallbackOffers)
-    const { config } = demo ? demoContext ?? { config: resolveConfig(options, '', '', '/tmp') } : await paths($, options)
-    await read($, dispatchRevision)
-    const dispatch = demo ? demoContext?.dispatch ?? { settings: { executor: s.executor ?? 'claude', model: '', effort: '' }, models: [] } : await readDispatch($, config)
+    const renderedAt = Object.keys(pending).length ? await $.clock.now() : s.at
+    const revision = await read($, dispatchRevision)
+    // Drawing never touches the disk on its own: settings are re-read after a write (revision) or a refresh (s.at).
+    const { config, dispatch } = demo
+      ? { config: demoContext?.config ?? resolveConfig(options, '', '', '/tmp'), dispatch: demoContext?.dispatch ?? { settings: { executor: s.executor ?? 'claude', model: '', effort: '' }, models: [] } }
+      : await renderDispatch($, options, `${revision}|${s.at}`)
     const cycle = async (field: GlobalField) => {
       try {
         const saved = await changeDispatch($, config, field)
@@ -846,7 +990,9 @@ export const register: Register = (on, options) => {
     const width: number = Math.max(40, (e.props.bodyColumns ?? 80) - 1)
     const list = rows(s)
     const now = await $.clock.now()
-    const W = { state: 8, project: projectColumnWidth(list.map(row => row.project)), age: 4 }
+    const W = { state: 8, project: projectColumnWidth(list.map(row => row.project)), age: 4, flow: width >= 64 ? 6 : 0 }
+    const pipes = new Map(s.projects.map(p => [p.name, pipeline(p, verified[p.statusPath])]))
+    const here = demo ? null : await focused($, options, s)
 
     const specs = list.map(r => ({
       id: r.full,
@@ -857,6 +1003,7 @@ export const register: Register = (on, options) => {
         { t: ` ${LABEL[r.state]} `, c: FG[r.state], bg: BG[r.state], b: r.state !== 'IDLE', w: W.state },
         { t: r.project, c: r.state === 'IDLE' ? C.dim : C.strong, w: W.project },
         { t: r.item, c: r.state === 'IDLE' ? C.dim : C.text },
+        ...(W.flow ? [{ t: '', w: W.flow, parts: pipes.get(r.full) ? pipelineParts(pipes.get(r.full)!, PIPE) : [] }] : []),
         { t: r.age, c: C.dim, w: W.age, right: true },
       ],
     }))
@@ -877,6 +1024,7 @@ export const register: Register = (on, options) => {
                   onPress={() => void update($, selected, v => (v === r.full ? null : r.full))} />
               </Box>
               <Box flexGrow={1} flexShrink={1}><Text color={C.text} wrap={detail ? 'wrap' : 'truncate-end'}>{r.item}</Text></Box>
+              {W.flow > 0 && <Box width={W.flow} flexShrink={0}><Text>{(pipes.get(r.full) ? pipelineParts(pipes.get(r.full)!, PIPE) : []).map((part, index) => <Text key={'fp-' + index} color={part.c}>{part.t}</Text>)}</Text></Box>}
               <Box width={W.age} justifyContent="flex-end"><Text color={C.dim}>{r.age}</Text></Box>
             </Box>
           ))}
@@ -936,10 +1084,13 @@ export const register: Register = (on, options) => {
     const actionButton = (p: Project, kind: ActionKind, key: string) => {
       const active = pending[p.statusPath]
       const blocked = kind === 'continue' || kind === 'sync' ? dispatchBlockReason(p) : ''
-      const confirming = kind === 'continue' && confirmations[p.statusPath]?.signature === workSignature(p)
-      const label = blocked ? `⇢ 無法派工：${blocked}` : active?.kind === kind ? `${SPINNER[pulse % SPINNER.length]} ${actionLabel(kind, p)}…`
+      const confirming = confirmations[p.statusPath]?.signature === (kind === 'continue' ? workSignature(p) : kind === 'verify' ? verifySignature(p.verify) : null)
+      const running = active?.kind === kind
+      const elapsed = running ? Math.max(0, Math.floor((renderedAt - active.at) / 1000)) : 0
+      const label = blocked ? `⇢ 無法派工：${blocked}` : running ? `${rich ? '' : '⋯ '}${actionLabel(kind, p)}… ${elapsed}s`
         : confirming ? '再按一次確認' : actionLabel(kind, p)
-      return <Box key={'help-' + key} hover={{ scope: 'help-action_' + kind }}>
+      return <Box key={'help-' + key} hover={{ scope: 'help-action_' + kind }} gap={running && rich ? 1 : 0}>
+        {running && rich && <ui.Client key={'spin-' + key} module="./spinner.tsx" width={1} height={1} props={{ color: C.dim }} />}
         <Button key={key} plain dimColor={!!active || !!blocked} label={label} onPress={async () => {
           if (!active && !blocked) await triggerAction($, options, p.statusPath, kind)
         }} />
@@ -952,6 +1103,9 @@ export const register: Register = (on, options) => {
       const active = pending[p.statusPath]?.kind
       if (active && !kinds.includes(active)) kinds.unshift(active)
       const offer = p.executor === 'codex' ? offers[p.statusPath] : undefined
+      // While a second press is armed, say exactly what it will do: the toast alone disappears.
+      const armed = confirmations[p.statusPath]?.signature
+      const pendingConfirm = armed === workSignature(p) ? `再按一次將派工：${p.next}` : armed === verifySignature(p.verify) ? `再按一次將執行：${p.verify}` : ''
       return <Box flexDirection="column">
         <Box gap={2} flexWrap="wrap">
           {kinds.map(kind => actionButton(p, kind, prefix + kind))}
@@ -961,6 +1115,7 @@ export const register: Register = (on, options) => {
             }} />
           </Box>}
         </Box>
+        {pendingConfirm && <Text key={prefix + 'confirm'} color={C.amber} wrap="wrap">{pendingConfirm}</Text>}
         <Box gap={1} flexWrap="wrap">
           <Text color={C.dim}>執行者</Text>
           <Box hover={{ scope: 'help-project_executor' }}>
@@ -999,8 +1154,11 @@ export const register: Register = (on, options) => {
     }
     const verificationView = (p: Project) => {
       const result = verified[p.statusPath]
-      if (!result) return null
+      const command = p.verify.trim() ? <Text color={verifyTrusted(trusted, p.statusPath, p.verify) ? C.dim : C.amber} wrap="wrap">
+        驗證指令{verifyTrusted(trusted, p.statusPath, p.verify) ? '' : (trusted[p.statusPath] === undefined ? '（未確認）' : '（已變更，未確認）')}：{p.verify}</Text> : null
+      if (!result) return command && <Box flexDirection="column" marginTop={1}>{command}</Box>
       return <Box flexDirection="column" marginTop={1}>
+        {command}
         <Text color={result.ok ? C.green : C.red}>{result.ok ? '✓' : '✕'} 最後驗證 {new Date(result.at).toLocaleString()}（{result.exitCode === null ? '未正常結束' : `exit ${result.exitCode}`}）</Text>
         {result.truncated && <Text color={C.amber}>輸出已被執行器截斷，以下是擷取內容</Text>}
         {(result.lines.length ? result.lines : ['（無輸出）']).map((line, index) => <Text key={'output-' + index} color={C.dim} wrap="truncate-end">{line}</Text>)}
@@ -1031,6 +1189,19 @@ export const register: Register = (on, options) => {
           </Box>
         </Box>
 
+        {here && (
+          <Box key="project-mode" flexDirection="column" borderStyle="round" borderColor={C.teal} paddingX={1}>
+            <Box justifyContent="space-between" gap={1}>
+              <Text bold color={C.teal} wrap="truncate-end">專案模式　<Text color={C.strong}>{here.project.name}</Text></Text>
+              <Text color={C.dim}>/console mode console 切回主控台</Text>
+            </Box>
+            {pipelineLine(here.pipeline, PIPE, ui, 'pm-pipeline')}
+            {here.project.next.trim() && !here.pipeline.note.includes(here.project.next.trim()) && <Text color={C.text} wrap="wrap"><Text color={C.dim}>下一步　</Text>{here.project.next}</Text>}
+            {projectActions(here.project, 'pm-')}
+            {verificationView(here.project)}
+          </Box>
+        )}
+
         <Box flexDirection="column" backgroundColor={C.bar} paddingX={1}>
           <Box justifyContent="space-between">
             <Text bold color={n ? C.amber : C.green}>{n ? '下一步' : '就緒'}</Text>
@@ -1040,7 +1211,7 @@ export const register: Register = (on, options) => {
         </Box>
 
         <Box gap={3} flexWrap="wrap">
-          {SHOWN.map(k => (
+          {s.projects.length > 1 && SHOWN.filter(k => c[k]).map(k => (
             <Box key={'k' + k} hover={{ scope: 'help-' + k }}>
               <Text color={c[k] ? FG[k] : C.faint}>● {LABEL[k].replace('　', '')} <Text bold>{c[k]}</Text></Text>
             </Box>
@@ -1052,6 +1223,7 @@ export const register: Register = (on, options) => {
             <Box width={W.state}><Text color={C.dim}> 狀態</Text></Box>
             <Box width={W.project}><Text color={C.dim}>專案</Text></Box>
             <Box flexGrow={1}><Text color={C.dim}>項目</Text></Box>
+            {W.flow > 0 && <Box width={W.flow} flexShrink={0} hover={{ scope: 'help-pipeline' }}><Text color={C.dim}>流程</Text></Box>}
             <Box width={W.age} justifyContent="flex-end"><Text color={C.dim}>更新</Text></Box>
           </Box>
           {rule}
@@ -1060,6 +1232,7 @@ export const register: Register = (on, options) => {
           {menuProject && (
             <Box key="menu" flexDirection="column" borderStyle="round" borderColor={C.blue} paddingX={1} marginTop={1}>
               <Text color={C.blue}>{menuProject.name.replace(/\s.*$/, '')}　動作</Text>
+              {pipes.get(menuProject.name) && pipelineLine(pipes.get(menuProject.name)!, PIPE, ui, 'm-pipeline')}
               {hasAsk(menuProject) && <Box marginY={1}>{decisionView(menuProject, 'm-')}</Box>}
               {projectActions(menuProject, 'm-')}
               {verificationView(menuProject)}
@@ -1073,7 +1246,7 @@ export const register: Register = (on, options) => {
                 <Button key="unselect" plain dimColor label="✕ 取消" onPress={() => void update($, selected, () => null)} />
               </Box>
             )
-            : <Text color={C.faint} wrap="truncate-end">{rich ? '點選或 ↑↓ Enter 選取專案・右鍵開啟動作選單' : '點專案名稱即可選取'}</Text>}
+            : <Text color={C.faint} wrap="truncate-end">{rich ? '點選或 ↑↓ Enter 選取專案・右鍵或 m 開啟動作選單' : '點專案名稱即可選取'}</Text>}
           {sel !== null && !detail && menuProject?.name !== sel && (() => {
             const p = s.projects.find(x => x.name === sel)
             return p && hasAsk(p) ? (
@@ -1115,6 +1288,7 @@ export const register: Register = (on, options) => {
                     </Box>
                     <Text color={C.dim}>{row.age && row.age !== '—' ? `${row.age}前更新` : '無卡片'}</Text>
                   </Box>
+                  {pipes.get(p.name) && <Box marginTop={1}>{pipelineLine(pipes.get(p.name)!, PIPE, ui, 'd-pipeline-' + p.name, { noteless: true })}</Box>}
                   <Box flexDirection="column" marginTop={1}>
                     {field('狀態', p.state, C.text)}
                     {hasAsk(p) && (

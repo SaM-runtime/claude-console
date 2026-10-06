@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { claudeArgs, codexArgs, createExecutor } from '../hooks/executors'
+import { claudeArgs, codexArgs, createExecutor, sharedAgents } from '../hooks/executors'
 import { buildProject, isActiveJob, jobFlags, rows } from '../hooks/logic'
 
 type RunResult = { exitCode: number; stdout: string; stderr: string }
@@ -342,5 +342,50 @@ test('an agent working in a Claude worktree of the project reconciles its job', 
     { id: 'other001', name: 'console-other', sessionId: '21111111-2222-4333-8444-555555555555', cwd: 'D:/Project Alpha-other', kind: 'background', status: 'busy', state: 'working' },
   ]), stderr: '' })
   const executor = createExecutor('claude', h.deps, { companionScript: '', companionStateRoots: [], claudeSessionsPath: 'D:/claude.json' })
+  expect((await executor.listJobs('D:/Project Alpha')).map(job => [job.id, job.status])).toEqual([['wt-launch', 'completed']])
+})
+
+test('one shared agents query serves every project in a refresh and is filtered by exact root', async () => {
+  const sessions = (root: string) => ({ version: 1, roots: { [root.toLowerCase()]: { root, jobs: [{ id: `n:${root}`, root, prompt: 'p', startedAt: '2030-01-05T11:00:00Z', status: 'running', phase: 'working', nativeId: root }] } } })
+  const roots = ['D:/Alpha', 'D:/Beta', 'D:/Gamma']
+  const merged = { version: 1, roots: Object.assign({}, ...roots.map(root => sessions(root).roots)) }
+  const h = harness({ 'D:/claude.json': JSON.stringify(merged) })
+  h.replies.push({ exitCode: 0, stdout: JSON.stringify(roots.map(root => ({ id: root, name: 'n', cwd: root, kind: 'background', state: 'working' }))
+    .concat([{ id: 'nested', name: 'n', cwd: 'D:/Alpha/sub', kind: 'background', state: 'working' }] as any)), stderr: '' })
+  const deps = { ...h.deps, agents: sharedAgents(h.deps.run) }
+  const executor = createExecutor('claude', deps, { companionScript: '', companionStateRoots: [], claudeSessionsPath: 'D:/claude.json' })
+  const lists = await Promise.all(roots.map(root => executor.listJobs(root)))
+  expect(h.calls.map(call => call.argv)).toEqual([['claude', 'agents', '--json', '--all']])
+  expect(lists.map(list => list.map(job => job.status))).toEqual([['running'], ['running'], ['running']])
+})
+
+test('a log tail is re-read only when the file changes, and an oversized log says so', async () => {
+  const h = harness({ 'D:/log.txt': 'first\nsecond\n' })
+  let stat = { size: 13, mtimeMs: 1 }
+  let reads = 0
+  const read = h.deps.files.read
+  const deps = { ...h.deps, files: { ...h.deps.files, read: async (path: string) => { reads++; return read(path) }, stat: async () => stat } }
+  const executor = createExecutor('codex', deps, { companionScript: '', companionStateRoots: [], claudeSessionsPath: 'D:/claude.json' })
+  const job = { id: 'j', logFile: 'D:/log.txt' } as any
+  expect(await executor.lastLine(job)).toBe('second')
+  expect(await executor.lastLine(job)).toBe('second')
+  expect(reads).toBe(1)
+  h.files['D:/log.txt'] = 'first\nsecond\nthird\n'
+  stat = { size: 19, mtimeMs: 2 }
+  expect(await executor.lastLine(job)).toBe('third')
+  expect(reads).toBe(2)
+  stat = { size: 5 * 1024 * 1024, mtimeMs: 3 }
+  expect(await executor.lastLine(job)).toContain('log 超過 4 MiB')
+  expect(reads).toBe(2)
+})
+
+test('the shared agents query also matches an agent inside a project worktree', async () => {
+  const h = harness({ 'D:/claude.json': JSON.stringify({ version: 1, roots: { 'd:/project alpha': { root: 'D:/Project Alpha', jobs: [
+    { id: 'wt-launch', launchName: 'console-wt-0', nativeId: 'wt000001', sessionId: '11111111-2222-4333-8444-555555555555', root: 'D:/Project Alpha', prompt: 'fix', startedAt: '2030-01-05T11:00:00.000Z', status: 'running', phase: 'working' },
+  ] } } }) })
+  h.replies.push({ exitCode: 0, stdout: JSON.stringify([
+    { id: 'wt000001', name: 'console-wt-0', sessionId: '11111111-2222-4333-8444-555555555555', cwd: 'D:/Project Alpha/.claude/worktrees/fix', kind: 'background', status: 'idle', state: 'done' },
+  ]), stderr: '' })
+  const executor = createExecutor('claude', { ...h.deps, agents: sharedAgents(h.deps.run) }, { companionScript: '', companionStateRoots: [], claudeSessionsPath: 'D:/claude.json' })
   expect((await executor.listJobs('D:/Project Alpha')).map(job => [job.id, job.status])).toEqual([['wt-launch', 'completed']])
 })

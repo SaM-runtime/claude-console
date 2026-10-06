@@ -18,6 +18,8 @@ export type Project = {
   next: string
   gate?: string
   verify: string
+  /** What the CARD's 驗證 line records after its command, e.g. `→ PASS; verified …`. */
+  verifyNote?: string
   updated: string
   isStale: boolean
   jobs: JobFlag[]
@@ -73,6 +75,8 @@ declare module 'claude-code' {
       pendingActions: Record<string, PendingAction>
       continueConfirmations: Record<string, ContinueConfirmation>
       verificationResults: Record<string, VerificationResult>
+      trustedVerify: Record<string, string>
+      modeOverride: 'auto' | 'console' | 'project'
       actionPulse: number
       reviewRequests: Record<string, ReviewRequest>
       fallbackOffers: Record<string, FallbackOffer>

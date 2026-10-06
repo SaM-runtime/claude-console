@@ -14,8 +14,33 @@ export type ExecutorDeps = {
     read(path: string): Promise<string>
     list(path: string): Promise<{ name: string; kind: string }[]>
     write(path: string, text: string): Promise<unknown>
+    /** Size and mtime; lets lastLine skip re-reading an unchanged log. Optional for callers without it. */
+    stat?(path: string): Promise<{ size: number; mtimeMs: number }>
   }
   now(): number | Promise<number>
+  /**
+   * Every background session (`claude agents --json --all`), shared by all projects in one refresh so
+   * the CLI starts once instead of once per project. Absent: each query runs with `--cwd`.
+   */
+  agents?(): Promise<Agent[]>
+}
+
+/** `fs.read` refuses files over 4 MiB, so a longer log has no readable tail. */
+const LOG_READ_LIMIT = 4 * 1024 * 1024
+const tails = new Map<string, { key: string; line: string }>()
+async function logTail(deps: ExecutorDeps, path: string): Promise<string> {
+  const stat = deps.files.stat ? await deps.files.stat(path).catch(() => null) : null
+  if (stat && stat.size > LOG_READ_LIMIT) return `（log 超過 4 MiB，請直接開啟：${path}）`
+  const key = stat ? `${stat.size}|${stat.mtimeMs}` : ''
+  const cached = tails.get(path)
+  if (key && cached?.key === key) return cached.line
+  const line = lastMeaningfulLine((await deps.files.read(path)).slice(-4000))
+  if (key) {
+    tails.delete(path)
+    tails.set(path, { key, line })
+    if (tails.size > 64) tails.delete(tails.keys().next().value!)
+  }
+  return line
 }
 export type ExecutorConfig = {
   companionScript: string
@@ -198,6 +223,15 @@ async function mutateState<T>(deps: ExecutorDeps, path: string, mutate: (state: 
   })
 }
 
+/** One `claude agents --json --all` for every caller until the returned function is dropped. */
+export function sharedAgents(run: ExecutorDeps['run']): () => Promise<Agent[]> {
+  let pending: Promise<Agent[]> | null = null
+  return () => pending ??= run(['claude', 'agents', '--json', '--all'], { timeoutMs: 60_000 }).then(result => {
+    if (result.exitCode !== 0) throw new Error(lastMeaningfulLine(`${result.stdout}\n${result.stderr}`) || `Claude agents failed (exit ${result.exitCode}).`)
+    return parseAgents(result.stdout)
+  })
+}
+
 function parseAgents(stdout: string): Agent[] {
   let raw: unknown
   try { raw = JSON.parse(stdout.replace(/^\uFEFF/, '')) } catch { throw new Error('Claude agents returned invalid JSON.') }
@@ -208,6 +242,7 @@ function parseAgents(stdout: string): Agent[] {
 
 async function queryAgents(deps: ExecutorDeps, root: string): Promise<Agent[]> {
   const normalized = slash(root)
+  if (deps.agents) return (await deps.agents()).filter(agent => typeof agent.cwd === 'string' && belongsTo(agent.cwd, normalized))
   const result = await deps.run(['claude', 'agents', '--json', '--all', '--cwd', normalized], { cwd: normalized, timeoutMs: 60_000 })
   if (result.exitCode !== 0) throw new Error(lastMeaningfulLine(`${result.stdout}\n${result.stderr}`) || `Claude agents failed (exit ${result.exitCode}).`)
   return parseAgents(result.stdout).filter(agent => typeof agent.cwd === 'string' && belongsTo(agent.cwd, normalized))
@@ -328,7 +363,7 @@ function createCodex(deps: ExecutorDeps, config: ExecutorConfig): Executor {
     },
     async lastLine(job) {
       if (!job.logFile) return ''
-      return lastMeaningfulLine((await deps.files.read(job.logFile)).slice(-4000))
+      return logTail(deps, job.logFile)
     },
   }
 }

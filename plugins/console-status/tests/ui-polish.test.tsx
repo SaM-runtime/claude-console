@@ -131,3 +131,18 @@ test('refresh carries row transitions and fresh feed into Clients, with named fa
   expect(activity.includes('"color":"#CAD3E0"')).toBe(true)
   await ui.unmount()
 })
+
+test('a missing registry names the path and the way out', { options: { registryPath: 'D:/Nowhere/registry.md' } }, async ($, on) => {
+  mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
+  mock.env(on, { USERPROFILE: 'C:/Users/example' })
+  on('fs.read', () => { throw new Error('missing') })
+  on('fs.list', () => ({ value: [] }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '[]', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.usage', () => ({ value: null } as any))
+  on('session.id', () => ({ value: 'session' }))
+  on('ui.toast', () => ({ value: undefined }) as any)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile', props: { bodyColumns: 200, scroll: { offset: 0, total: 0, visible: 0 } } } as any)
+  expect(await ui.find({ type: 'Text', text: /找不到登錄表 D:\/Nowhere\/registry\.md.*\/console demo/ })).toBeDefined()
+  await ui.unmount()
+})
