@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.9
+
+- **Latest output shown once.** A running job with no task row (a review, or a job without a request) put its latest output line both in the elapsed-time meta and on the `›` line below it, in the action menu and the expanded card; the meta could also push the title off a narrow row. The meta now holds only the executor and elapsed time. A task row is matched by executor as well as id.
+
 ## 0.2.8
 
 - **Executor choice fixed and direct.** Pressing the project executor waited for a full refresh (Codex probes, `claude agents`) before anything changed on screen, so it looked like nothing happened. The row now offers 沿用 / claude / codex / manual, one press picks one, and the pane and toast update at once while the refresh runs in the background.

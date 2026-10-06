@@ -1177,8 +1177,9 @@ export const register: Register = (on, options) => {
       const running = p.jobs.filter(j => j.kind === 'running')
       return <Box flexDirection="column" marginTop={1}>
         {running.map(j => {
-          const task = (p.tasks ?? []).find(t => t.id === j.id)
-          const meta = task ? taskMeta(task, s.at).meta : runLine(j, s.at)
+          const task = (p.tasks ?? []).find(t => t.id === j.id && (!t.executor || !j.executor || t.executor === j.executor))
+          // The latest output has its own line below, so the meta never repeats it.
+          const meta = task ? taskMeta(task, s.at).meta : runLine({ ...j, last: '' }, s.at)
           return <Box key={prefix + 'run-' + j.id} flexDirection="column">
             <Box gap={1}>
               <Box width={2} flexShrink={0}><Text color={C.teal}>◉</Text></Box>
