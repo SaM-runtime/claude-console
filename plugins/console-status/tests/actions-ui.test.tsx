@@ -1,4 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
+import { fixturePath } from './fixture-path'
 
 const OPTIONS = { options: { executor: 'codex', registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/companion.mjs', companionStateRoots: '["D:/State"]' } }
 const STATUS = 'D:/Project Alpha/.console/STATUS.md'
@@ -17,7 +18,7 @@ function fixture(on: any) {
   }
   on('fs.list', () => ({ value: [{ name: 'Project Alpha-hash', kind: 'dir' }] }))
   on('fs.read', (_: any, e: any) => {
-    const path = e.path.replace(/\\/g, '/')
+    const path = fixturePath(e.path)
     const files: Record<string, string> = {
       'C:/Users/example/.claude/handoffs/claude-sessions.json': '{"version":1,"roots":{}}',
       'D:/Fixtures/registry.md': `## STATUS 卡位置\n| Project Alpha | \`${STATUS}\` |`,

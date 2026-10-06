@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { codexHealth } from '../hooks/logic'
 import { resolveConfig } from '../hooks/config'
+import { fixturePath } from './fixture-path'
 
 test('preflight health never promotes unknown or missing companion data to healthy', () => {
   for (const [line, expected] of [
@@ -36,7 +37,7 @@ test('refresh consumes userConfig and plugin-relative scripts, then renders the 
     return { value: { exitCode: 0, stdout: e.argv[0] === 'claude' ? '[]' : 'unknown', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.list', (_, e) => {
-    expect(e.path.replace(/\\/g, '/')).toBe('D:/Jobs')
+    expect(fixturePath(e.path)).toBe('D:/Jobs')
     return { value: [{ name: 'Project Alpha-demo', kind: 'dir' }] }
   })
   on('fs.read', (_, e) => {
@@ -46,7 +47,7 @@ test('refresh consumes userConfig and plugin-relative scripts, then renders the 
       'D:/Project Alpha/STATUS.md': '<!-- CARD -->\n- 更新：2030-01-05 10:00\n- 狀態：範例狀態\n- 等使用者：無\n<!-- /CARD -->',
       'D:/Jobs/Project Alpha-demo/state.json': '{"jobs":[{"id":"demo-task","jobClass":"task","status":"running"}]}',
     }
-    const path = e.path.replace(/\\/g, '/')
+    const path = fixturePath(e.path)
     if (!(path in files)) throw new Error('Unexpected read: ' + path)
     return { value: files[path] }
   })

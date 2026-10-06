@@ -250,7 +250,7 @@ Then run `/reload-plugins` or start a new session. See [CHANGELOG.md](CHANGELOG.
 claude plugin validate .
 claude plugin validate plugins/console-status
 claude plugin test plugins/console-status
-node .task/check-docs.mjs
+node scripts/check-docs.mjs
 ```
 
 ## License

@@ -1,6 +1,7 @@
 import { expect, test, mock } from 'claude-code/testing'
 import { parseSettings, parseModels, nextOption, effortOptions, modelOptions } from '../hooks/dispatch'
 import { resolveConfig } from '../hooks/config'
+import { fixturePath } from './fixture-path'
 
 test('settings file round trip and failed write are observable through the filesystem API', async ($, on) => {
   const config = resolveConfig({}, 'C:/Users/example', '', '/tmp')
@@ -9,13 +10,13 @@ test('settings file round trip and failed write are observable through the files
   let deny = false
   on('ui.toast', () => ({ value: undefined }) as any)
   on('fs.read', (_, e) => {
-    const path = e.path.replace(/\\/g, '/')
+    const path = fixturePath(e.path)
     if (!(path in files)) throw new Error('missing')
     return { value: files[path] }
   })
   on('fs.write', (_, e) => {
     if (deny) throw new Error('read only')
-    files[e.path.replace(/\\/g, '/')] = e.text
+    files[fixturePath(e.path)] = e.text
     return { value: undefined } as any
   })
   expect(JSON.stringify(await $.command.run({ command: 'console', args: 'model' } as any)).includes('claude · 預設')).toBe(true)

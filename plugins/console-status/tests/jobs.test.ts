@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { fixturePath } from './fixture-path'
 
 import { readJobs } from '../hooks/jobs'
 import { jobTasks, shortModel, taskMeta } from '../hooks/logic'
@@ -80,9 +81,9 @@ test('refresh reads both configured roots and renders the newest job model', {
   on('clock.now', () => ({ value: now }))
   on('env.get', (_, e) => ({ value: e.name === 'LOCALAPPDATA' ? 'D:/Local' : 'C:/Users/example' }))
   on('process.run', (_, e) => ({ value: { exitCode: 0, stdout: e.argv[0] === 'claude' ? '[]' : 'unknown', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
-  on('fs.list', (_, e) => ({ value: e.path.replace(/\\/g, '/') === 'D:/Plugin/state'
+  on('fs.list', (_, e) => ({ value: fixturePath(e.path) === 'D:/Plugin/state'
     ? [{ name: 'Project Alpha-first', kind: 'dir' }]
-    : e.path.replace(/\\/g, '/') === 'D:/Temp/state' ? [{ name: 'Project Alpha-second', kind: 'dir' }] : [] }))
+    : fixturePath(e.path) === 'D:/Temp/state' ? [{ name: 'Project Alpha-second', kind: 'dir' }] : [] }))
   on('fs.read', (_, e) => {
     const files: Record<string, string> = {
       'C:/Users/example/.claude/handoffs/claude-sessions.json': '{"version":1,"roots":{}}',
@@ -91,7 +92,7 @@ test('refresh reads both configured roots and renders the newest job model', {
       'D:/Plugin/state/Project Alpha-first/state.json': JSON.stringify({ jobs: [{ id: 'same', jobClass: 'task', status: 'running', updatedAt: '2030-01-05T10:00:00Z', request: { prompt: 'older', model: 'vendor-0-previous', effort: 'low' } }] }),
       'D:/Temp/state/Project Alpha-second/state.json': JSON.stringify({ jobs: [{ id: 'same', jobClass: 'task', status: 'running', updatedAt: '2030-01-05T11:00:00Z', request: { prompt: 'newer', model: 'vendor-0-sample', effort: 'high' } }] }),
     }
-    const path = e.path.replace(/\\/g, '/')
+    const path = fixturePath(e.path)
     if (!(path in files)) throw new Error('missing')
     return { value: files[path] }
   })
