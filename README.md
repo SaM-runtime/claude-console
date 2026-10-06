@@ -188,13 +188,13 @@ Set `關卡` to `無`, `spec：…`, `review：…`, or `release：…`. Unknown
 
 ## Project actions
 
-The right-click menu and expanded project cards expose the same actions. Mobile uses card Buttons. Every trigger shows an immediate toast, spins and rejects duplicate activation while running, then writes its result to the activity feed.
+The right-click menu (or `m` on the keyboard for the row under the cursor; Esc closes it) and expanded project cards expose the same actions. Mobile uses card Buttons. Every trigger shows an immediate toast, shows elapsed seconds and rejects duplicate activation while running, then writes its result to the activity feed.
 
 | Action | Availability | Behavior |
 | --- | --- | --- |
 | ▶ Run verification | CARD has `驗證` | Runs in the project root with a five-minute timeout; no model quota |
 | ⇢ Sync STATUS | SYNC, executor not `manual` | Dispatches the project's executor to update only CARD and history |
-| ⇢ Continue | IDLE, with a next step and no decision or gate; executor not `manual` | Requires a second press within three seconds, then dispatches the project's executor |
+| ⇢ Continue | IDLE, with a next step and no decision or gate; executor not `manual` | Requires a second press within six seconds (the pane shows the next step it will dispatch), then dispatches the project's executor |
 | ⇢ 改用 Claude 派工 | A Codex dispatch held by `codexFallback: ask` | Sends the same action to Claude, recorded as a fallback |
 | ✎ Decide | `等使用者` is nonempty | Prefills a draft and one-shot project context; Claude runs only when submitted |
 | ⚑ Review gate / final review | Recognized spec, review, or release gate | Sends evidence to the console Claude; release review cannot execute release |

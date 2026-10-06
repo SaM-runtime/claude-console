@@ -10,7 +10,7 @@ import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted } from './actions'
+import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -260,7 +260,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
     refreshConfig = config
     let error: string | null = null
     const registry = await io.fs.read(config.registryPath).catch(() => null) as string | null
-    if (registry === null) error = '找不到登錄表'
+    if (registry === null) error = `找不到登錄表 ${config.registryPath}；依 README 建立（範例 workflow/projects-scope.example.md），或 /console demo 先看示範`
     const registryRows = parseRegistry(registry ?? '', home).map(row => ({ row, root: projectRoot(row.statusPath) }))
     const effective = registryRows.map(({ row, root }) => effectiveDispatch(settings, root, row.executor))
     const codexInUse = settings.executor === 'codex' || effective.some(item => item.executor === 'codex')
@@ -425,7 +425,8 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     const name = p.name.replace(/\s.*$/, '')
     const now = await $.clock.now()
     if (kind === 'continue' && !request.useClaude) {
-      if (!await confirmed($, statusPath, workSignature(p), now, 3000, `${name}：再按一次確認（3 秒內）`)) return
+      if (!await confirmed($, statusPath, workSignature(p), now, CONTINUE_CONFIRM_MS,
+        `${name}：${CONTINUE_CONFIRM_MS / 1000} 秒內再按一次派工：${p.next}`)) return
     }
     if (kind === 'verify') {
       const trusted = await loadTrust($)
@@ -817,7 +818,7 @@ export const register: Register = (on, options) => {
   // Rows drawn by the Client module report presses, right-clicks and keys here.
   on('ui.message', async ($, e, nextHook) => {
     if (e.requestId !== PANE || e.element !== 'rows' || !e.data || typeof e.data !== 'object') return nextHook(e)
-    const data = e.data as { press?: unknown; copy?: unknown; key?: unknown; hover?: unknown }
+    const data = e.data as { press?: unknown; menu?: unknown; key?: unknown; hover?: unknown }
     const s = await read($, snapshot)
     const list = s ? rows(s) : []
     if (typeof data.press === 'string') {
@@ -827,8 +828,8 @@ export const register: Register = (on, options) => {
     } else if ('hover' in data) {
       const id = typeof data.hover === 'string' ? data.hover : null
       await update($, hovered, () => id)
-    } else if (typeof data.copy === 'string') {
-      const id = data.copy
+    } else if (typeof data.menu === 'string') {
+      const id = data.menu
       await update($, menuFor, v => (v === id ? null : id))
     } else if (typeof data.key === 'string' && list.length) {
       const k = data.key.toLowerCase()
@@ -839,7 +840,14 @@ export const register: Register = (on, options) => {
         const id = list[Math.max(0, at)]?.full
         if (id) await update($, selected, v => (v === id ? null : id))
       }
-      if (k === 'escape') await update($, selected, () => null)
+      if (k === 'm' || k === '.') {
+        const id = list[Math.max(0, await read($, cursor))]?.full
+        if (id) await update($, menuFor, v => (v === id ? null : id))
+      }
+      if (k === 'escape') {
+        if (await read($, menuFor)) await update($, menuFor, () => null)
+        else await update($, selected, () => null)
+      }
     }
     return {}
   })
@@ -1012,6 +1020,9 @@ export const register: Register = (on, options) => {
       const active = pending[p.statusPath]?.kind
       if (active && !kinds.includes(active)) kinds.unshift(active)
       const offer = p.executor === 'codex' ? offers[p.statusPath] : undefined
+      // While a second press is armed, say exactly what it will do: the toast alone disappears.
+      const armed = confirmations[p.statusPath]?.signature
+      const pendingConfirm = armed === workSignature(p) ? `再按一次將派工：${p.next}` : armed === verifySignature(p.verify) ? `再按一次將執行：${p.verify}` : ''
       return <Box flexDirection="column">
         <Box gap={2} flexWrap="wrap">
           {kinds.map(kind => actionButton(p, kind, prefix + kind))}
@@ -1021,6 +1032,7 @@ export const register: Register = (on, options) => {
             }} />
           </Box>}
         </Box>
+        {pendingConfirm && <Text key={prefix + 'confirm'} color={C.amber} wrap="wrap">{pendingConfirm}</Text>}
         <Box gap={1} flexWrap="wrap">
           <Text color={C.dim}>執行者</Text>
           <Box hover={{ scope: 'help-project_executor' }}>
@@ -1077,7 +1089,7 @@ export const register: Register = (on, options) => {
         </Box>
 
         <Box gap={3} flexWrap="wrap">
-          {SHOWN.map(k => (
+          {s.projects.length > 1 && SHOWN.filter(k => c[k]).map(k => (
             <Box key={'k' + k} hover={{ scope: 'help-' + k }}>
               <Text color={c[k] ? FG[k] : C.faint}>● {LABEL[k].replace('　', '')} <Text bold>{c[k]}</Text></Text>
             </Box>
@@ -1109,7 +1121,7 @@ export const register: Register = (on, options) => {
                 <Button key="unselect" plain dimColor label="✕ 取消" onPress={() => void update($, selected, () => null)} />
               </Box>
             )
-            : <Text color={C.faint} wrap="truncate-end">{rich ? '點選或 ↑↓ Enter 選取專案・右鍵開啟動作選單' : '點專案名稱即可選取'}</Text>}
+            : <Text color={C.faint} wrap="truncate-end">{rich ? '點選或 ↑↓ Enter 選取專案・右鍵或 m 開啟動作選單' : '點專案名稱即可選取'}</Text>}
         </Box>
 
         {detail && (

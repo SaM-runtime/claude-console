@@ -61,6 +61,8 @@ export function confirmationMatches(value: ContinueConfirmation | undefined, sig
  * approved for this project (new, or changed since) needs a second press after it is shown in full.
  */
 export const VERIFY_CONFIRM_MS = 10_000
+/** Long enough to reach the button again on a phone over Remote Control. */
+export const CONTINUE_CONFIRM_MS = 6_000
 export const verifySignature = (command: string) => `verify\u0000${command}`
 export const verifyTrusted = (trusted: Record<string, string>, statusPath: string, command: string) => trusted[statusPath] === command
 

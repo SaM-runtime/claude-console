@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Faster refresh and drawing.** One `claude agents` query per refresh instead of one per project; projects are read four at a time; drawing no longer reads settings from disk; a running action redraws once a second (with elapsed seconds) instead of every 150 ms; unchanged Codex logs are not re-read, and a log over 4 MiB says so instead of showing nothing.
+- **Keyboard and confirmations.** `m` opens the action menu for the row under the cursor (Esc closes it). Continue waits six seconds for the second press and the pane shows what it will dispatch or run while armed. A missing registry names its path and suggests `/console demo`. The status counts show only states that have projects.
 - **Verify commands need approval.** The CARD's `驗證` command is written by background executors, so the pane now shows it in full and runs a new or changed command only after a second press within 10 seconds. Approved commands are remembered per project in the plugin store; a store failure still runs the confirmed command, it just asks again next session.
 - **Codex state format guard.** A companion `state.json` that parses but has no recognisable `jobs` list (the Codex plugin changed its internals) is now reported on the companion footer line with the file and what is missing, instead of silently showing no Codex jobs. Half-written files are still skipped quietly and read again on the next refresh.
 

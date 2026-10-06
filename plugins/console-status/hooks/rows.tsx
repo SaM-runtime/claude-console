@@ -1,5 +1,6 @@
-// Client module: the project table rows. Pointer hover, click to select, right-click to copy the
-// row menu, ↑/↓/Enter from the keyboard, and a shimmer on rows whose executor job is running.
+// Client module: the project table rows. Pointer hover, click to select, right-click (or `m` on the
+// keyboard) opens the row's action menu, ↑/↓/Enter from the keyboard, and a shimmer on rows whose
+// executor job is running.
 // Pattern borrowed from data-goblin/claude-code-filetree (rows.tsx), rewritten for this table.
 import type { ClientModule } from 'claude-code'
 import { displayWidth } from './logic'
@@ -180,7 +181,7 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
     }
     const row = props.rows[e.y]
     if (!row || e.type !== 'down') return
-    if (e.button === 'right') surface.post({ copy: row.id })
+    if (e.button === 'right') surface.post({ menu: row.id })
     else surface.post({ press: row.id })
   })
   surface.onKey(e => surface.post({ key: e.key }))
