@@ -14,6 +14,7 @@ import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gateProm
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
+import { stateFormatIssues, stateFormatWarning } from './jobs'
 
 import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
 import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
@@ -254,6 +255,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
       now: () => guarded(() => $.clock.now()),
     }
     const projects: Project[] = []
+    stateFormatIssues.clear()
     const bases: string[] = []
     const roots: string[] = []
     const warnings: string[] = []
@@ -281,10 +283,12 @@ async function refresh($: any, options: PluginOptions, force = false) {
       projects.push(project)
     }
     const usage: any = await io.session.usage().catch(() => null)
+    const formatWarning = stateFormatWarning()
+    const companionWarning = [companion?.warning, formatWarning].filter(Boolean).join('；')
     const cur: Snapshot = {
       at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, await io.session.id().catch(() => null) as string | null, roots, home), codex: codexInUse ? relevantCodex(codex, bases) : '',
       ...(codexInUse ? { codexInUse: true } : {}),
-      ...(codexInUse && companion ? { companion: { path: companion.path, source: companion.source, ...(companion.warning ? { warning: companion.warning } : {}) } } : {}),
+      ...(codexInUse && (companion || formatWarning) ? { companion: { path: companion?.path ?? '', source: companion?.source ?? 'none', ...(companionWarning ? { warning: companionWarning } : {}) } } : {}),
       contextPercent: usage?.context?.percent ?? null, error,
       codexQuota: parseCodexQuota(codexQuotaText, now),
       limits: (usage?.rateLimits ?? []).map((l: any) => ({ kind: String(l.kind), percent: Number(l.percentUsed) || 0, ...(l.resetsAt ? { resetsAt: String(l.resetsAt) } : {}) })),

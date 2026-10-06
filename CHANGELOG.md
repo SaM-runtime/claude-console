@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Codex state format guard.** A companion `state.json` that parses but has no recognisable `jobs` list (the Codex plugin changed its internals) is now reported on the companion footer line with the file and what is missing, instead of silently showing no Codex jobs. Half-written files are still skipped quietly and read again on the next refresh.
+
 ## 0.2.1
 
 - **Rows stay inside the client render budget.** The project table no longer redraws every 100 ms while a 需決策/review chip breathes: the frame clock runs at 200 ms for breath-only tables, and a tick calls `setState` only when the visible frame changed (shimmer phase, breath step, change-highlight step). Idle ticks, including a burst of catch-up ticks after a suspend, write nothing and coalesce into at most one redraw. Cell clipping (`fit`) is linear instead of quadratic, fitted cell text is cached per text/width, and the timer stops by itself once a change highlight fades. Fixes `console-status: Client hooks/rows.tsx: ran longer than its 1000ms budget` after the pane sat idle with several decision rows.
