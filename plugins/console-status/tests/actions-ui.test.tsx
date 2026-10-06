@@ -340,3 +340,16 @@ test('the action menu says what is running and its latest output, not just what 
   expect(await ui.find({ key: 'm-close' })).toBeUndefined()
   await ui.unmount()
 })
+
+test('a running job without a task row shows its latest output once, beside the title, not in the meta', OPTIONS, async ($, on) => {
+  const { data } = fixture(on)
+  data.jobs = [{ id: 'review-1', jobClass: 'review', status: 'running', summary: 'Review the parser', startedAt: '2030-01-05T11:48:00Z', logFile: 'jobs/review-1.log' }]
+  data.files['D:/State/Project Alpha-hash/jobs/review-1.log'] = 'reading diff\n3 findings so far\n'
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)
+  expect(await ui.find({ type: 'Text', text: 'Review the parser' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'codex · 已跑 12m' })).toBeDefined()
+  expect(await ui.findAll({ type: 'Text', text: /3 findings so far/ })).toHaveLength(1)
+  await ui.unmount()
+})
