@@ -14,9 +14,10 @@ import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gateProm
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
+import { isWindowsOs, openFallbackArgs, preflightArgs, quotaArgs } from './platform'
 
 import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
-import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
+import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody } from './battery'
@@ -175,9 +176,10 @@ async function slowProbes($: any, config: ConsoleConfig, needCodex: boolean, hom
   let probeAgents: Agent[] = []
   let resolved: CompanionResolution | null = null
   if (needCodex) {
+    const windows = isWindowsOs(await $.env.get('OS'))
     const preflight = async (script: string) => {
       const ps = await $.process
-        .run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `${$.plugin.root}/scripts/codex-preflight.ps1`, ...(script ? ['-CompanionScript', script] : []), '-CompanionStateDir', config.companionStateDir], { timeoutMs: 30_000 })
+        .run(preflightArgs($.plugin.root, windows, script, config.companionStateDir, config.companionStateRoots), { timeoutMs: 30_000 })
         .catch(() => null)
       return ps ? (ps.stdout.trim().split('\n').pop() ?? '').trim() || 'unknown' : 'unknown'
     }
@@ -191,7 +193,7 @@ async function slowProbes($: any, config: ConsoleConfig, needCodex: boolean, hom
       if (retry && retry.source !== 'configured') probeCodex = await preflight(retry.path)
     }
     const q = await $.process
-      .run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `${$.plugin.root}/scripts/codex-quota.ps1`], { timeoutMs: 30_000 })
+      .run(quotaArgs($.plugin.root, windows), { timeoutMs: 30_000 })
       .catch(() => null)
     quotaText = q ? q.stdout : ''
   }
@@ -220,7 +222,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
     clock: { now: () => guarded(() => $.clock.now()) },
     env: { get: (name: string) => guarded(() => name === 'USERPROFILE' ? $.env.get('USERPROFILE')
       : name === 'HOME' ? $.env.get('HOME') : name === 'LOCALAPPDATA' ? $.env.get('LOCALAPPDATA')
-      : name === 'TMPDIR' ? $.env.get('TMPDIR') : $.env.get('TEMP')) },
+      : name === 'TMPDIR' ? $.env.get('TMPDIR') : name === 'OS' ? $.env.get('OS') : $.env.get('TEMP')) },
     fs: { read: (path: string) => guarded(() => $.fs.read(path)), list: (path: string) => guarded(() => $.fs.list(path)), write: (path: string, text: string) => guarded(() => $.fs.write(path, text)) },
     process: { run: (argv: string[], init: any) => guarded(() => $.process.run(argv, init)) },
     session: { usage: () => guarded(() => $.session.usage()), id: () => guarded(() => $.session.id()) },
@@ -504,7 +506,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     } else {
       const opened = await $.process.run(['code', p.statusPath], { timeoutMs: 15_000 }).catch(() => null)
       if (!opened || opened.exitCode !== 0) {
-        const fallback = await $.process.run(['cmd', '/c', 'start', '', p.statusPath.replace(/\//g, '\\')], { timeoutMs: 15_000 })
+        const fallback = await $.process.run(openFallbackArgs(p.statusPath, isWindowsOs(await $.env.get('OS'))), { timeoutMs: 15_000 })
         if (fallback.exitCode !== 0) throw new Error(`無法開啟 STATUS.md（exit ${fallback.exitCode}）`)
       }
       await actionNotice($, `${name}：已請求開啟 STATUS.md`, true)
@@ -747,7 +749,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
         <Box gap={1} flexShrink={0} height={1}>
           {band.items.map(item => <Box key={'band-' + item.id} width={item.width} flexShrink={0} height={1} overflow="hidden">
-            <Text wrap="truncate-end" color={item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' ? C.red : FG[item.id as State] ?? C.text}
+            <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' ? C.red : FG[item.id as State] ?? C.text}
               backgroundColor={item.id === 'demo' ? C.bar : undefined}>{item.text}</Text>
           </Box>)}
         </Box>
@@ -887,7 +889,7 @@ export const register: Register = (on, options) => {
       const p = s.projects.find(x => x.name === full)
       if (!p) return ''
       if (!p.hasCard) return 'STATUS 卡不存在'
-      if (hasAsk(p)) return p.ask
+      if (hasAsk(p)) return askSummary(p.ask)
       if (parseGate(p.gate)) return `關卡：${p.gate}`
       const run = p.jobs.find(j => j.kind === 'running')
       if (run) return runLine(run, s.at)
@@ -969,6 +971,32 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     }
+    // Each decision on its own line, its options one per line underneath, nothing truncated.
+    const decisionView = (p: Project, prefix: string) => {
+      if (!hasAsk(p)) return null
+      const decisions = parseAsk(p.ask)
+      const numbered = decisions.length > 1
+      return (
+        <Box key={prefix + 'ask'} flexDirection="column">
+          {decisions.map((d, i) => (
+            <Box key={prefix + 'ask-' + i} flexDirection="column" marginTop={i ? 1 : 0}>
+              {d.title !== '' && (
+                <Box gap={1}>
+                  {numbered && <Box width={3} flexShrink={0}><Text bold color={C.amber}>{`${i + 1}.`}</Text></Box>}
+                  <Box flexGrow={1} flexShrink={1}><Text color={C.amber} wrap="wrap">{d.title}</Text></Box>
+                </Box>
+              )}
+              {d.options.map(o => (
+                <Box key={prefix + 'ask-' + i + '-' + o.key} gap={1} paddingLeft={numbered ? 4 : 2}>
+                  <Box width={3} flexShrink={0}><Text bold color={C.strong}>{/^[①-⑨]$/.test(o.key) ? o.key : o.key + ')'}</Text></Box>
+                  <Box flexGrow={1} flexShrink={1}><Text color={C.text} wrap="wrap">{o.text}</Text></Box>
+                </Box>
+              ))}
+            </Box>
+          ))}
+        </Box>
+      )
+    }
     const verificationView = (p: Project) => {
       const result = verified[p.statusPath]
       if (!result) return null
@@ -1032,6 +1060,7 @@ export const register: Register = (on, options) => {
           {menuProject && (
             <Box key="menu" flexDirection="column" borderStyle="round" borderColor={C.blue} paddingX={1} marginTop={1}>
               <Text color={C.blue}>{menuProject.name.replace(/\s.*$/, '')}　動作</Text>
+              {hasAsk(menuProject) && <Box marginY={1}>{decisionView(menuProject, 'm-')}</Box>}
               {projectActions(menuProject, 'm-')}
               {verificationView(menuProject)}
               <Button key="m-close" plain dimColor label="✕" onPress={() => void update($, menuFor, () => null)} />
@@ -1045,6 +1074,15 @@ export const register: Register = (on, options) => {
               </Box>
             )
             : <Text color={C.faint} wrap="truncate-end">{rich ? '點選或 ↑↓ Enter 選取專案・右鍵開啟動作選單' : '點專案名稱即可選取'}</Text>}
+          {sel !== null && !detail && menuProject?.name !== sel && (() => {
+            const p = s.projects.find(x => x.name === sel)
+            return p && hasAsk(p) ? (
+              <Box key="sel-ask" flexDirection="column" borderStyle="round" borderColor={C.amber} paddingX={1}>
+                <Text color={C.dim}>需要你決定</Text>
+                {decisionView(p, 'sel-')}
+              </Box>
+            ) : null
+          })()}
         </Box>
 
         {detail && (
@@ -1079,7 +1117,12 @@ export const register: Register = (on, options) => {
                   </Box>
                   <Box flexDirection="column" marginTop={1}>
                     {field('狀態', p.state, C.text)}
-                    {field('待決', hasAsk(p) ? p.ask : '', C.amber)}
+                    {hasAsk(p) && (
+                      <Box key="待決" gap={2}>
+                        <Box width={6} flexShrink={0}><Text color={C.dim}>待決</Text></Box>
+                        <Box flexGrow={1} flexShrink={1}>{decisionView(p, 'detail-' + p.name + '-')}</Box>
+                      </Box>
+                    )}
                     {field('關卡', parseGate(p.gate) ? p.gate ?? '' : '', C.purple)}
                     {field('下一步', p.next, C.text)}
                     {field('同步', !run && p.jobs.some(j => j.kind === 'newer') ? '執行者已結束，結果未寫回 STATUS' : '', C.blue)}

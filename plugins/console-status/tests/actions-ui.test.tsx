@@ -1,14 +1,14 @@
 import { expect, test, mock } from 'claude-code/testing'
 
-const OPTIONS = { options: { executor: 'codex', registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/companion.mjs', companionStateRoots: '["D:/State"]' } }
-const STATUS = 'D:/Project Alpha/.console/STATUS.md'
+const OPTIONS = { options: { executor: 'codex', registryPath: '/volD/Fixtures/registry.md', companionScript: '/volD/Tools/companion.mjs', companionStateRoots: '["/volD/State"]' } }
+const STATUS = '/volD/Project Alpha/.console/STATUS.md'
 const PANE = (surface = 'mobile') => ({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface,
   props: { title: 'Console', isFocused: true, bodyColumns: 70, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any)
 const result = (exitCode = 0, stdout = '', stderr = '') => ({ exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false })
 
 function fixture(on: any) {
   const clock = mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
-  mock.env(on, { USERPROFILE: 'C:/Users/example', LOCALAPPDATA: 'D:/Local', OS: 'Windows_NT' })
+  mock.env(on, { USERPROFILE: '/Users/example', LOCALAPPDATA: '/volD/Local', OS: 'Windows_NT' })
   const data = {
     extra: '', jobs: [] as any[], settings: '{"model":"fiction-alpha","effort":"high"}',
     toasts: [] as string[], processCalls: [] as any[], state: {} as Record<string, any>,
@@ -19,12 +19,12 @@ function fixture(on: any) {
   on('fs.read', (_: any, e: any) => {
     const path = e.path.replace(/\\/g, '/')
     const files: Record<string, string> = {
-      'C:/Users/example/.claude/handoffs/claude-sessions.json': '{"version":1,"roots":{}}',
-      'D:/Fixtures/registry.md': `## STATUS 卡位置\n| Project Alpha | \`${STATUS}\` |`,
+      '/Users/example/.claude/handoffs/claude-sessions.json': '{"version":1,"roots":{}}',
+      '/volD/Fixtures/registry.md': `## STATUS 卡位置\n| Project Alpha | \`${STATUS}\` |`,
       [STATUS]: `<!-- CARD -->\n- 更新：2030-01-05 08:00\n- 狀態：Local tests ready\n- 等使用者：無\n- 下一步：Run local tests\n- 驗證：\`node test.mjs\` → PASS\n- 關卡：無\n${data.extra}\n<!-- /CARD -->`,
-      'D:/State/Project Alpha-hash/state.json': JSON.stringify({ jobs: data.jobs }),
-      'C:/Users/example/.claude/handoffs/dispatch.json': data.settings,
-      'C:/Users/example/.codex/models_cache.json': '{}',
+      '/volD/State/Project Alpha-hash/state.json': JSON.stringify({ jobs: data.jobs }),
+      '/Users/example/.claude/handoffs/dispatch.json': data.settings,
+      '/Users/example/.codex/models_cache.json': '{}',
     }
     return { value: files[path] ?? '' }
   })
@@ -61,7 +61,7 @@ test('verify stores one result per project, shows output, animates and blocks re
   expect((await ui.find({ key: 'detail-Project Alpha-verify' }))?.text === before).toBe(false)
   await ui.press({ key: 'detail-Project Alpha-verify' })
   expect(data.processCalls.length).toBe(1)
-  expect(data.processCalls[0].init).toEqual({ cwd: 'D:/Project Alpha', timeoutMs: 300000 })
+  expect(data.processCalls[0].init).toEqual({ cwd: '/volD/Project Alpha', timeoutMs: 300000 })
   expect(data.processCalls[0].argv.slice(0, 7)).toEqual(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', expect.any(String)])
   await clock.advance(800)
   await pressing

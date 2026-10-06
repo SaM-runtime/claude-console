@@ -13,10 +13,10 @@
 
 ## 需求
 
-- Windows（目前只驗證此作業系統）
+- Windows 或 macOS（macOS 使用內附的 POSIX `sh` 探測腳本，不需要 PowerShell）
 - Claude Code 2.1.289 以上，且支援 mod
 - 一份專案登錄表，以及每個專案各一份 STATUS 檔
-- 只有 `executor: codex` 需要 Node.js、PowerShell、Codex Companion 與 Codex 帳號；broker preflight 另需 Codex 桌面應用程式
+- 只有 `executor: codex` 需要 Node.js、Codex Companion 與 Codex 帳號。Windows 探測需要 PowerShell 與 Codex 桌面應用程式；macOS 探測需要 `PATH` 上有 `codex` CLI（會自動補上 Homebrew 路徑）
 
 ## 安裝
 
@@ -226,7 +226,8 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 ## 限制
 
-- 內附探測目前需要 Windows 與 PowerShell。
+- 內附探測：Windows 用 PowerShell 腳本，macOS 用 `sh` 腳本。macOS 上，若 broker 的 `codex app-server` 啟動時間早於 Codex CLI 最近一次升級，會判定為 STALE。
+- macOS 上找不到 `code` CLI 時，開啟 STATUS.md 改用 `open`。
 - UI 目前只有繁體中文。
 - 專案對應依賴設定的登錄表與 STATUS contract。
 - 面板呈現本機證據，不能取代專案自己的驗證。

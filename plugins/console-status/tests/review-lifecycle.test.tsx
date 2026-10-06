@@ -1,26 +1,26 @@
 import { expect, test, mock } from 'claude-code/testing'
 
-const OPTIONS = { options: { registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/companion.mjs', companionStateRoots: '["D:/State"]' } }
-const STATUS = 'D:/Project Alpha/.console/STATUS.md'
+const OPTIONS = { options: { registryPath: '/volD/Fixtures/registry.md', companionScript: '/volD/Tools/companion.mjs', companionStateRoots: '["/volD/State"]' } }
+const STATUS = '/volD/Project Alpha/.console/STATUS.md'
 const PANE = () => ({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
   props: { title: 'Console', isFocused: true, bodyColumns: 70, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any)
 const processResult = (stdout = '') => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
 function fixture(on: any, extra: string) {
   mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
-  mock.env(on, { USERPROFILE: 'C:/Users/example', LOCALAPPDATA: 'D:/Local', OS: 'Windows_NT' })
+  mock.env(on, { USERPROFILE: '/Users/example', LOCALAPPDATA: '/volD/Local', OS: 'Windows_NT' })
   const state: Record<string, any> = {}
   const toasts: string[] = []
   on('fs.list', () => ({ value: [{ name: 'Project Alpha-hash', kind: 'dir' }] }))
   on('fs.read', (_: any, e: any) => {
     const path = e.path.replace(/\\/g, '/')
     const files: Record<string, string> = {
-      'D:/Fixtures/registry.md': `## STATUS 卡位置\n| Project Alpha | \`${STATUS}\` |`,
+      '/volD/Fixtures/registry.md': `## STATUS 卡位置\n| Project Alpha | \`${STATUS}\` |`,
       [STATUS]: `<!-- CARD -->\n- 更新：2030-01-05 08:00\n- 狀態：Ready\n- 等使用者：無\n- 下一步：Run local tests\n- 驗證：無\n- 關卡：無\n${extra}\n<!-- /CARD -->`,
-      'D:/State/Project Alpha-hash/state.json': '{"jobs":[]}',
-      'C:/Users/example/.claude/handoffs/dispatch.json': '{}',
-      'C:/Users/example/.claude/handoffs/claude-sessions.json': '{"version":1,"roots":{}}',
-      'C:/Users/example/.codex/models_cache.json': '{}',
+      '/volD/State/Project Alpha-hash/state.json': '{"jobs":[]}',
+      '/Users/example/.claude/handoffs/dispatch.json': '{}',
+      '/Users/example/.claude/handoffs/claude-sessions.json': '{"version":1,"roots":{}}',
+      '/Users/example/.codex/models_cache.json': '{}',
     }
     return { value: files[path] ?? '' }
   })
@@ -76,7 +76,7 @@ test('session start releases a review left pending by an interrupted plugin life
   expect(state.pendingActions[STATUS]?.kind).toBe('gate')
   expect(state.reviewRequests[STATUS]).toBeDefined()
 
-  await $.session.start({ cwd: 'D:/Console', surface: 'terminal', isInteractive: true })
+  await $.session.start({ cwd: '/volD/Console', surface: 'terminal', isInteractive: true })
   expect(state.reviewRequests).toEqual({})
   expect(state.pendingActions[STATUS]).toBeUndefined()
   expect(state.continueConfirmations).toEqual({})

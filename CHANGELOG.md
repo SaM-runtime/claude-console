@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.6
+
+- **Band always shows every state.** 需決策, 待審核, 執行中, 待同步 and 閒置 keep their slot with a count of 0 included; zero counts are drawn faint so the states that need you still stand out. The context chip still appears only at 50% or more, and the strict priority order still drops trailing items on narrow terminals.
+
+## 0.2.5
+
+- **An agent waiting for your reply is finished, not running.** `status: idle` with `state: blocked` (the turn ended with a question) completes the job with phase `idle: 等你回覆`, so the project moves to 待同步 and dispatch is no longer held. Only `status: waiting` (a permission prompt mid-turn) keeps a blocked agent running.
+
+## 0.2.4
+
+- **Finished Claude jobs no longer stick as RUNNING.** A background agent that reports `status: idle` after its turn counts as completed (phase `idle`) once it is past a 60-second launch grace, even while `state` still says `working`; blocked agents stay running. The same rule decides whether the project's session is still active before a new dispatch. Agents working inside a Claude Code worktree of the project (`<root>/.claude/worktrees/…`) now reconcile their job instead of leaving it running forever.
+
+## 0.2.3
+
+- **Decisions shown in full, one per line.** A CARD `等使用者` is split into decisions on top-level `；`/`;`/newlines (bracketed commands stay whole), and each decision's `A) … B) …`, `1) 2)`, `(A)` or `①②` choices become one line each. The detail card, the action menu and a new "需要你決定" box under a selected project show them wrapped, never truncated; the hover strip and table keep a one-line summary (`2 項決策：…｜…`). The STATUS template and workflow skill ask executors to write choices in that format. The demo's first project shows two decisions with options.
+
+## 0.2.2
+
+- **macOS support.** Codex preflight and quota probes run as POSIX `sh` scripts (`scripts/codex-preflight.sh`, `scripts/codex-quota.sh`) on non-Windows hosts; Windows keeps the PowerShell scripts. The macOS preflight resolves the `codex` CLI (adding Homebrew prefixes to `PATH`), reads its version from the npm package, and reports a companion broker STALE when its `codex app-server` started before the CLI was last installed; it scans every configured companion state root for `broker.json` owners. The quota parser also accepts the raw rollout event line. `open STATUS.md` falls back to `open` instead of `cmd /c start` off Windows. Test fixtures use POSIX paths so the suite runs on macOS.
+
 ## 0.2.1
 
 - **Rows stay inside the client render budget.** The project table no longer redraws every 100 ms while a 需決策/review chip breathes: the frame clock runs at 200 ms for breath-only tables, and a tick calls `setState` only when the visible frame changed (shimmer phase, breath step, change-highlight step). Idle ticks, including a burst of catch-up ticks after a suspend, write nothing and coalesce into at most one redraw. Cell clipping (`fit`) is linear instead of quadratic, fitted cell text is cached per text/width, and the timer stops by itself once a change highlight fades. Fixes `console-status: Client hooks/rows.tsx: ran longer than its 1000ms budget` after the pane sat idle with several decision rows.
