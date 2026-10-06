@@ -6,10 +6,11 @@
 root=${1:-"$HOME/.codex/sessions"}
 [ -d "$root" ] || exit 0
 
-# Newest files first by modification time; BSD stat on macOS, GNU stat elsewhere.
+# Newest files first by modification time. GNU stat is tried first: GNU `stat -f` prints
+# file-system status to stdout, which would mix into the list; BSD `stat -c` fails silently.
 newest() {
-  find "$1" -type f -name 'rollout-*.jsonl' -exec stat -f '%m %N' {} + 2>/dev/null \
-    || find "$1" -type f -name 'rollout-*.jsonl' -exec stat -c '%Y %n' {} + 2>/dev/null
+  find "$1" -type f -name 'rollout-*.jsonl' -exec stat -c '%Y %n' {} + 2>/dev/null \
+    || find "$1" -type f -name 'rollout-*.jsonl' -exec stat -f '%m %N' {} + 2>/dev/null
 }
 
 month="$root/$(date +%Y/%m)"

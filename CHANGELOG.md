@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.8
+
+- **Executor choice fixed and direct.** Pressing the project executor waited for a full refresh (Codex probes, `claude agents`) before anything changed on screen, so it looked like nothing happened. The row now offers 沿用 / claude / codex / manual, one press picks one, and the pane and toast update at once while the refresh runs in the background.
+- **Action menu shows what matters.** Full project name with its state, the pipeline, the running task with elapsed time and its latest output line, and the CARD's decision, gate and next step. A blocked dispatch is a `派工鎖定：…` note instead of a dead button; ✕ sits in the header.
+- **Decisions in the new menu.** The menu and expanded card show the CARD's decisions and options one per line (from 0.2.3) inside the new running/CARD block.
+- **Linux probes.** The `sh` preflight and quota probes called BSD `stat -f` first. GNU `stat -f` reports file-system status and prints it even when it fails, so on Linux the install time read as 0 and a stale broker was always reported OK. GNU `stat -c` is now tried first (BSD `stat` rejects `-c` without output).
+- **State counts in the pane match the band.** Every state keeps its slot, zero counts drawn faint (0.2.6 did this for the band; 0.2.7 had hidden zeros in the pane).
+
 ## 0.2.7
 
 Merged upstream #4 (workflow pipeline, project mode, verify approval, perf and CI) onto the macOS branch; Claude jobs in a project worktree also match the shared agents query.

@@ -64,12 +64,13 @@ test('registry Executor column selects codex per project and the pane cycles a p
   expect(h.probes.length).toBe(1)
   const ui = await $.ui.mount(PANE)
   await ui.press({ key: 'detail' })
-  expect((await ui.find({ key: 'detail-Project Alpha-executor' }))?.text).toBe('codex・登錄表')
-  await ui.press({ key: 'detail-Project Alpha-executor' })
+  // One press picks an executor directly; the chosen one is bracketed, inherit names its source.
+  expect((await ui.find({ key: 'detail-Project Alpha-executor-inherit' }))?.text).toBe('[沿用（codex・登錄表）]')
+  await ui.press({ key: 'detail-Project Alpha-executor-claude' })
   expect(JSON.parse(h.files[SETTINGS]!)).toEqual({ executor: 'claude', model: '', effort: '', projects: { 'D:/Project Alpha': { executor: 'claude' } } })
-  expect((await ui.find({ key: 'detail-Project Alpha-executor' }))?.text).toBe('claude・面板')
-  await ui.press({ key: 'detail-Project Alpha-executor' })
-  await ui.press({ key: 'detail-Project Alpha-executor' })
+  expect((await ui.find({ key: 'detail-Project Alpha-executor-claude' }))?.text).toBe('[claude]')
+  expect((await ui.find({ key: 'detail-Project Alpha-executor-inherit' }))?.text).toBe('沿用（codex・登錄表）')
+  await ui.press({ key: 'detail-Project Alpha-executor-manual' })
   expect(JSON.parse(h.files[SETTINGS]!).projects).toEqual({ 'D:/Project Alpha': { executor: 'manual' } })
   // Manual: no dispatch action, an explicit handoff note, verify/open remain.
   expect(await ui.find({ key: 'detail-Project Alpha-continue' })).toBeUndefined()
@@ -77,9 +78,9 @@ test('registry Executor column selects codex per project and the pane cycles a p
   expect(await ui.find({ key: 'detail-Project Alpha-open' })).toBeDefined()
   expect(h.launches).toEqual([])
   // Back to inherit: the override disappears and the file returns to the flat shape.
-  await ui.press({ key: 'detail-Project Alpha-executor' })
+  await ui.press({ key: 'detail-Project Alpha-executor-inherit' })
   expect(JSON.parse(h.files[SETTINGS]!)).toEqual({ executor: 'claude', model: '', effort: '' })
-  expect((await ui.find({ key: 'detail-Project Alpha-executor' }))?.text).toBe('codex・登錄表')
+  expect((await ui.find({ key: 'detail-Project Alpha-executor-inherit' }))?.text).toBe('[沿用（codex・登錄表）]')
   // The global controls still write without dropping overrides.
   await $.command.run({ command: 'console', args: 'project executor manual Project' } as any)
   await $.command.run({ command: 'console', args: 'model opus' } as any)

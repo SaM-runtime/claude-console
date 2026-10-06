@@ -56,11 +56,11 @@ for (const source of ['claude', 'codex'] as const) {
       await $.command.run({ command: 'console', args: 'refresh' } as any)
       expect(rows(h.state.snapshot)[0].state).toBe('RUNNING')
       expect(rows(h.state.snapshot)[0].item).toContain(source)
-      const button = await ui.find({ key: 'detail-Project Alpha-continue' })
-      expect(button?.text).toContain(source)
-      expect(button?.text).toContain('尚未結束')
-      await ui.press({ key: 'detail-Project Alpha-continue' })
-      await ui.press({ key: 'detail-Project Alpha-continue' })
+      // Blocked dispatch is explained as text, not offered as a dead button.
+      expect(await ui.find({ key: 'detail-Project Alpha-continue' })).toBeUndefined()
+      const blocked = await ui.find({ type: 'Text', text: /^派工鎖定：/ })
+      expect(blocked?.text).toContain(source)
+      expect(blocked?.text).toContain('尚未結束')
       expect(h.launches).toEqual([])
     }
     h.publish('completed')
@@ -94,9 +94,8 @@ test('a newly accepted Codex job remains protected after switching before state-
   expect(h.launches.length).toBe(1)
   await $.command.run({ command: 'console', args: 'executor claude' } as any)
   expect(rows(h.state.snapshot)[0].state).toBe('RUNNING')
-  expect((await ui.find({ key: 'detail-Project Alpha-continue' }))?.text).toContain('codex 工作尚未結束')
-  await ui.press({ key: 'detail-Project Alpha-continue' })
-  await ui.press({ key: 'detail-Project Alpha-continue' })
+  expect((await ui.find({ type: 'Text', text: /^派工鎖定：/ }))?.text).toContain('codex 工作尚未結束')
+  expect(await ui.find({ key: 'detail-Project Alpha-continue' })).toBeUndefined()
   expect(h.launches.length).toBe(1)
   // Terminal state can be published first; it must also release the local hold.
   h.files['D:/State/Project Alpha-hash/state.json'] = '{"jobs":[{"id":"new-job","jobClass":"task","status":"completed"}]}'
@@ -121,9 +120,8 @@ test('a running Claude resume copy blocks Claude and Codex dispatch until the co
   for (const executor of ['claude', 'codex']) {
     await $.command.run({ command: 'console', args: `executor ${executor}` } as any)
     expect(rows(h.state.snapshot)[0].state).toBe('RUNNING')
-    expect((await ui.find({ key: 'detail-Project Alpha-continue' }))?.text).toContain('claude 工作尚未結束')
-    await ui.press({ key: 'detail-Project Alpha-continue' })
-    await ui.press({ key: 'detail-Project Alpha-continue' })
+    expect((await ui.find({ type: 'Text', text: /^派工鎖定：/ }))?.text).toContain('claude 工作尚未結束')
+    expect(await ui.find({ key: 'detail-Project Alpha-continue' })).toBeUndefined()
     expect(h.launches).toEqual([])
   }
   expect(h.state.feed.some((event: any) => event.text.includes('unmanaged'))).toBe(true)

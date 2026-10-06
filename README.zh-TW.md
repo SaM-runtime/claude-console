@@ -102,7 +102,7 @@ Model 與 effort 依相同順序。專案執行者與全域不同時，不沿用
 
 `manual` 代表面板永不派工該專案：隱藏同步與繼續，卡片顯示交接提示；CARD、驗證、決策與關卡照常。
 
-展開的專案卡與右鍵選單中的 `執行者` Button 會輪換該專案的覆寫：沿用、`claude`、`codex`、`manual`。標籤會標示來源（`・面板` 是面板覆寫、`・登錄表` 是登錄表）。`/console project executor|model|effort <值|inherit> <專案名稱>` 設定相同欄位，`/console project` 列出實際生效的設定。
+展開的專案卡與右鍵選單中的 `執行者` 一列提供 `沿用`（會標出沿用的值與來源）、`claude`、`codex`、`manual`，按一下即選定，目前的選擇以方括號標示。面板會立即更新，之後的 refresh 在背景執行。`/console project executor|model|effort <值|inherit> <專案名稱>` 設定相同欄位，`/console project` 列出實際生效的設定。
 
 同一專案可能同時有兩種執行器的工作（切換執行者或 Claude 備援之後）。工作清單會合併兩種執行器；任一執行器有執行中或排隊中的工作，就顯示 RUNNING 並阻止重複派工。
 
@@ -188,7 +188,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 ## 專案動作
 
-右鍵選單（鍵盤可在游標所在列按 `m` 開啟、Esc 關閉）與展開的專案卡提供相同動作；手機使用卡片 Button。每個觸發會立即 toast、執行中顯示已經過秒數並拒絕重複啟動，結束後把結果寫入動態。
+右鍵選單（鍵盤可在游標所在列按 `m` 開啟、Esc 關閉）與展開的專案卡提供相同動作。選單會顯示專案狀態與管線、正在執行的任務（已跑時間與最後一行輸出），以及 CARD 的待決、關卡與下一步；因工作執行中而無法派工時，以「派工鎖定：…」文字說明，不再顯示無法按的按鈕；手機使用卡片 Button。每個觸發會立即 toast、執行中顯示已經過秒數並拒絕重複啟動，結束後把結果寫入動態。
 
 | 動作 | 出現條件 | 行為 |
 | --- | --- | --- |
@@ -253,7 +253,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 ## 限制
 
-- 內附探測：Windows 用 PowerShell 腳本，macOS 用 `sh` 腳本。macOS 上，若 broker 的 `codex app-server` 啟動時間早於 Codex CLI 最近一次升級，會判定為 STALE。
+- 內附探測：Windows 用 PowerShell 腳本，macOS 與 Linux 用 `sh` 腳本（Linux 已有測試與模擬過期 broker 驗證，但未經日常使用）。在這兩個平台上，若 broker 的 `codex app-server` 啟動時間早於 Codex CLI 最近一次升級，會判定為 STALE。
 - macOS 上找不到 `code` CLI 時，開啟 STATUS.md 改用 `open`。
 - UI 目前只有繁體中文。
 - 專案對應依賴設定的登錄表與 STATUS contract。

@@ -37,9 +37,9 @@ test('terminal: Client rows — click selects, keys move and select', async ($, 
     expect(await ui.find({ type: 'Text', text: /已選取/ })).toBeUndefined()
     // Right-click opens the row menu; hover puts the row's full text in the help strip.
     await ui.pointer({ in: 'rows', type: 'down', x: 12, y: 0, button: 'right' } as any)
-    expect(await ui.find({ type: 'Text', text: /動作$/ })).toBeDefined()
+    expect(await ui.find({ key: 'm-close' })).toBeDefined()
     await ui.press({ key: 'm-close' })
-    expect(await ui.find({ type: 'Text', text: /動作$/ })).toBeUndefined()
+    expect(await ui.find({ key: 'm-close' })).toBeUndefined()
     await ui.pointer({ in: 'rows', type: 'move', x: 12, y: 0 } as any)
     expect(await ui.find({ type: 'Text', text: /^Project-Alpha　$/ })).toBeDefined()
     await ui.press({ key: 'detail' })
