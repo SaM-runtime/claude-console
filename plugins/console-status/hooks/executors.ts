@@ -242,10 +242,17 @@ function parseAgents(stdout: string): Agent[] {
 
 async function queryAgents(deps: ExecutorDeps, root: string): Promise<Agent[]> {
   const normalized = slash(root)
-  if (deps.agents) return (await deps.agents()).filter(agent => typeof agent.cwd === 'string' && rootKey(agent.cwd) === rootKey(normalized))
+  if (deps.agents) return (await deps.agents()).filter(agent => typeof agent.cwd === 'string' && belongsTo(agent.cwd, normalized))
   const result = await deps.run(['claude', 'agents', '--json', '--all', '--cwd', normalized], { cwd: normalized, timeoutMs: 60_000 })
   if (result.exitCode !== 0) throw new Error(lastMeaningfulLine(`${result.stdout}\n${result.stderr}`) || `Claude agents failed (exit ${result.exitCode}).`)
-  return parseAgents(result.stdout).filter(agent => typeof agent.cwd === 'string' && rootKey(agent.cwd) === rootKey(normalized))
+  return parseAgents(result.stdout).filter(agent => typeof agent.cwd === 'string' && belongsTo(agent.cwd, normalized))
+}
+
+/** The project root itself, or an isolated worktree Claude Code created inside it. */
+function belongsTo(cwd: string, root: string): boolean {
+  const dir = rootKey(cwd)
+  const base = rootKey(root)
+  return dir === base || dir.startsWith(`${base}/.claude/worktrees/`)
 }
 
 function phaseOf(agent: Agent): { status: string; phase: string; done: boolean; terminal: boolean } {
@@ -258,6 +265,22 @@ function phaseOf(agent: Agent): { status: string; phase: string; done: boolean; 
   if (status === 'waiting') return { status: 'running', phase: `waiting${agent.waitingFor ? `: ${agent.waitingFor}` : ''}`, done: false, terminal: false }
   if (status === 'exited') return { status: 'failed', phase: 'exited', done: false, terminal: true }
   return { status: 'running', phase: state || status || 'unknown', done: false, terminal: false }
+}
+
+const IDLE_GRACE_MS = 60_000
+
+/**
+ * An agent that finished its turn reports `status: idle` while `state` can still say `working`, or
+ * `blocked` when its final message asks the user something. Past a short grace after launch either
+ * is a finished job. A permission prompt mid-turn reports `status: waiting` and stays running.
+ */
+function settledPhase(agent: Agent, now: number): ReturnType<typeof phaseOf> {
+  const next = phaseOf(agent)
+  if (next.status !== 'running' || (agent.status ?? '').toLowerCase() !== 'idle') return next
+  const started = typeof agent.startedAt === 'number' ? agent.startedAt : Date.parse(String(agent.startedAt ?? ''))
+  if (Number.isFinite(started) && now - started < IDLE_GRACE_MS) return next
+  const asks = (agent.state ?? '').toLowerCase() === 'blocked'
+  return { status: 'completed', phase: asks ? 'idle: 等你回覆' : 'idle', done: true, terminal: true }
 }
 
 function matchAgent(job: ClaudeJob, agents: Agent[], latest: boolean): Agent | null {
@@ -303,7 +326,7 @@ function reconcile(root: RootState, agents: Agent[], nowIso: string): boolean {
       if (job.sessionId !== sessionId) { job.sessionId = sessionId; changed = true }
       if (index === root.jobs.length - 1 && root.sessionId !== job.sessionId) { root.sessionId = job.sessionId; changed = true }
     }
-    const next = phaseOf(agent)
+    const next = settledPhase(agent, Date.parse(nowIso))
     if (job.status !== next.status) { job.status = next.status; changed = true }
     if (job.phase !== next.phase) { job.phase = next.phase; changed = true }
     if (job.updatedAt !== nowIso) { job.updatedAt = nowIso; changed = true }
@@ -373,7 +396,7 @@ function createClaude(deps: ExecutorDeps, config: ExecutorConfig): Executor {
         reconcile(root, agents.filter(agent => agent.kind === 'background'), nowIso)
         const unresolved = root.jobs.some(job => job.phase === 'starting' || job.phase === 'unknown')
         if (unresolved) throw new Error('Claude dispatch has an unresolved launch; refresh it before retrying.')
-        const ownedActive = !!root.sessionId && agents.some(agent => agent.sessionId === root.sessionId && phaseOf(agent).status === 'running')
+        const ownedActive = !!root.sessionId && agents.some(agent => agent.sessionId === root.sessionId && settledPhase(agent, now).status === 'running')
         if (ownedActive) throw new Error('Claude session is already active; wait for it before dispatching again.')
         if (root.jobs.some(isActiveJob)) throw new Error('Claude workspace has an active job; wait for it before dispatching again.')
         const suffix = root.jobs.length.toString(36)

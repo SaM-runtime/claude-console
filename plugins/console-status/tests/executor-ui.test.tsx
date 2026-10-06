@@ -51,7 +51,7 @@ test('executor control defaults to Claude, persists switches, resets settings an
   on('fs.list', () => ({ value: [] }))
   on('process.run', (_, e) => {
     calls.push(e)
-    return { value: { exitCode: 0, stdout: e.argv[0] === 'claude' ? '[]' : e.argv.some((arg: string) => arg.endsWith('codex-quota.ps1')) ? quota : 'OK codex=0.0.0-test', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    return { value: { exitCode: 0, stdout: e.argv[0] === 'claude' ? '[]' : e.argv.some((arg: string) => /codex-quota\.(ps1|sh)$/.test(arg)) ? quota : 'OK codex=0.0.0-test', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.usage', () => ({ value: null }))
   on('session.id', () => ({ value: 'console-session' }))
@@ -72,7 +72,7 @@ test('executor control defaults to Claude, persists switches, resets settings an
   quota = '{"rate_limits":{"primary":{"used_percent":20,"window_minutes":300}}}'
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   expect(await ui.find({ key: 'q-codex' })).toBeDefined()
-  expect(calls.some(call => call.argv.includes('-File'))).toBe(true)
+  expect(calls.some(call => call.argv.some((arg: string) => /codex-preflight\.(ps1|sh)$/.test(arg)))).toBe(true)
   await ui.press({ key: 'dispatch-model' })
   expect(JSON.parse(files[SETTINGS]).model).toBe('fiction-alpha')
   await $.command.run({ command: 'console', args: 'executor claude' } as any)

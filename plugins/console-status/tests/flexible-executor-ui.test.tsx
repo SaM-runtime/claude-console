@@ -37,8 +37,8 @@ function fixture(on: any, opts: Fixture = {}) {
   on('process.run', (_: any, e: any) => {
     const argv: string[] = [...e.argv]
     let stdout = ''
-    if (argv.some(arg => arg.endsWith('codex-preflight.ps1'))) { probes.push(argv); stdout = typeof opts.preflight === 'function' ? opts.preflight(argv) : opts.preflight ?? 'OK codex=0.0.0-test companion=OK' }
-    else if (argv.some(arg => arg.endsWith('codex-quota.ps1'))) stdout = opts.quota ?? ''
+    if (argv.some(arg => /codex-preflight\.(ps1|sh)$/.test(arg))) { probes.push(argv); stdout = typeof opts.preflight === 'function' ? opts.preflight(argv) : opts.preflight ?? 'OK codex=0.0.0-test companion=OK' }
+    else if (argv.some(arg => /codex-quota\.(ps1|sh)$/.test(arg))) stdout = opts.quota ?? ''
     else if (argv[0] === 'node') { launches.push(argv); stdout = '{"jobId":"codex-new"}' }
     else if (argv[1] === 'agents') stdout = JSON.stringify(sessions)
     else if (argv[1] === 'logs') stdout = 'working\n'
@@ -189,7 +189,7 @@ test('an empty companionScript resolves the newest installed Codex plugin and th
   } })
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   const resolved = `${cache}/1.0.10/scripts/codex-companion.mjs`
-  expect(h.probes[0]!.join('|').includes(`-CompanionScript|${resolved}`)).toBe(true)
+  expect(h.probes[0]!.join('|').includes(`--companion-script|${resolved}`)).toBe(true)
   const ui = await $.ui.mount(PANE)
   expect(await ui.find({ type: 'Text', text: /companion：.*1\.0\.10.*自動選用/ })).toBeDefined()
   await ui.press({ key: 'detail' })

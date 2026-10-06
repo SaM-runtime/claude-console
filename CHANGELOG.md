@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.7
+
+Merged upstream #4 (workflow pipeline, project mode, verify approval, perf and CI) onto the macOS branch; Claude jobs in a project worktree also match the shared agents query.
 
 - **Workflow pipeline per project.** 規格 → 實作 → 同步 → 驗證 → 審核 → 上線, derived from the CARD, executor jobs and the latest verification. A six-mark `流程` column in the project table, the full line with stage names on project cards and the action menu.
 - **Project mode.** A session started inside a registered project shows that project's pipeline in the band and a project card at the top of the pane, adds the CARD contract to the system prompt as one stable section, and attaches progress to a prompt only when it changed. `projectMode` option (`auto`/`off`) and `/console mode auto|console|project`.
@@ -8,6 +10,26 @@
 - **Keyboard and confirmations.** `m` opens the action menu for the row under the cursor (Esc closes it). Continue waits six seconds for the second press and the pane shows what it will dispatch or run while armed. A missing registry names its path and suggests `/console demo`. The status counts show only states that have projects.
 - **Verify commands need approval.** The CARD's `驗證` command is written by background executors, so the pane now shows it in full and runs a new or changed command only after a second press within 10 seconds. Approved commands are remembered per project in the plugin store; a store failure still runs the confirmed command, it just asks again next session.
 - **Codex state format guard.** A companion `state.json` that parses but has no recognisable `jobs` list (the Codex plugin changed its internals) is now reported on the companion footer line with the file and what is missing, instead of silently showing no Codex jobs. Half-written files are still skipped quietly and read again on the next refresh.
+
+## 0.2.6
+
+- **Band always shows every state.** 需決策, 待審核, 執行中, 待同步 and 閒置 keep their slot with a count of 0 included; zero counts are drawn faint so the states that need you still stand out. The context chip still appears only at 50% or more, and the strict priority order still drops trailing items on narrow terminals.
+
+## 0.2.5
+
+- **An agent waiting for your reply is finished, not running.** `status: idle` with `state: blocked` (the turn ended with a question) completes the job with phase `idle: 等你回覆`, so the project moves to 待同步 and dispatch is no longer held. Only `status: waiting` (a permission prompt mid-turn) keeps a blocked agent running.
+
+## 0.2.4
+
+- **Finished Claude jobs no longer stick as RUNNING.** A background agent that reports `status: idle` after its turn counts as completed (phase `idle`) once it is past a 60-second launch grace, even while `state` still says `working`; blocked agents stay running. The same rule decides whether the project's session is still active before a new dispatch. Agents working inside a Claude Code worktree of the project (`<root>/.claude/worktrees/…`) now reconcile their job instead of leaving it running forever.
+
+## 0.2.3
+
+- **Decisions shown in full, one per line.** A CARD `等使用者` is split into decisions on top-level `；`/`;`/newlines (bracketed commands stay whole), and each decision's `A) … B) …`, `1) 2)`, `(A)` or `①②` choices become one line each. The detail card, the action menu and a new "需要你決定" box under a selected project show them wrapped, never truncated; the hover strip and table keep a one-line summary (`2 項決策：…｜…`). The STATUS template and workflow skill ask executors to write choices in that format. The demo's first project shows two decisions with options.
+
+## 0.2.2
+
+- **macOS support.** Codex preflight and quota probes run as POSIX `sh` scripts (`scripts/codex-preflight.sh`, `scripts/codex-quota.sh`) on non-Windows hosts; Windows keeps the PowerShell scripts. The macOS preflight resolves the `codex` CLI (adding Homebrew prefixes to `PATH`), reads its version from the npm package, and reports a companion broker STALE when its `codex app-server` started before the CLI was last installed; it scans every configured companion state root for `broker.json` owners. The quota parser also accepts the raw rollout event line. `open STATUS.md` falls back to `open` instead of `cmd /c start` off Windows. Test fixtures use POSIX paths so the suite runs on macOS.
 
 ## 0.2.1
 

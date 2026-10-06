@@ -315,6 +315,36 @@ test('nonempty malformed session state fails closed before launching', async () 
   expect(h.writes.length).toBe(0)
 })
 
+test('an agent idle after its turn is done, but not inside the launch grace or at a permission prompt', async () => {
+  const jobs = (ids: string[]) => ids.map((id, i) => ({ id: `launch-${id}`, nativeId: id, sessionId: `${i}1111111-2222-4333-8444-555555555555`, root: 'D:/Project Alpha', prompt: id, startedAt: '2030-01-05T11:00:00.000Z', status: 'running', phase: 'working' }))
+  const h = harness({ 'D:/claude.json': JSON.stringify({ version: 1, roots: { 'd:/project alpha': { root: 'D:/Project Alpha', jobs: jobs(['idle0001', 'fresh001', 'block001', 'perm0001']) } } }) })
+  h.replies.push({ exitCode: 0, stdout: JSON.stringify([
+    { id: 'idle0001', sessionId: '01111111-2222-4333-8444-555555555555', cwd: 'D:/Project Alpha', kind: 'background', status: 'idle', state: 'working', startedAt: NOW - 10 * 60_000 },
+    { id: 'fresh001', sessionId: '11111111-2222-4333-8444-555555555555', cwd: 'D:/Project Alpha', kind: 'background', status: 'idle', state: 'working', startedAt: NOW - 5_000 },
+    { id: 'block001', sessionId: '21111111-2222-4333-8444-555555555555', cwd: 'D:/Project Alpha', kind: 'background', status: 'idle', state: 'blocked', startedAt: NOW - 10 * 60_000 },
+    { id: 'perm0001', sessionId: '31111111-2222-4333-8444-555555555555', cwd: 'D:/Project Alpha', kind: 'background', status: 'waiting', state: 'blocked', waitingFor: 'Bash', startedAt: NOW - 10 * 60_000 },
+  ]), stderr: '' })
+  const executor = createExecutor('claude', h.deps, { companionScript: '', companionStateRoots: [], claudeSessionsPath: 'D:/claude.json' })
+  expect((await executor.listJobs('D:/Project Alpha')).map(job => [job.nativeId, job.status, job.phase])).toEqual([
+    ['idle0001', 'completed', 'idle'],
+    ['fresh001', 'running', 'working'],
+    ['block001', 'completed', 'idle: 等你回覆'],
+    ['perm0001', 'running', 'blocked: Bash'],
+  ])
+})
+
+test('an agent working in a Claude worktree of the project reconciles its job', async () => {
+  const h = harness({ 'D:/claude.json': JSON.stringify({ version: 1, roots: { 'd:/project alpha': { root: 'D:/Project Alpha', jobs: [
+    { id: 'wt-launch', launchName: 'console-wt-0', nativeId: 'wt000001', sessionId: '11111111-2222-4333-8444-555555555555', root: 'D:/Project Alpha', prompt: 'fix', startedAt: '2030-01-05T11:00:00.000Z', status: 'running', phase: 'working' },
+  ] } } }) })
+  h.replies.push({ exitCode: 0, stdout: JSON.stringify([
+    { id: 'wt000001', name: 'console-wt-0', sessionId: '11111111-2222-4333-8444-555555555555', cwd: 'D:/Project Alpha/.claude/worktrees/fix-actions', kind: 'background', status: 'idle', state: 'done' },
+    { id: 'other001', name: 'console-other', sessionId: '21111111-2222-4333-8444-555555555555', cwd: 'D:/Project Alpha-other', kind: 'background', status: 'busy', state: 'working' },
+  ]), stderr: '' })
+  const executor = createExecutor('claude', h.deps, { companionScript: '', companionStateRoots: [], claudeSessionsPath: 'D:/claude.json' })
+  expect((await executor.listJobs('D:/Project Alpha')).map(job => [job.id, job.status])).toEqual([['wt-launch', 'completed']])
+})
+
 test('one shared agents query serves every project in a refresh and is filtered by exact root', async () => {
   const sessions = (root: string) => ({ version: 1, roots: { [root.toLowerCase()]: { root, jobs: [{ id: `n:${root}`, root, prompt: 'p', startedAt: '2030-01-05T11:00:00Z', status: 'running', phase: 'working', nativeId: root }] } } })
   const roots = ['D:/Alpha', 'D:/Beta', 'D:/Gamma']
@@ -347,4 +377,15 @@ test('a log tail is re-read only when the file changes, and an oversized log say
   stat = { size: 5 * 1024 * 1024, mtimeMs: 3 }
   expect(await executor.lastLine(job)).toContain('log 超過 4 MiB')
   expect(reads).toBe(2)
+})
+
+test('the shared agents query also matches an agent inside a project worktree', async () => {
+  const h = harness({ 'D:/claude.json': JSON.stringify({ version: 1, roots: { 'd:/project alpha': { root: 'D:/Project Alpha', jobs: [
+    { id: 'wt-launch', launchName: 'console-wt-0', nativeId: 'wt000001', sessionId: '11111111-2222-4333-8444-555555555555', root: 'D:/Project Alpha', prompt: 'fix', startedAt: '2030-01-05T11:00:00.000Z', status: 'running', phase: 'working' },
+  ] } } }) })
+  h.replies.push({ exitCode: 0, stdout: JSON.stringify([
+    { id: 'wt000001', name: 'console-wt-0', sessionId: '11111111-2222-4333-8444-555555555555', cwd: 'D:/Project Alpha/.claude/worktrees/fix', kind: 'background', status: 'idle', state: 'done' },
+  ]), stderr: '' })
+  const executor = createExecutor('claude', { ...h.deps, agents: sharedAgents(h.deps.run) }, { companionScript: '', companionStateRoots: [], claudeSessionsPath: 'D:/claude.json' })
+  expect((await executor.listJobs('D:/Project Alpha')).map(job => [job.id, job.status])).toEqual([['wt-launch', 'completed']])
 })

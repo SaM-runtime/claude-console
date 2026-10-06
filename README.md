@@ -13,10 +13,10 @@ Panel refreshes query local files and CLIs, then update mod-owned managed-state 
 
 ## Requirements
 
-- Windows; this is the currently verified operating system
+- Windows or macOS (macOS uses the bundled POSIX `sh` probes; no PowerShell needed)
 - Claude Code 2.1.289 or later with mod support
 - A project registry and one STATUS file per registered project
-- For `executor: codex` only: Node.js, PowerShell, Codex Companion and a Codex account; the desktop app is needed for its broker preflight
+- For `executor: codex` only: Node.js, Codex Companion and a Codex account. Windows probes need PowerShell and the Codex desktop app; macOS probes need the `codex` CLI on `PATH` (Homebrew prefixes are added automatically)
 
 ## Install
 
@@ -254,7 +254,8 @@ The project table has a six-mark `流程` column (from 64 columns wide); project
 
 ## Limitations
 
-- Bundled probes currently require Windows and PowerShell.
+- Bundled probes: PowerShell scripts on Windows, `sh` scripts on macOS. On macOS a broker is reported STALE when its `codex app-server` started before the installed Codex CLI was last upgraded.
+- On macOS, `open STATUS.md` falls back to `open` when the `code` CLI is unavailable.
 - The UI is currently Traditional Chinese.
 - Project matching depends on the configured registry and STATUS contract.
 - The panel reports local evidence and does not replace project-specific verification.

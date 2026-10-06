@@ -53,3 +53,14 @@ test('an open pane omits next and tiny widths never overflow', () => {
     expect(occupied(tiny) <= columns).toBe(true)
   }
 })
+
+test('every state keeps its slot; zero counts are marked for dim drawing', () => {
+  const now = NOW
+  const s = { ...demoSnapshot(now), demo: false, projects: demoSnapshot(now).projects.filter(p => p.name === 'Sample-API') }
+  const wide = layoutBand(s, { columns: 120, demo: false, paneOpen: true })
+  expect(wide.items.map(i => [i.text, !!i.zero])).toEqual([
+    ['● 需決策 0', true], ['◆ 待審核 0', true], ['▶ 執行中 0', true], ['↻ 待同步 0', true], ['上下文 62%', false], ['○ 閒置 1', false],
+  ])
+  const compact = layoutBand(s, { columns: 39, demo: false, paneOpen: true })
+  expect(compact.items.map(i => i.text)).toEqual(['●0', '◆0', '▶0', '↻0', '62%', '○1'])
+})

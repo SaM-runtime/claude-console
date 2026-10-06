@@ -251,7 +251,7 @@ export function demoSnapshot(now: number): Snapshot & { demo: true } {
     demo: true,
     at: now,
     projects: [
-      buildProject({ name: 'Project-Alpha', statusPath: 'demo/a' }, card('選擇示範介面配色', '示範測試通過；等待配色選擇', 12 * 60_000), [], now),
+      buildProject({ name: 'Project-Alpha', statusPath: 'demo/a' }, card('選擇示範介面配色：A) 深色主題 B) 淺色主題；示範資料是否保留：1) 保留 2) 清除', '示範測試通過；等待配色選擇', 12 * 60_000), [], now),
       buildProject({ name: 'Project-Beta', statusPath: 'demo/b' }, card('無；示範結果等待整理', '示範文件已整理', 3 * 3_600_000),
         [{ id: 'task-demo-new', jobClass: 'task', status: 'completed', completedAt: new Date(now - 60_000).toISOString() }], now),
       buildProject({ name: 'Project-Gamma', statusPath: 'demo/gamma' }, card('無', '示範證據已備妥', 86_400_000, 'review: 確認示範審核結果'), [], now),
@@ -282,6 +282,67 @@ export function demoEvents(now: number): Event[] {
     { at: now - 45_000, text: '示範：Codex 任務正在執行', tone: 'teal' },
     { at: now - 2 * 60_000, text: '示範：審核關卡已建立', tone: 'amber' },
   ]
+}
+
+export type DecisionOption = { key: string; text: string }
+export type Decision = { title: string; options: DecisionOption[] }
+
+const OPEN = '（(「【['
+const CLOSE = '）)」】]'
+// An option marker: `A)` `(A)` `A.` `A、` `A：` `1)` `(1)` `①`, at the start or after a space/punctuation.
+const OPTION_MARK = /(^|[\s，,。:：、])(?:[(（]([A-H]|[1-9])[)）]|([A-H]|[1-9])[)）]|([A-H])[.．、:：](?=\s*\S)|([①-⑨]))\s*/g
+
+const FIRST_KEYS = ['A', '1', '①']
+const optionKey = (m: RegExpMatchArray) => (m[2] ?? m[3] ?? m[4] ?? m[5])!
+const nextKey = (key: string) => String.fromCodePoint(key.codePointAt(0)! + 1)
+
+/** Split on `；` `;` and newlines that are not inside brackets (commands in parentheses stay whole). */
+function splitDecisions(text: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let buf = ''
+  for (const ch of text) {
+    if (OPEN.includes(ch)) depth++
+    else if (CLOSE.includes(ch)) depth = Math.max(0, depth - 1)
+    if (depth === 0 && (ch === '；' || ch === ';' || ch === '\n')) {
+      if (buf.trim()) out.push(buf.trim())
+      buf = ''
+      continue
+    }
+    buf += ch
+  }
+  if (buf.trim()) out.push(buf.trim())
+  return out
+}
+
+/**
+ * A CARD ask as separate decisions, each with its lettered or numbered options when it lists
+ * at least two (`選配色：A) 深色 B) 淺色；是否上線`). Text without markers stays one decision.
+ */
+export function parseAsk(ask: string): Decision[] {
+  return splitDecisions(ask.replace(/\\n/g, '\n')).map(part => {
+    // Keep the last run that counts up from A / 1 / ①, so a stray `Plan A.` is not an option.
+    let marks: RegExpMatchArray[] = []
+    for (const m of part.matchAll(OPTION_MARK)) {
+      const k = optionKey(m)
+      if (FIRST_KEYS.includes(k)) marks = [m]
+      else if (marks.length && k === nextKey(optionKey(marks[marks.length - 1]))) marks.push(m)
+    }
+    if (marks.length < 2) return { title: part, options: [] }
+    const start = (m: RegExpMatchArray) => (m.index ?? 0) + m[1].length
+    const options = marks.map((m, i) => ({
+      key: optionKey(m),
+      text: part.slice((m.index ?? 0) + m[0].length, i + 1 < marks.length ? start(marks[i + 1]) : part.length).trim().replace(/[，,、]$/, ''),
+    }))
+    return { title: part.slice(0, start(marks[0])).trim().replace(/[：:，,]$/, ''), options }
+  })
+}
+
+/** One line for narrow places: every decision title, options folded away. */
+export function askSummary(ask: string): string {
+  const decisions = parseAsk(ask)
+  const titles = decisions.map(d => d.title || d.options.map(o => o.text).join(' / ')).join('｜')
+  return decisions.length > 1 ? `${decisions.length} 項決策：${titles}` : titles
 }
 
 /** First clause of a CARD ask, short enough for one line (ADHD-style: action, not context). */
@@ -624,11 +685,15 @@ export function taskMeta(t: ExecutorTask, now: number): { icon: string; tone: 't
   return { icon: '✓', tone: 'green', meta: `${ago(Date.parse(t.completedAt ?? ''), now)} 前完成${suffix}` }
 }
 
-/** Parse `codex-quota.ps1` output; a window past its reset counts as unused. */
+/**
+ * Parse `codex-quota.ps1` output (`{ at, rate_limits }`) or the raw rollout event that
+ * `codex-quota.sh` prints (`{ timestamp, payload: { rate_limits | info.rate_limits } }`);
+ * a window past its reset counts as unused.
+ */
 export function parseCodexQuota(text: string, now: number): { at: string; limits: { label: string; percent: number; resetsAt?: string }[]; credits?: string } | null {
   let d: any
   try { d = JSON.parse(text.trim().split('\n').pop() ?? '') } catch { return null }
-  const rl = d?.rate_limits
+  const rl = d?.rate_limits ?? d?.payload?.rate_limits ?? d?.payload?.info?.rate_limits
   if (!rl) return null
   const limits: { label: string; percent: number; resetsAt?: string }[] = []
   for (const w of [rl.primary, rl.secondary]) {
@@ -640,5 +705,5 @@ export function parseCodexQuota(text: string, now: number): { at: string; limits
     limits.push({ label, percent: past ? 0 : w.used_percent, ...(Number.isFinite(reset) && !past ? { resetsAt: new Date(reset).toISOString() } : {}) })
   }
   const bal = rl.credits && !rl.credits.unlimited && rl.credits.balance != null ? String(rl.credits.balance) : undefined
-  return { at: String(d.at ?? ''), limits, ...(bal ? { credits: Number(bal).toLocaleString('en-US') } : {}) }
+  return { at: String(d.at ?? d.timestamp ?? ''), limits, ...(bal ? { credits: Number(bal).toLocaleString('en-US') } : {}) }
 }
