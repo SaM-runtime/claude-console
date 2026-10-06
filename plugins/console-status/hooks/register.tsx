@@ -56,7 +56,6 @@ const fallbackOffers = atom({ plugin: 'console-status', key: 'fallbackOffers' } 
 const actionLocks = new Set<string>()
 const earlyReviewStarts = new Map<string, string>()
 let selectionClaim: string | null = null
-const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
 // Slow probes (spawn processes) are cached between ticks; they reset on a reload, which is fine.
 let codex = '…'
@@ -131,6 +130,17 @@ async function readDispatch($: any, config: ConsoleConfig) {
   const { settings, source } = readSettingsFiles(text, legacy, { executor: config.executor, model: config.defaultModel, effort: config.defaultEffort })
   const cache = settings.executor === 'codex' ? await $.fs.read(config.modelsCachePath).catch(() => null) : null
   return { settings, source, models: modelOptions(settings.executor, parseModels(cache)) }
+}
+
+let renderCache: { key: string; value: Promise<{ config: ConsoleConfig; dispatch: Awaited<ReturnType<typeof readDispatch>> }> } | null = null
+/** Paths and dispatch settings for drawing, read once per settings revision and refresh. */
+function renderDispatch($: any, options: PluginOptions, key: string) {
+  if (renderCache?.key !== key) {
+    const value = paths($, options).then(async ({ config }) => ({ config, dispatch: await readDispatch($, config) }))
+    renderCache = { key, value }
+    value.catch(() => { if (renderCache?.value === value) renderCache = null })
+  }
+  return renderCache.value
 }
 
 /** One project's override, serialized with the global settings writes. */
@@ -422,9 +432,11 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     $.ui.toast(`${name}：${actionLabel(kind, p)}…`, { timeoutMs: 3000 })
     await update($, pendingActions, values => ({ ...values, [statusPath]: { kind, at: now } }))
     ownsPending = true
-    timer = $.clock.every(150, async () => {
+    // Once a second: the label shows elapsed seconds; terminal/desktop animate a client spinner beside it,
+    // so the whole pane is not redrawn several times a second (or sent to a phone that often).
+    timer = $.clock.every(1000, async () => {
       if (!(await read($, pendingActions))[statusPath]) { timer?.cancel(); return }
-      await update($, actionPulse, value => (value + 1) % SPINNER.length)
+      await update($, actionPulse, value => value + 1)
     })
     const { home, config } = await paths($, options)
     const root = projectRoot(p.statusPath)
@@ -841,11 +853,14 @@ export const register: Register = (on, options) => {
     const confirmations = await read($, continueConfirmations)
     const verified = await read($, verificationResults)
     const trusted = await read($, trustedVerify)
-    const pulse = await read($, actionPulse)
+    await read($, actionPulse) // redraws running action labels once a second
     const offers = demo ? {} : await read($, fallbackOffers)
-    const { config } = demo ? demoContext ?? { config: resolveConfig(options, '', '', '/tmp') } : await paths($, options)
-    await read($, dispatchRevision)
-    const dispatch = demo ? demoContext?.dispatch ?? { settings: { executor: s.executor ?? 'claude', model: '', effort: '' }, models: [] } : await readDispatch($, config)
+    const renderedAt = Object.keys(pending).length ? await $.clock.now() : s.at
+    const revision = await read($, dispatchRevision)
+    // Drawing never touches the disk on its own: settings are re-read after a write (revision) or a refresh (s.at).
+    const { config, dispatch } = demo
+      ? { config: demoContext?.config ?? resolveConfig(options, '', '', '/tmp'), dispatch: demoContext?.dispatch ?? { settings: { executor: s.executor ?? 'claude', model: '', effort: '' }, models: [] } }
+      : await renderDispatch($, options, `${revision}|${s.at}`)
     const cycle = async (field: GlobalField) => {
       try {
         const saved = await changeDispatch($, config, field)
@@ -968,9 +983,12 @@ export const register: Register = (on, options) => {
       const active = pending[p.statusPath]
       const blocked = kind === 'continue' || kind === 'sync' ? dispatchBlockReason(p) : ''
       const confirming = confirmations[p.statusPath]?.signature === (kind === 'continue' ? workSignature(p) : kind === 'verify' ? verifySignature(p.verify) : null)
-      const label = blocked ? `⇢ 無法派工：${blocked}` : active?.kind === kind ? `${SPINNER[pulse % SPINNER.length]} ${actionLabel(kind, p)}…`
+      const running = active?.kind === kind
+      const elapsed = running ? Math.max(0, Math.floor((renderedAt - active.at) / 1000)) : 0
+      const label = blocked ? `⇢ 無法派工：${blocked}` : running ? `${rich ? '' : '⋯ '}${actionLabel(kind, p)}… ${elapsed}s`
         : confirming ? '再按一次確認' : actionLabel(kind, p)
-      return <Box key={'help-' + key} hover={{ scope: 'help-action_' + kind }}>
+      return <Box key={'help-' + key} hover={{ scope: 'help-action_' + kind }} gap={running && rich ? 1 : 0}>
+        {running && rich && <ui.Client key={'spin-' + key} module="./spinner.tsx" width={1} height={1} props={{ color: C.dim }} />}
         <Button key={key} plain dimColor={!!active || !!blocked} label={label} onPress={async () => {
           if (!active && !blocked) await triggerAction($, options, p.statusPath, kind)
         }} />
