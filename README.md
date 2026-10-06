@@ -70,6 +70,7 @@ Marketplace management is covered by the official [plugin marketplace documentat
 | `modelsCachePath` | Codex model and effort cache | `~/.codex/models_cache.json` |
 | `codexFallback` | What to do when Codex is unusable: `ask`, `claude`, or `off` | `ask` |
 | `codexMinQuotaPercent` | Codex quota (percent remaining) below which the fallback applies | `10` |
+| `gitProbe` | `on`: each project's Git state (branch, uncommitted, unpushed) plus its pull request and CI checks through `gh`; `git`: local Git only; `off`: neither (see [Git, PR and CI](#git-pr-and-ci)) | `on` |
 | `projectMode` | `auto`: a session opened inside a registered project switches to project mode (see [Pipeline and project mode](#pipeline-and-project-mode)); `off`: always the multi-project console | `auto` |
 
 Paths beginning with `~` expand on Windows, macOS, and Linux. Run `/reload-plugins` or start another Claude Code session after plugin configuration changes. See [the registry example](workflow/projects-scope.example.md).
@@ -201,6 +202,19 @@ The right-click menu (or `m` on the keyboard for the row under the cursor; Esc c
 | ⚑ Review gate / final review | Recognized spec, review, or release gate | Sends evidence to the console Claude; release review cannot execute release |
 | ↗ Open STATUS.md | Always | Requests the editor to open the file |
 
+With the menu open, one key runs an action on offer: `v` verify, `s` sync, `c` continue (still asks for the second press), `d` decide, `g` gate, `o` open STATUS.md, `p` open the pull request. The menu lists the keys that apply to that project; a key for an action not on offer does nothing.
+
+## Git, PR and CI
+
+Each refresh reads `git status --porcelain=v2 --branch` in every project root (with `--no-optional-locks`, so it never takes the index lock a running executor needs). When `gh` is installed and signed in, `gh pr view` reads the current branch's pull request and its checks every five minutes, every minute while checks are still running, and on a forced refresh or a branch change. Neither spends model quota.
+
+- The project table gains a `Git` column (from 80 columns wide) with the most pressing item: `✕衝突n` merge conflicts, `CI✕n` failed checks on the open PR, `●n` uncommitted or untracked files, `↑n` unpushed, `↓n` behind upstream, `CI…` checks running, `✓` clean.
+- The action menu and expanded card show the branch and upstream, ahead/behind, uncommitted and untracked counts, and the PR with its review state and the names of failing checks, plus `↗ 開啟` to open it (`gh pr view --web`, else the OS URL handler).
+- The band shows `CI 失敗 n` in red while open PRs have failing checks. A new failure is a toast and a red feed line; a recovery and a merge are green feed lines.
+- A selected project's Git and PR lines ride along with the next prompt, so the console knows the branch and the failing check without asking.
+
+Set `gitProbe` to `git` to skip GitHub, or `off` to skip both. A project root that is not a repository simply shows nothing.
+
 Verification stores the latest timestamp, exit status, and final three captured lines per project. Put only trusted local checks in `驗證`; the command runs through a shell and must not contain deployment or formal-environment operations. Because background executors write the CARD, the pane shows the full command and runs a command it has not run for that project before (new, or changed since) only after a second press within 10 seconds; approved commands are remembered per project across sessions.
 
 A dispatch shows RUNNING optimistically until managed state is refreshed. Acceptance is not completion. GATE is purple, sorts after ACTION and before RUNNING, and remains busy until its matching Claude review turn ends. `prompt.fill` can refuse when no composer exists or a dialog owns it; the panel reports that failure without submitting a decision. Remote Control composer behavior still needs device acceptance testing.
@@ -259,7 +273,7 @@ The project table has a six-mark `流程` column (from 64 columns wide); project
 - The UI is currently Traditional Chinese.
 - Project matching depends on the configured registry and STATUS contract.
 - The panel reports local evidence and does not replace project-specific verification.
-- Refresh runs every 60 seconds; process probes are cached for five minutes unless forced.
+- Refresh runs every 60 seconds; process probes are cached for five minutes unless forced. `gh` probes follow the same five minutes (one minute while checks run) and run one per project, four at a time.
 - Roots with the same final directory name can collide in companion-state matching.
 - Codex support reads the Codex plugin's internal `state.json` and plugin cache layout. An unrecognised state shape is reported on the companion footer line; update console-status when that happens.
 - Keep one console session dispatching at a time. Writes to `claude-sessions.json` are serialized within one Claude Code process and refuse to overwrite a file another process changed, but the plugin file API has no rename or exclusive create, so two consoles writing in the same instant are not fully safe.

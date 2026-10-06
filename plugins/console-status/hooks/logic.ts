@@ -1,5 +1,6 @@
 // Pure logic for console-status: no I/O, so tests can exercise it directly.
 import type { Blocked, ExecutorTask, JobFlag, Project, Snapshot } from '../types'
+import { gitLine, prLine, prTransitions } from './git'
 import { parseProjectExecutor } from './dispatch'
 import type { ProjectExecutor } from './dispatch'
 
@@ -228,6 +229,9 @@ export function diffToasts(prev: Snapshot | null, cur: Snapshot): string[] {
       out.push(`${p.name}：執行者 ${result.label}（${j.id}）${result.followup ? `，${result.followup}` : ''}`)
     }
   }
+  for (const p of cur.projects) {
+    for (const t of prTransitions(p.name, prev.projects.find(x => x.name === p.name)?.pr, p.pr)) if (t.toast) out.push(t.text.replace('　', '：'))
+  }
   const prevBlocked = new Set(prev.blocked.map(b => b.name))
   for (const b of cur.blocked) if (!prevBlocked.has(b.name)) out.push(`session「${b.name}」${b.why}`)
   if (cur.codex.startsWith('STALE') && !prev.codex.startsWith('STALE')) out.push('Codex app 已更新，broker 過期：派工前請先處理')
@@ -251,16 +255,20 @@ export function demoSnapshot(now: number): Snapshot & { demo: true } {
     demo: true,
     at: now,
     projects: [
-      buildProject({ name: 'Project-Alpha', statusPath: 'demo/a' }, card('選擇示範介面配色：A) 深色主題 B) 淺色主題；示範資料是否保留：1) 保留 2) 清除', '示範測試通過；等待配色選擇', 12 * 60_000), [], now),
-      buildProject({ name: 'Project-Beta', statusPath: 'demo/b' }, card('無；示範結果等待整理', '示範文件已整理', 3 * 3_600_000),
+      { ...buildProject({ name: 'Project-Alpha', statusPath: 'demo/a' }, card('選擇示範介面配色：A) 深色主題 B) 淺色主題；示範資料是否保留：1) 保留 2) 清除', '示範測試通過；等待配色選擇', 12 * 60_000), [], now),
+        git: { branch: 'demo/theme', upstream: 'origin/demo/theme', ahead: 1, behind: 0, changed: 3, untracked: 1, conflicts: 0 } },
+      { ...buildProject({ name: 'Project-Beta', statusPath: 'demo/b' }, card('無；示範結果等待整理', '示範文件已整理', 3 * 3_600_000),
         [{ id: 'task-demo-new', jobClass: 'task', status: 'completed', completedAt: new Date(now - 60_000).toISOString() }], now),
+        git: { branch: 'demo/docs', upstream: 'origin/demo/docs', ahead: 0, behind: 0, changed: 0, untracked: 0, conflicts: 0 },
+        pr: { number: 42, title: '示範：整理文件', state: 'OPEN', draft: false, url: '', checks: { pass: 3, fail: 1, pending: 0, failing: ['demo-lint'] } } },
       buildProject({ name: 'Project-Gamma', statusPath: 'demo/gamma' }, card('無', '示範證據已備妥', 86_400_000, 'review: 確認示範審核結果'), [], now),
       buildProject({ name: 'Sample-Docs', statusPath: 'demo/c' }, card('無', '示範工作執行中', 4 * 86_400_000),
         [
           { id: 'task-demo-run', jobClass: 'task', status: 'running', executor: 'codex', startedAt: new Date(now - 8 * 60_000).toISOString(), request: { prompt: '示範任務：檢查合成 API 文件', model: 'codex-demo-running', effort: 'medium' } },
           { id: 'task-demo-done', jobClass: 'task', status: 'completed', executor: 'codex', completedAt: new Date(now - 60 * 60_000).toISOString(), request: { prompt: '示範任務：整理合成測試結果', model: 'codex-demo-completed', effort: 'high' } },
         ], now),
-      buildProject({ name: 'Sample-API', statusPath: 'demo/api' }, card('無', '示範 API 穩定', 2 * 86_400_000), [], now),
+      { ...buildProject({ name: 'Sample-API', statusPath: 'demo/api' }, card('無', '示範 API 穩定', 2 * 86_400_000), [], now),
+        git: { branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, changed: 0, untracked: 0, conflicts: 0 } },
     ],
     blocked: [{ name: '示範 session', why: '等批准' }],
     executor: 'claude', codex: 'OK demo', contextPercent: 62, error: null,
@@ -530,6 +538,8 @@ export function selectionContext(snap: Snapshot | null, full: string | null): st
   if (parseGate(p.gate)) lines.push(`關卡：${p.gate}`)
   if (p.next) lines.push(`下一步：${p.next}`)
   for (const j of p.jobs) lines.push(j.kind === 'running' ? `執行者執行中：${j.id}` : `執行者結果未同步至 STATUS：${j.id}（${j.status}）`)
+  if (p.git) lines.push(`Git：${gitLine(p.git)}`)
+  if (p.pr) lines.push(`PR：${prLine(p.pr)}${p.pr.url ? ` ${p.pr.url}` : ''}`)
   return lines.join('\n')
 }
 
@@ -580,6 +590,9 @@ export function events(prev: Snapshot | null, cur: Snapshot): Event[] {
         out.push({ at: cur.at, text: `${short(p.name)}　${executor} ${result.event}`, tone: result.tone })
       }
     }
+  }
+  for (const p of cur.projects) {
+    for (const t of prTransitions(short(p.name), prev.projects.find(x => x.name === p.name)?.pr, p.pr)) out.push({ at: cur.at, text: t.text, tone: t.tone })
   }
   const prevBlocked = new Set(prev.blocked.map(b => b.name))
   for (const b of cur.blocked) if (!prevBlocked.has(b.name)) out.push({ at: cur.at, text: `工作階段「${b.name}」${b.why}`, tone: 'amber' })

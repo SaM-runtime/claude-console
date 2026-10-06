@@ -70,6 +70,7 @@ Marketplace 管理請參考官方 [plugin marketplace 文件](https://code.claud
 | `modelsCachePath` | Codex 模型與 effort 快取 | `~/.codex/models_cache.json` |
 | `codexFallback` | Codex 無法使用時的處理：`ask`、`claude`、`off` | `ask` |
 | `codexMinQuotaPercent` | Codex 額度剩餘百分比低於此值時啟用備援 | `10` |
+| `gitProbe` | `on`：每個專案的 Git 狀態（分支、未提交、未推送）以及透過 `gh` 讀取的 PR 與 CI 檢查；`git`：只讀本機 Git；`off`：都不讀（見 [Git、PR 與 CI](#gitpr-與-ci)） | `on` |
 | `projectMode` | `auto`：在已登錄專案內開啟的 session 會切到專案模式（見[流程管線與專案模式](#流程管線與專案模式)）；`off`：一律是多專案主控台 | `auto` |
 
 Windows、macOS、Linux 都會展開開頭的 `~`。變更 plugin 設定後，請執行 `/reload-plugins` 或開新 Claude Code session。登錄表格式見 [範例](workflow/projects-scope.example.md)。
@@ -200,6 +201,19 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | ⚑ 審核關卡／最終審核 | 可辨識的 spec、review、release | 交主控台 Claude 審核；release 審核不會執行 release |
 | ↗ 開啟 STATUS.md | 一律 | 請編輯器開啟檔案 |
 
+選單開著時，一個鍵就能執行目前可用的動作：`v` 驗證、`s` 同步、`c` 繼續（仍需第二次確認）、`d` 決策、`g` 審核關卡、`o` 開啟 STATUS.md、`p` 開啟 PR。選單底部只列出該專案可用的鍵；不可用的動作按了不會有反應。
+
+## Git、PR 與 CI
+
+每次 refresh 會在各專案根目錄執行 `git status --porcelain=v2 --branch`（加上 `--no-optional-locks`，不會搶執行者需要的 index 鎖）。有安裝並登入 `gh` 時，`gh pr view` 讀取目前分支的 PR 與檢查：每五分鐘一次，檢查仍在跑時每分鐘一次，強制 refresh 或切換分支時立即讀取。兩者都不花模型額度。
+
+- 專案表格多一欄 `Git`（寬度 80 欄以上），顯示最需要處理的一項：`✕衝突n` 合併衝突、`CI✕n` 開啟中 PR 的檢查失敗、`●n` 未提交或未追蹤檔案、`↑n` 未推送、`↓n` 落後上游、`CI…` 檢查進行中、`✓` 乾淨。
+- 動作選單與展開的專案卡顯示分支與上游、領先／落後、未提交與未追蹤數量，以及 PR 的審查狀態與失敗檢查名稱，並提供 `↗ 開啟`（`gh pr view --web`，失敗時改用系統預設瀏覽器）。
+- 開啟中的 PR 有檢查失敗時，橫帶以紅色顯示 `CI 失敗 n`。新的失敗會 toast 並寫入紅色動態；恢復通過與合併寫入綠色動態。
+- 選取專案後，下一則提示會附上它的 Git 與 PR 資訊，主控台不用再問就知道分支與失敗的檢查。
+
+`gitProbe` 設為 `git` 可略過 GitHub，設為 `off` 兩者都略過。專案根目錄不是 Git repo 時不顯示任何 Git 資訊。
+
 驗證會保存每個專案最新時間、exit status 與最後三行輸出。`驗證` 只能放可信任的本機檢查；它會透過 shell 執行，不得包含部署或正式環境操作。CARD 由背景執行者寫入，因此面板會顯示完整指令；此專案未執行過的指令（新的或已被修改）須在 10 秒內再按一次才會執行，已確認的指令會依專案記住、跨 session 保留。
 
 派工後會先樂觀顯示 RUNNING，直到受管理狀態刷新。受理不代表完成。GATE 為紫色，排序在 ACTION 之後、RUNNING 之前，直到對應 Claude 審核回合結束才解除。`prompt.fill` 在沒有 composer 或對話框佔用時可能拒絕；面板會回報失敗，不會代送決策。Remote Control composer 仍需實機驗收。
@@ -258,7 +272,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 - UI 目前只有繁體中文。
 - 專案對應依賴設定的登錄表與 STATUS contract。
 - 面板呈現本機證據，不能取代專案自己的驗證。
-- 檔案每 60 秒刷新；process 探測會快取五分鐘，除非強制 refresh。
+- 檔案每 60 秒刷新；process 探測會快取五分鐘，除非強制 refresh。`gh` 探測同樣五分鐘一次（檢查進行中時一分鐘），每個專案一次、最多同時四個。
 - Companion state 以根目錄最後一段名稱配對；同名根目錄可能混淆。
 - 選取專案只附加一次 context，不會改變目前 cwd。
 - Codex 支援會讀取 Codex 外掛內部的 `state.json` 與 plugin cache 目錄結構。state 結構無法辨識時，companion 那一行會顯示警告；出現時請更新 console-status。

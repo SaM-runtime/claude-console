@@ -61,7 +61,7 @@ test('executor control defaults to Claude, persists switches, resets settings an
   expect((await ui.find({ key: 'dispatch-executor' }))?.text).toBe('claude')
   expect(await ui.find({ key: 'q-claude' })).toBeDefined()
   expect(await ui.find({ key: 'q-codex' })).toBeUndefined()
-  expect(calls.every(call => call.argv[0] === 'claude')).toBe(true)
+  expect(calls.every(call => call.argv[0] === 'claude' || call.argv[0] === 'git')).toBe(true)
   expect(reads.some(path => path.includes('/.codex/'))).toBe(false)
   await $.command.run({ command: 'console', args: 'model custom-claude-model' } as any)
   await $.command.run({ command: 'console', args: 'effort max' } as any)

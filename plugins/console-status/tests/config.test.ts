@@ -33,6 +33,7 @@ test('refresh consumes userConfig and plugin-relative scripts, then renders the 
   on('clock.now', () => ({ value: now }))
   on('env.get', (_, e) => ({ value: e.name === 'LOCALAPPDATA' ? 'D:/Local' : 'C:/Users/example' }))
   on('process.run', (_, e) => {
+    if (e.argv[0] === 'git') return { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } }
     commands.push([...e.argv])
     return { value: { exitCode: 0, stdout: e.argv[0] === 'claude' ? '[]' : 'unknown', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })

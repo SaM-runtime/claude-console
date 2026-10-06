@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.2.9",
+  "version": "0.3.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -80,6 +80,12 @@
       "title": "Companion state roots",
       "description": "JSON array of root paths. Blank reads plugin data first, then companionStateDir (Temp).",
       "default": ""
+    },
+    "gitProbe": {
+      "type": "string",
+      "title": "Git and PR status",
+      "description": "on: each project's branch, uncommitted and unpushed work (git) plus its pull request and CI checks (gh, when installed). git: local git only. off: neither.",
+      "default": "on"
     },
     "projectMode": {
       "type": "string",

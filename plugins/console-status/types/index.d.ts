@@ -24,6 +24,16 @@ export type Project = {
   isStale: boolean
   jobs: JobFlag[]
   tasks?: ExecutorTask[]
+  /** `git status` of the project root; absent when it is not a repository or `gitProbe` is off. */
+  git?: GitInfo
+  /** The pull request of the current branch (`gh pr view`); absent without gh, a PR or `gitProbe: on`. */
+  pr?: PrInfo
+}
+
+export type GitInfo = { branch: string; detached?: boolean; oid?: string; upstream?: string; ahead: number; behind: number; changed: number; untracked: number; conflicts: number }
+export type PrInfo = {
+  number: number; title: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; draft: boolean; url: string; review?: string
+  checks: { pass: number; fail: number; pending: number; failing: string[] }
 }
 
 export type FallbackOffer = { kind: 'sync' | 'continue'; reason: string; at: number }

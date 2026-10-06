@@ -19,6 +19,8 @@ import { stateFormatIssues, stateFormatWarning } from './jobs'
 import { pipeline, projectForCwd, projectModeSection, progressContext, progressSignature } from './pipeline'
 import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
+import { gitBadge, gitLine, gitProbeMode, gitStatusArgs, parseGitStatus, parsePrView, prLine, prViewArgs } from './git'
+import type { PrInfo } from '../types'
 
 import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
 import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
@@ -73,6 +75,8 @@ let agents: Agent[] = []
 let codexQuotaText = ''
 let companion: CompanionResolution | null = null
 let lastSlow = 0
+/** Last `gh pr view` per project root: re-asked on the slow interval, every tick while CI runs, or on a branch change. */
+const prCache = new Map<string, { at: number; branch: string; pr: PrInfo | null }>()
 let demoActive = false
 let dataGeneration = 0
 let refreshOwner: { generation: number; queued: boolean } | null = null
@@ -294,20 +298,37 @@ async function refresh($: any, options: PluginOptions, force = false) {
       agents: sharedAgents(run),
     }
     stateFormatIssues.clear()
+    const gitMode = gitProbeMode((options as any).gitProbe)
+    const pullRequest = async (root: string, branch: string, at: number, forced: boolean): Promise<PrInfo | null> => {
+      const cached = prCache.get(root)
+      const live = !!cached?.pr && cached.pr.state === 'OPEN' && cached.pr.checks.pending > 0
+      if (cached && cached.branch === branch && !forced && at - cached.at < (live ? TICK_MS - 5_000 : SLOW_MS)) return cached.pr
+      // gh missing or timed out: keep the last answer and ask again on the slow interval.
+      const r: any = await io.process.run(prViewArgs(), { cwd: root, timeoutMs: 20_000 })
+        .catch((error: unknown) => { if (error === DISCARDED_REFRESH) throw error; return undefined })
+      const pr = r === undefined ? (cached?.branch === branch ? cached.pr : null) : r.exitCode === 0 ? parsePrView(String(r.stdout ?? '')) : null
+      prCache.set(root, { at, branch, pr })
+      return pr
+    }
     const bases = registryRows.map(({ root }) => root.replace(/\/+$/, '').split('/').pop() ?? '')
     const roots = registryRows.map(({ root }) => root)
     // Projects are independent: read them a few at a time instead of one after another.
     const loaded = await mapLimit(registryRows, REFRESH_CONCURRENCY, async ({ row, root }, index) => {
       const eff = effective[index]!
       const listing: ExecutorKind = eff.executor === 'manual' ? settings.executor : eff.executor
-      const [card, jobs] = await Promise.all([
+      const [card, jobs, git] = await Promise.all([
         io.fs.read(row.statusPath).catch(() => null) as Promise<string | null>,
         guarded(() => workspaceJobs(listing, deps, withCompanion(config), root)),
+        gitMode === 'off' ? null : io.process.run(gitStatusArgs(root), { timeoutMs: 10_000 })
+          .then((r: any) => r.exitCode === 0 ? parseGitStatus(String(r.stdout ?? '')) : null)
+          .catch((error: unknown) => { if (error === DISCARDED_REFRESH) throw error; return null }),
       ])
+      const pr = git && gitMode === 'on' && git.branch ? await pullRequest(root, git.branch, now, force) : null
       const warnings = jobs.filter(job => job.warning).map(job => `${row.name}：${job.warning}`)
       const project: Project = {
         ...buildProject(row, card, jobs, now), executor: eff.executor, executorSource: eff.source,
         ...(row.executor ? { registryExecutor: row.executor } : {}),
+        ...(git ? { git } : {}), ...(pr ? { pr } : {}),
       }
       await Promise.all(project.jobs.filter(j => j.kind === 'running').map(async j => {
         const job = jobs.find(item => item.id === j.id && item.executor === j.executor)
@@ -601,6 +622,22 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
   }
 }
 
+/** Opens a project's pull request in the browser: `gh pr view --web`, else the OS URL handler. */
+async function openPullRequest($: any, p: Project) {
+  if (!p.pr) return
+  const name = p.name.replace(/\s.*$/, '')
+  const opened = await $.process.run(['gh', 'pr', 'view', String(p.pr.number), '--web'], { cwd: projectRoot(p.statusPath), timeoutMs: 15_000 }).catch(() => null)
+  if (!opened || opened.exitCode !== 0) {
+    const fallback = p.pr.url ? await $.process.run(openFallbackArgs(p.pr.url, isWindowsOs(await $.env.get('OS'))), { timeoutMs: 15_000 }).catch(() => null) : null
+    if (!fallback || fallback.exitCode !== 0) { $.ui.toast(`${name}：無法開啟 PR #${p.pr.number}${p.pr.url ? `（${p.pr.url}）` : ''}`, { timeoutMs: 8000 }); return }
+  }
+  $.ui.toast(`${name}：已開啟 PR #${p.pr.number}`, { timeoutMs: 3000 })
+}
+
+/** Action-menu hotkeys: one letter per action, shown in the menu; only actions on offer respond. */
+const HOTKEYS: Record<string, ActionKind> = { v: 'verify', s: 'sync', c: 'continue', d: 'decide', g: 'gate', o: 'open' }
+const HOTKEY_OF: Partial<Record<ActionKind, string>> = Object.fromEntries(Object.entries(HOTKEYS).map(([k, kind]) => [kind, k]))
+
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     sessionCwd = typeof e.cwd === 'string' ? e.cwd.replace(/\\/g, '/') : null
@@ -816,6 +853,7 @@ export const register: Register = (on, options) => {
     GATE: '待審核：STATUS 的 spec／review 關卡送交主控台判斷；release 只整理可否上線與理由，最後由你決定，不會自動上線。',
     action_verify: '執行 CARD 驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。新的或被修改過的指令會先完整顯示，10 秒內再按一次才執行。只應填入本機驗證，不可填正式環境操作。',
     action_sync: '直接請所選執行者將最近結果同步回 STATUS CARD 與歷程，使用派工模型設定與該執行者額度。',
+    git: 'Git：✕衝突 合併衝突　CI✕ PR 的檢查失敗　●n 未提交／未追蹤檔案　↑n 未推送　↓n 落後上游　CI… 檢查進行中　✓ 乾淨。git 每次更新讀取（不鎖 index），PR 與 CI 透過 gh 每 5 分鐘讀取，CI 進行中時每分鐘。gitProbe 選項可改為 git 或 off。',
     pipeline: '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線。● 完成　◉ 執行中　◆ 等待（主控台、使用者或同步）　✕ 驗證失敗　○ 未到。由 CARD、執行者工作與最近一次驗證推得。',
     action_continue: '6 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
@@ -881,7 +919,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
         <Box gap={1} flexShrink={0} height={1}>
           {band.items.map(item => <Box key={'band-' + item.id} width={item.width} flexShrink={0} height={1} overflow="hidden">
-            <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' ? C.red : FG[item.id as State] ?? C.text}
+            <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' || item.id === 'ci' ? C.red : FG[item.id as State] ?? C.text}
               backgroundColor={item.id === 'demo' ? C.bar : undefined}>{item.text}</Text>
           </Box>)}
         </Box>
@@ -921,6 +959,17 @@ export const register: Register = (on, options) => {
       if (k === 'm' || k === '.') {
         const id = list[Math.max(0, await read($, cursor))]?.full
         if (id) await update($, menuFor, v => (v === id ? null : id))
+      }
+      const menuName = await read($, menuFor)
+      const menuProject = menuName === null ? null : s?.projects.find(p => p.name === menuName)
+      if (menuProject && !(await demoEnabled($))) {
+        const kind = HOTKEYS[k]
+        const state = list.find(r => r.full === menuProject.name)?.state
+        if (kind && state && actionKinds(menuProject, state).includes(kind) && !(await read($, pendingActions))[menuProject.statusPath]) {
+          void triggerAction($, options, menuProject.statusPath, kind)
+          return {}
+        }
+        if (k === 'p' && menuProject.pr) { void openPullRequest($, menuProject); return {} }
       }
       if (k === 'escape') {
         if (await read($, menuFor)) await update($, menuFor, () => null)
@@ -996,7 +1045,10 @@ export const register: Register = (on, options) => {
     const width: number = Math.max(40, (e.props.bodyColumns ?? 80) - 1)
     const list = rows(s)
     const now = await $.clock.now()
-    const W = { state: 8, project: projectColumnWidth(list.map(row => row.project)), age: 4, flow: width >= 64 ? 6 : 0 }
+    const showGit = s.projects.some(p => p.git)
+    const W = { state: 8, project: projectColumnWidth(list.map(row => row.project)), age: 4, flow: width >= 64 ? 6 : 0, git: showGit && width >= 80 ? 7 : 0 }
+    const badges = new Map(s.projects.map(p => [p.name, gitBadge(p.git, p.pr)]))
+    const GIT_TONE: Record<string, string> = { red: C.red, amber: C.amber, blue: C.blue, teal: C.teal, green: C.green, dim: C.dim }
     const pipes = new Map(s.projects.map(p => [p.name, pipeline(p, verified[p.statusPath])]))
     const here = demo ? null : await focused($, options, s)
 
@@ -1010,6 +1062,7 @@ export const register: Register = (on, options) => {
         { t: r.project, c: r.state === 'IDLE' ? C.dim : C.strong, w: W.project },
         { t: r.item, c: r.state === 'IDLE' ? C.dim : C.text },
         ...(W.flow ? [{ t: '', w: W.flow, parts: pipes.get(r.full) ? pipelineParts(pipes.get(r.full)!, PIPE) : [] }] : []),
+        ...(W.git ? [{ t: badges.get(r.full)?.text ?? '', c: GIT_TONE[badges.get(r.full)?.tone ?? 'dim'], w: W.git }] : []),
         { t: r.age, c: C.dim, w: W.age, right: true },
       ],
     }))
@@ -1031,6 +1084,7 @@ export const register: Register = (on, options) => {
               </Box>
               <Box flexGrow={1} flexShrink={1}><Text color={C.text} wrap={detail ? 'wrap' : 'truncate-end'}>{r.item}</Text></Box>
               {W.flow > 0 && <Box width={W.flow} flexShrink={0}><Text>{(pipes.get(r.full) ? pipelineParts(pipes.get(r.full)!, PIPE) : []).map((part, index) => <Text key={'fp-' + index} color={part.c}>{part.t}</Text>)}</Text></Box>}
+              {W.git > 0 && <Box width={W.git} flexShrink={0} overflow="hidden"><Text color={GIT_TONE[badges.get(r.full)?.tone ?? 'dim']} wrap="truncate-end">{badges.get(r.full)?.text ?? ''}</Text></Box>}
               <Box width={W.age} justifyContent="flex-end"><Text color={C.dim}>{r.age}</Text></Box>
             </Box>
           ))}
@@ -1199,6 +1253,14 @@ export const register: Register = (on, options) => {
         {field('關卡', parseGate(p.gate) ? p.gate ?? '' : '', C.purple)}
         {field('下一步', p.next, C.text)}
         {field('同步', !running.length && p.jobs.some(j => j.kind === 'newer') ? '執行者已結束，結果未寫回 STATUS' : '', C.blue)}
+        {p.git && field('Git', gitLine(p.git), p.git.conflicts ? C.red : p.git.changed || p.git.untracked ? C.amber : p.git.ahead || p.git.behind ? C.blue : C.dim)}
+        {p.pr && (
+          <Box key={prefix + 'pr'} gap={2}>
+            <Box width={6} flexShrink={0}><Text color={C.dim}>PR</Text></Box>
+            <Box flexGrow={1} flexShrink={1}><Text color={p.pr.state === 'OPEN' && p.pr.checks.fail ? C.red : p.pr.state === 'OPEN' && p.pr.checks.pending ? C.teal : C.text} wrap="wrap">{prLine(p.pr)}</Text></Box>
+            <Box flexShrink={0}><Button key={prefix + 'pr-open'} plain dimColor label="↗ 開啟" onPress={() => void openPullRequest($, p)} /></Box>
+          </Box>
+        )}
       </Box>
     }
     const verificationView = (p: Project) => {
@@ -1273,6 +1335,7 @@ export const register: Register = (on, options) => {
             <Box width={W.project}><Text color={C.dim}>專案</Text></Box>
             <Box flexGrow={1}><Text color={C.dim}>項目</Text></Box>
             {W.flow > 0 && <Box width={W.flow} flexShrink={0} hover={{ scope: 'help-pipeline' }}><Text color={C.dim}>流程</Text></Box>}
+            {W.git > 0 && <Box width={W.git} flexShrink={0} hover={{ scope: 'help-git' }}><Text color={C.dim}>Git</Text></Box>}
             <Box width={W.age} justifyContent="flex-end"><Text color={C.dim}>更新</Text></Box>
           </Box>
           {rule}
@@ -1291,6 +1354,12 @@ export const register: Register = (on, options) => {
               {projectInfo(menuProject, 'm-info-')}
               <Box marginTop={1}>{projectActions(menuProject, 'm-')}</Box>
               {verificationView(menuProject)}
+              {rich && (() => {
+                const st = list.find(r => r.full === menuProject.name)?.state ?? 'NOCARD'
+                const keys = actionKinds(menuProject, st).filter(kind => HOTKEY_OF[kind]).map(kind => `${HOTKEY_OF[kind]} ${actionLabel(kind, menuProject).replace(/^\S+\s*/, '')}`)
+                if (menuProject.pr) keys.push('p 開啟 PR')
+                return <Text key="m-keys" color={C.faint} wrap="wrap">{`快捷鍵　${[...keys, 'Esc 關閉'].join('・')}`}</Text>
+              })()}
             </Box>
           )}
           {sel !== null

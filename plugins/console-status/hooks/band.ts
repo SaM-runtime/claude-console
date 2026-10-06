@@ -65,6 +65,9 @@ export function layoutBand(snapshot: Snapshot, options: { columns: number; demo:
   state('GATE', '◆', '待審核')
   state('RUNNING', '▶', '執行中')
   state('SYNC', '↻', '待同步')
+  // Open PRs whose CI failed: shown only when there are any, red, before the context warning.
+  const ciFail = snapshot.projects.filter(p => p.pr?.state === 'OPEN' && p.pr.checks.fail > 0).length
+  if (ciFail) candidates.push({ id: 'ci', text: compact ? `CI✕${ciFail}` : `CI 失敗 ${ciFail}` })
   if (context) candidates.push({ id: 'context', text: compact ? `${snapshot.contextPercent}%` : `上下文 ${snapshot.contextPercent}%` })
   state('IDLE', '○', '閒置')
 
