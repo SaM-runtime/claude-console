@@ -56,7 +56,9 @@ fi
 [ -n "$version" ] || version='unknown'
 
 # Inode change time is set by the install itself; package tarballs fix mtime to 1985.
-installed=$(stat -f %c "$stamp_file" 2>/dev/null || stat -c %Z "$stamp_file" 2>/dev/null)
+# GNU first: GNU `stat -f` means file-system status and prints it to stdout even when the format
+# is not one of its own, which would be captured here. BSD `stat -c` fails without output.
+installed=$(stat -c %Z "$stamp_file" 2>/dev/null || stat -f %c "$stamp_file" 2>/dev/null)
 processes=$(ps -axo pid=,ppid=,etime=,command= 2>/dev/null)
 if [ -z "$installed" ] || [ -z "$processes" ]; then
   echo "UNKNOWN codex=$version companion=$companion process-scan=unavailable"

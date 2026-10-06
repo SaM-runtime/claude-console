@@ -6,7 +6,7 @@ import type { Register, PluginOptions } from 'claude-code'
 import { resolveConfig, resolveFallbackOptions, legacyDispatchPath } from './config'
 import type { ConsoleConfig } from './config'
 import { codexHealth, isActiveJob } from './logic'
-import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles, effectiveDispatch, setProjectOverride, nextProjectExecutor, executorSignature, projectOverride } from './dispatch'
+import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles, effectiveDispatch, setProjectOverride, executorSignature, projectOverride } from './dispatch'
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
@@ -843,7 +843,6 @@ export const register: Register = (on, options) => {
   const FG: Record<State, string> = { ACTION: C.amber, GATE: C.purple, RUNNING: C.teal, SYNC: C.blue, IDLE: C.grey, NOCARD: C.red }
   const BG: Record<State, string | undefined> = { ACTION: C.amberBg, GATE: C.purpleBg, RUNNING: C.tealBg, SYNC: C.blueBg, IDLE: undefined, NOCARD: undefined }
   const SHOWN: State[] = ['ACTION', 'GATE', 'RUNNING', 'SYNC', 'IDLE']
-  const EXECUTOR_TAG: Record<string, string> = { pane: '・面板', registry: '・登錄表', global: '' }
   const TONE: Record<string, string> = { amber: C.amber, teal: C.teal, blue: C.blue, red: C.red, green: C.green }
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, nextHook) => {
@@ -968,17 +967,24 @@ export const register: Register = (on, options) => {
         $.ui.toast(`派工設定已儲存：${saved.executor} · ${saved.model || '預設'} · ${saved.effort || '預設'}`)
       } catch (error) { $.ui.toast(`設定未儲存：${error instanceof Error ? error.message : String(error)}`) }
     }
-    const cycleProject = async (p: Project) => {
+    /**
+     * Pick one project's executor ('' = inherit). The snapshot is patched at once so the label,
+     * the actions and the dispatch guard all agree before the (slow) refresh comes back.
+     */
+    const chooseProjectExecutor = async (p: Project, value: '' | 'claude' | 'codex' | 'manual') => {
       if (await demoEnabled($)) { $.ui.toast('示範資料：不變更專案設定。'); return }
       try {
         const root = projectRoot(p.statusPath)
-        const nextExecutor = nextProjectExecutor(projectOverride(dispatch.settings, root)?.executor)
-        const saved = await changeProjectDispatch($, config, root, 'executor', nextExecutor)
+        const saved = await changeProjectDispatch($, config, root, 'executor', value)
+        const eff = effectiveDispatch(saved, root, p.registryExecutor)
+        await update($, snapshot, current => current && {
+          ...current,
+          projects: current.projects.map(item => item.statusPath === p.statusPath ? { ...item, executor: eff.executor, executorSource: eff.source } : item),
+        })
         await update($, fallbackOffers, values => { const rest = { ...values }; delete rest[p.statusPath]; return rest })
         await update($, dispatchRevision, v => v + 1)
-        await refresh($, options, true)
-        const eff = effectiveDispatch(saved, root, p.registryExecutor)
-        $.ui.toast(`${p.name.replace(/\s.*$/, '')} 執行者：${eff.executor}（${SOURCE_LABEL[eff.source]}）`)
+        $.ui.toast(`${p.name} 執行者：${eff.executor}（${SOURCE_LABEL[eff.source]}）`)
+        void refresh($, options, true)
       } catch (error) { $.ui.toast(`設定未儲存：${error instanceof Error ? error.message : String(error)}`) }
     }
     const codexShown = dispatch.settings.executor === 'codex' || !!s.codexInUse
@@ -1099,7 +1105,7 @@ export const register: Register = (on, options) => {
     const projectActions = (p: Project, prefix: string) => {
       const state = list.find(r => r.full === p.name)?.state ?? 'NOCARD'
       const kinds = actionKinds(p, state)
-      if (!isManual(p) && dispatchBlockReason(p) && !kinds.includes('continue')) kinds.unshift('continue')
+      const blockedReason = !isManual(p) ? dispatchBlockReason(p) : ''
       const active = pending[p.statusPath]?.kind
       if (active && !kinds.includes(active)) kinds.unshift(active)
       const offer = p.executor === 'codex' ? offers[p.statusPath] : undefined
@@ -1109,6 +1115,7 @@ export const register: Register = (on, options) => {
       return <Box flexDirection="column">
         <Box gap={2} flexWrap="wrap">
           {kinds.map(kind => actionButton(p, kind, prefix + kind))}
+          {blockedReason && <Text key={prefix + 'blocked'} color={C.dim}>派工鎖定：{blockedReason}</Text>}
           {offer && <Box key={'help-' + prefix + 'fallback'} hover={{ scope: 'help-fallback' }}>
             <Button key={prefix + 'fallback'} plain dimColor={!!pending[p.statusPath]} label={`⇢ 改用 Claude 派工（${actionLabel(offer.kind, p).replace(/^⇢\s*/, '')}）`} onPress={async () => {
               if (!pending[p.statusPath]) await triggerAction($, options, p.statusPath, offer.kind, { useClaude: true })
@@ -1118,8 +1125,15 @@ export const register: Register = (on, options) => {
         {pendingConfirm && <Text key={prefix + 'confirm'} color={C.amber} wrap="wrap">{pendingConfirm}</Text>}
         <Box gap={1} flexWrap="wrap">
           <Text color={C.dim}>執行者</Text>
-          <Box hover={{ scope: 'help-project_executor' }}>
-            <Button key={prefix + 'executor'} plain label={`${p.executor ?? dispatch.settings.executor}${EXECUTOR_TAG[p.executorSource ?? 'global'] ?? ''}`} onPress={() => cycleProject(p)} />
+          <Box hover={{ scope: 'help-project_executor' }} gap={1}>
+            {(['', 'claude', 'codex', 'manual'] as const).map(value => {
+              const override = projectOverride(dispatch.settings, projectRoot(p.statusPath))?.executor ?? ''
+              const chosen = override === value
+              const inherited = effectiveDispatch({ ...dispatch.settings, projects: {} }, projectRoot(p.statusPath), p.registryExecutor)
+              const label = value === '' ? `沿用（${inherited.executor}・${SOURCE_LABEL[inherited.source]}）` : value
+              return <Button key={prefix + 'executor-' + (value || 'inherit')} plain dimColor={!chosen}
+                label={chosen ? `[${label}]` : label} onPress={() => { if (!chosen) void chooseProjectExecutor(p, value) }} />
+            })}
           </Box>
           {isManual(p) && <Text color={C.dim}>手動交接：面板不派工（CARD、驗證、關卡照常）</Text>}
           {offer && <Text color={C.amber} wrap="truncate-end">Codex 未派工：{offer.reason}</Text>}
@@ -1151,6 +1165,40 @@ export const register: Register = (on, options) => {
           ))}
         </Box>
       )
+    }
+    /** What a person needs to decide the next move: what is running (and its last output), then the CARD. */
+    const projectInfo = (p: Project, prefix: string, opts: { state?: boolean } = {}) => {
+      const field = (label: string, value: string, color: string) => value ? (
+        <Box key={prefix + label} gap={2}>
+          <Box width={6} flexShrink={0}><Text color={C.dim}>{label}</Text></Box>
+          <Box flexGrow={1} flexShrink={1}><Text color={color} wrap="wrap">{value}</Text></Box>
+        </Box>
+      ) : null
+      const running = p.jobs.filter(j => j.kind === 'running')
+      return <Box flexDirection="column" marginTop={1}>
+        {running.map(j => {
+          const task = (p.tasks ?? []).find(t => t.id === j.id)
+          const meta = task ? taskMeta(task, s.at).meta : runLine(j, s.at)
+          return <Box key={prefix + 'run-' + j.id} flexDirection="column">
+            <Box gap={1}>
+              <Box width={2} flexShrink={0}><Text color={C.teal}>◉</Text></Box>
+              <Box flexGrow={1} flexShrink={1}><Text color={C.strong} wrap="truncate-end">{task?.title ?? (j.summary || j.id)}</Text></Box>
+              <Box flexShrink={0}><Text color={C.dim}>{meta}</Text></Box>
+            </Box>
+            {j.last && <Text color={C.dim} wrap="truncate-end">{'   › '}{j.last}</Text>}
+          </Box>
+        })}
+        {opts.state && field('狀態', p.state, C.text)}
+        {hasAsk(p) && (
+          <Box key={prefix + '待決'} gap={2}>
+            <Box width={6} flexShrink={0}><Text color={C.dim}>待決</Text></Box>
+            <Box flexGrow={1} flexShrink={1}>{decisionView(p, prefix)}</Box>
+          </Box>
+        )}
+        {field('關卡', parseGate(p.gate) ? p.gate ?? '' : '', C.purple)}
+        {field('下一步', p.next, C.text)}
+        {field('同步', !running.length && p.jobs.some(j => j.kind === 'newer') ? '執行者已結束，結果未寫回 STATUS' : '', C.blue)}
+      </Box>
     }
     const verificationView = (p: Project) => {
       const result = verified[p.statusPath]
@@ -1211,7 +1259,7 @@ export const register: Register = (on, options) => {
         </Box>
 
         <Box gap={3} flexWrap="wrap">
-          {s.projects.length > 1 && SHOWN.filter(k => c[k]).map(k => (
+          {s.projects.length > 1 && SHOWN.map(k => (
             <Box key={'k' + k} hover={{ scope: 'help-' + k }}>
               <Text color={c[k] ? FG[k] : C.faint}>● {LABEL[k].replace('　', '')} <Text bold>{c[k]}</Text></Text>
             </Box>
@@ -1231,12 +1279,17 @@ export const register: Register = (on, options) => {
           {rule}
           {menuProject && (
             <Box key="menu" flexDirection="column" borderStyle="round" borderColor={C.blue} paddingX={1} marginTop={1}>
-              <Text color={C.blue}>{menuProject.name.replace(/\s.*$/, '')}　動作</Text>
-              {pipes.get(menuProject.name) && pipelineLine(pipes.get(menuProject.name)!, PIPE, ui, 'm-pipeline')}
-              {hasAsk(menuProject) && <Box marginY={1}>{decisionView(menuProject, 'm-')}</Box>}
-              {projectActions(menuProject, 'm-')}
+              <Box justifyContent="space-between" gap={1}>
+                <Box gap={1} flexShrink={1}>
+                  {(() => { const st = list.find(r => r.full === menuProject.name)?.state ?? 'NOCARD'; return <Text bold color={FG[st]} backgroundColor={BG[st]}>{` ${LABEL[st]} `}</Text> })()}
+                  <Text bold color={C.strong} wrap="truncate-end">{menuProject.name}</Text>
+                </Box>
+                <Button key="m-close" plain dimColor label="✕ 關閉" onPress={() => void update($, menuFor, () => null)} />
+              </Box>
+              {pipes.get(menuProject.name) && <Box marginTop={1}>{pipelineLine(pipes.get(menuProject.name)!, PIPE, ui, 'm-pipeline', { noteless: menuProject.jobs.some(j => j.kind === 'running') })}</Box>}
+              {projectInfo(menuProject, 'm-info-')}
+              <Box marginTop={1}>{projectActions(menuProject, 'm-')}</Box>
               {verificationView(menuProject)}
-              <Button key="m-close" plain dimColor label="✕" onPress={() => void update($, menuFor, () => null)} />
             </Box>
           )}
           {sel !== null
@@ -1272,13 +1325,6 @@ export const register: Register = (on, options) => {
                   </Box>
                 )
               }
-              const field = (label: string, value: string, color: string) => value ? (
-                <Box key={label} gap={2}>
-                  <Box width={6} flexShrink={0}><Text color={C.dim}>{label}</Text></Box>
-                  <Box flexGrow={1} flexShrink={1}><Text color={color} wrap="wrap">{value}</Text></Box>
-                </Box>
-              ) : null
-              const run = p.jobs.find(j => j.kind === 'running')
               return (
                 <Box key={'d-' + p.name} flexDirection="column" borderStyle="round" borderColor={row.state === 'IDLE' ? C.faint : FG[row.state]} paddingX={1} marginY={1}>
                   <Box justifyContent="space-between" gap={1}>
@@ -1289,18 +1335,7 @@ export const register: Register = (on, options) => {
                     <Text color={C.dim}>{row.age && row.age !== '—' ? `${row.age}前更新` : '無卡片'}</Text>
                   </Box>
                   {pipes.get(p.name) && <Box marginTop={1}>{pipelineLine(pipes.get(p.name)!, PIPE, ui, 'd-pipeline-' + p.name, { noteless: true })}</Box>}
-                  <Box flexDirection="column" marginTop={1}>
-                    {field('狀態', p.state, C.text)}
-                    {hasAsk(p) && (
-                      <Box key="待決" gap={2}>
-                        <Box width={6} flexShrink={0}><Text color={C.dim}>待決</Text></Box>
-                        <Box flexGrow={1} flexShrink={1}>{decisionView(p, 'detail-' + p.name + '-')}</Box>
-                      </Box>
-                    )}
-                    {field('關卡', parseGate(p.gate) ? p.gate ?? '' : '', C.purple)}
-                    {field('下一步', p.next, C.text)}
-                    {field('同步', !run && p.jobs.some(j => j.kind === 'newer') ? '執行者已結束，結果未寫回 STATUS' : '', C.blue)}
-                  </Box>
+                  {projectInfo(p, 'd-info-' + p.name + '-', { state: true })}
                   {projectActions(p, 'detail-' + p.name + '-')}
                   {verificationView(p)}
                   {(p.tasks ?? []).length > 0 && (

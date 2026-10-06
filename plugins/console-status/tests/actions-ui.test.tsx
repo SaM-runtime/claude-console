@@ -15,6 +15,9 @@ function fixture(on: any) {
     toasts: [] as string[], processCalls: [] as any[], state: {} as Record<string, any>, reads: [] as string[],
     run: async (_e: any): Promise<any> => result(),
     usage: async (): Promise<any> => null,
+    /** ms the `claude agents` probe takes, to model a refresh that is still running. */
+    agentsDelay: 0,
+    files: {} as Record<string, string>,
   }
   on('fs.list', () => ({ value: [{ name: 'Project Alpha-hash', kind: 'dir' }] }))
   on('fs.read', (_: any, e: any) => {
@@ -28,10 +31,11 @@ function fixture(on: any) {
       'C:/Users/example/.claude/handoffs/dispatch.json': data.settings,
       'C:/Users/example/.codex/models_cache.json': '{}',
     }
-    return { value: files[path] ?? '' }
+    return { value: data.files[path] ?? files[path] ?? '' }
   })
+  on('fs.write', (_: any, e: any) => { data.files[fixturePath(e.path)] = e.text; return { value: undefined } })
   on('process.run', async (_: any, e: any) => {
-    if (e.argv[0] === 'claude') return { value: result(0, '[]') }
+    if (e.argv[0] === 'claude') { if (data.agentsDelay) await clock.sleep(data.agentsDelay); return { value: result(0, '[]') } }
     if (e.argv.includes('-File')) return { value: result(0, 'OK codex=0.0.0-test') }
     data.processCalls.push(e)
     return { value: await data.run(e) }
@@ -108,7 +112,7 @@ test('continue requires a fresh second press, dispatches once, and immediately d
   expect(args.includes('--resume-last')).toBe(true)
   expect(args[args.length - 1].includes('結束時更新 CARD（含關卡欄）')).toBe(true)
   expect(await ui.find({ type: 'Text', text: /^ 執行中 $/ })).toBeDefined()
-  expect((await ui.find({ key: 'detail-Project Alpha-continue' }))?.text).toBe('⇢ 無法派工：codex 工作尚未結束')
+  expect((await ui.find({ type: 'Text', text: /^派工鎖定：/ }))?.text).toBe('派工鎖定：codex 工作尚未結束')
   expect(data.state.feed.some((item: any) => item.text.includes('codex 已接受'))).toBe(true)
   await ui.unmount()
 })
@@ -128,7 +132,7 @@ test('a refresh started before dispatch cannot erase the accepted running job', 
   await clock.advance(1000)
   await refreshing
   expect(await ui.find({ type: 'Text', text: /^ 執行中 $/ })).toBeDefined()
-  expect((await ui.find({ key: 'detail-Project Alpha-continue' }))?.text).toBe('⇢ 無法派工：codex 工作尚未結束')
+  expect((await ui.find({ type: 'Text', text: /^派工鎖定：/ }))?.text).toBe('派工鎖定：codex 工作尚未結束')
   expect(data.state.snapshot.projects[0].tasks[0].id).toBe('task-race')
   await ui.unmount()
 })
@@ -300,5 +304,39 @@ test('the keyboard opens and closes the action menu for the row under the cursor
   expect(await ui.find({ key: 'm-verify' })).toBeUndefined()
   await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)
   expect(await ui.find({ key: 'm-verify' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('choosing an executor shows at once even while a slow refresh is still running', OPTIONS, async ($, on) => {
+  const { data, clock } = fixture(on)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE())
+  await ui.press({ key: 'detail' })
+  data.agentsDelay = 20_000
+  await ui.press({ key: 'detail-Project Alpha-executor-claude' })
+  // No clock advance: the refresh is still waiting on `claude agents`, the choice is already drawn.
+  expect((await ui.find({ key: 'detail-Project Alpha-executor-claude' }))?.text).toBe('[claude]')
+  expect(data.toasts.some(t => t.includes('Project Alpha 執行者：claude（面板覆寫）'))).toBe(true)
+  expect(data.state.snapshot.projects[0].executor).toBe('claude')
+  await clock.advance(20_000)
+  expect((await ui.find({ key: 'detail-Project Alpha-executor-claude' }))?.text).toBe('[claude]')
+  await ui.unmount()
+})
+
+test('the action menu says what is running and its latest output, not just what cannot be done', OPTIONS, async ($, on) => {
+  const { data } = fixture(on)
+  data.jobs = [{ id: 'task-1', jobClass: 'task', status: 'running', startedAt: '2030-01-05T11:48:00Z', logFile: 'jobs/task-1.log', request: { prompt: 'Finish the parser', model: 'vendor-0-sample', effort: 'high' } }]
+  data.files['D:/State/Project Alpha-hash/jobs/task-1.log'] = 'compiling\n34 tests passed\n'
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)
+  expect(await ui.find({ type: 'Text', text: 'Finish the parser' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /已跑 12m · sample · high/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /› 34 tests passed/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '派工鎖定：codex 工作尚未結束' })).toBeDefined()
+  expect(await ui.find({ key: 'm-continue' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Project Alpha' })).toBeDefined()
+  await ui.press({ key: 'm-close' })
+  expect(await ui.find({ key: 'm-close' })).toBeUndefined()
   await ui.unmount()
 })

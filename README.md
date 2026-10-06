@@ -102,7 +102,7 @@ Model and effort follow the same chain. A project whose executor differs from th
 
 `manual` means the panel never dispatches that project: Sync and Continue are hidden, the card shows a handoff note, and CARD, verification, decisions, and gates still work.
 
-In the expanded project card and the right-click menu, the `執行者` Button cycles that project's override: inherit, `claude`, `codex`, `manual`. The label shows the source (`・面板` for a pane override, `・登錄表` for the registry). `/console project executor|model|effort <value|inherit> <project name>` sets the same fields, and `/console project` lists the effective settings.
+In the expanded project card and the right-click menu, the `執行者` row offers `沿用` (inherit, naming what it inherits and from where), `claude`, `codex` and `manual`; one press picks one, and the current choice is bracketed. The pane updates at once; the refresh that follows runs in the background. `/console project executor|model|effort <value|inherit> <project name>` sets the same fields, and `/console project` lists the effective settings.
 
 A project may hold jobs from both executors (after an executor change or a Claude fallback). Job listing merges both executors for every project; any running or queued job from either executor marks the project RUNNING and blocks a second dispatch.
 
@@ -189,7 +189,7 @@ Set `關卡` to `無`, `spec：…`, `review：…`, or `release：…`. Unknown
 
 ## Project actions
 
-The right-click menu (or `m` on the keyboard for the row under the cursor; Esc closes it) and expanded project cards expose the same actions. Mobile uses card Buttons. Every trigger shows an immediate toast, shows elapsed seconds and rejects duplicate activation while running, then writes its result to the activity feed.
+The right-click menu (or `m` on the keyboard for the row under the cursor; Esc closes it) and expanded project cards expose the same actions. The menu shows the project's state and pipeline, what is running with its elapsed time and latest output line, and the CARD's decision, gate and next step. A dispatch that is blocked by running work is stated as `派工鎖定：…` instead of a disabled button. Mobile uses card Buttons. Every trigger shows an immediate toast, shows elapsed seconds and rejects duplicate activation while running, then writes its result to the activity feed.
 
 | Action | Availability | Behavior |
 | --- | --- | --- |
@@ -254,7 +254,7 @@ The project table has a six-mark `流程` column (from 64 columns wide); project
 
 ## Limitations
 
-- Bundled probes: PowerShell scripts on Windows, `sh` scripts on macOS. On macOS a broker is reported STALE when its `codex app-server` started before the installed Codex CLI was last upgraded.
+- Bundled probes: PowerShell scripts on Windows, `sh` scripts on macOS and Linux (Linux is covered by tests and a simulated stale broker, not daily use). There a broker is reported STALE when its `codex app-server` started before the installed Codex CLI was last upgraded.
 - On macOS, `open STATUS.md` falls back to `open` when the `code` CLI is unavailable.
 - The UI is currently Traditional Chinese.
 - Project matching depends on the configured registry and STATUS contract.
