@@ -1,21 +1,33 @@
 # <Project name> STATUS
 
-<!-- CARD: The console reads only this block. Keep it to 10 lines or fewer. These field names are part of the parser contract. -->
-- rev：<integer; increase by 1 on each update and check for concurrent changes before writing>
-- 更新：YYYY-MM-DD HH:MM (job <job-id>, thread <thread-id>, <model>/<effort>)
+<!-- CARD: The console reads only this block. Keep it to 10 lines or fewer. The Chinese field names are the parser contract; do not rename them. -->
+- 更新：YYYY-MM-DD HH:MM · rev <n> · job <job-id> · <executor> <model>/<effort>
 - 狀態：<one-sentence current state>
-- 驗證：`<one-line command>` -> <actual result; verified YYYY-MM-DD HH:MM>
-- 執行中：<job-id or none>
+- 驗證：`<one-line local command>` -> <actual result; verified YYYY-MM-DD HH:MM>
+- 執行中：<job-id or 無>
 - 等使用者：<decision or input; 無 if empty>
 - 下一步：<one action for the console to dispatch>
 - 關卡：無
 <!-- /CARD -->
+
+## CARD rules
+
+- `rev` in `更新` counts CARD writes. Before writing: re-read the CARD; if `rev` is not the value you last read, stop and report the conflict instead of overwriting. Write `rev + 1`.
+- `關卡` holds exactly one value: `無` | `spec：<scope and acceptance to approve>` | `review：<changes, acceptance result, review job>` | `release：<exact scope and readiness evidence>`.
+- Set a gate only at these points: `spec` when the spec or acceptance contract needs console approval (or changed); `review` when acceptance is green and the independent review job finished; `release` when work is ready to ship.
+- Only the console clears a gate (back to `無`) after it decides. `release` additionally needs the user's explicit approval of the exact scope; a gate approval never substitutes for user authorization.
+- An unfinished or failed review job never counts as passed.
 
 ## Scope
 
 - In scope:
 - Out of scope:
 - Related work owned elsewhere:
+
+## Acceptance contract
+
+- Test / parity command: `<command>` (baseline: `<fixed baseline>`)
+- Expected: <output or exit code>
 
 ## Decisions
 
@@ -35,4 +47,4 @@
 
 ## History
 
-- YYYY-MM-DD <job-id>: <work and result>
+- YYYY-MM-DD rev <n> <job-id>: <work and result>
