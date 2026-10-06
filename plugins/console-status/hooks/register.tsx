@@ -8,7 +8,7 @@ import type { ConsoleConfig } from './config'
 import { codexHealth, isActiveJob } from './logic'
 import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles, effectiveDispatch, setProjectOverride, nextProjectExecutor, executorSignature, projectOverride } from './dispatch'
 import type { DispatchSettings, ProjectOverride } from './dispatch'
-import { createExecutor, listWorkspaceJobs } from './executors'
+import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
 import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted } from './actions'
 import { resolveCompanion } from './companion'
@@ -111,6 +111,16 @@ async function workspaceJobs(kind: ExecutorKind, deps: ExecutorDeps, config: Con
   // Every active job of either executor counts, so RUNNING never misses one. Finished jobs count
   // for the project's own executor and for Claude jobs that stood in for a Codex dispatch.
   return jobs.filter(job => job.executor === kind || isActiveJob(job) || !!job.fallbackFrom)
+}
+
+const REFRESH_CONCURRENCY = 4
+/** `work` over `items` with at most `limit` running at once; results keep the input order. */
+async function mapLimit<T, R>(items: readonly T[], limit: number, work: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const lane = async () => { while (next < items.length) { const index = next++; results[index] = await work(items[index]!, index) } }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane))
+  return results
 }
 
 /** Config with the companion script actually in use (configured, or auto-resolved when stale). */
@@ -262,39 +272,40 @@ async function refresh($: any, options: PluginOptions, force = false) {
       if (probes.companion) companion = probes.companion
       lastSlow = now
     }
+    const run: ExecutorDeps['run'] = (argv, init) => guarded(() => $.process.run(argv, init))
     const deps: ExecutorDeps = {
-      run: (argv, init) => guarded(() => $.process.run(argv, init)),
-      files: { read: path => guarded(() => $.fs.read(path)), list: path => guarded(() => $.fs.list(path)), write: (path, text) => guarded(() => $.fs.write(path, text)) },
+      run,
+      files: {
+        read: path => guarded(() => $.fs.read(path)), list: path => guarded(() => $.fs.list(path)), write: (path, text) => guarded(() => $.fs.write(path, text)),
+        stat: path => guarded(() => $.fs.stat(path)),
+      },
       now: () => guarded(() => $.clock.now()),
+      agents: sharedAgents(run),
     }
-    const projects: Project[] = []
     stateFormatIssues.clear()
-    const bases: string[] = []
-    const roots: string[] = []
-    const warnings: string[] = []
-    for (const [index, { row, root }] of registryRows.entries()) {
-      const card = await io.fs.read(row.statusPath).catch(() => null) as string | null
+    const bases = registryRows.map(({ root }) => root.replace(/\/+$/, '').split('/').pop() ?? '')
+    const roots = registryRows.map(({ root }) => root)
+    // Projects are independent: read them a few at a time instead of one after another.
+    const loaded = await mapLimit(registryRows, REFRESH_CONCURRENCY, async ({ row, root }, index) => {
       const eff = effective[index]!
-      bases.push(root.replace(/\/+$/, '').split('/').pop() ?? '')
-      roots.push(root)
       const listing: ExecutorKind = eff.executor === 'manual' ? settings.executor : eff.executor
-      const jobs = await guarded(() => workspaceJobs(listing, deps, withCompanion(config), root))
-      for (const job of jobs) {
-        if (!job.warning) continue
-        const text = `${row.name}：${job.warning}`
-        warnings.push(text)
-      }
+      const [card, jobs] = await Promise.all([
+        io.fs.read(row.statusPath).catch(() => null) as Promise<string | null>,
+        guarded(() => workspaceJobs(listing, deps, withCompanion(config), root)),
+      ])
+      const warnings = jobs.filter(job => job.warning).map(job => `${row.name}：${job.warning}`)
       const project: Project = {
         ...buildProject(row, card, jobs, now), executor: eff.executor, executorSource: eff.source,
         ...(row.executor ? { registryExecutor: row.executor } : {}),
       }
-      for (const j of project.jobs) {
-        if (j.kind !== 'running') continue
+      await Promise.all(project.jobs.filter(j => j.kind === 'running').map(async j => {
         const job = jobs.find(item => item.id === j.id && item.executor === j.executor)
         if (job) j.last = await createExecutor(job.executor ?? listing, deps, withCompanion(config)).lastLine(job).catch(() => '')
-      }
-      projects.push(project)
-    }
+      }))
+      return { project, warnings }
+    })
+    const projects = loaded.map(item => item.project)
+    const warnings = loaded.flatMap(item => item.warnings)
     const usage: any = await io.session.usage().catch(() => null)
     const formatWarning = stateFormatWarning()
     const companionWarning = [companion?.warning, formatWarning].filter(Boolean).join('；')
