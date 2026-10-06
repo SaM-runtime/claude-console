@@ -15,8 +15,8 @@ function occupied(layout: ReturnType<typeof layoutBand>) {
 test('39 columns uses compact numeric states, no next prose, and keeps strict order', () => {
   const layout = layoutBand(demoSnapshot(NOW), { columns: 39, demo: true, paneOpen: false })
   expect(layout.button).toBe('⌗')
-  expect(layout.items.map(item => item.id)).toEqual(['demo', 'ACTION', 'GATE', 'RUNNING', 'SYNC', 'context', 'IDLE'])
-  expect(layout.items.map(item => item.text)).toEqual([' 示範資料 ', '●1', '◆1', '▶1', '↻1', '62%', '○1'])
+  expect(layout.items.map(item => item.id)).toEqual(['demo', 'ACTION', 'GATE', 'RUNNING', 'SYNC', 'ci', 'context', 'IDLE'])
+  expect(layout.items.map(item => item.text)).toEqual([' 示範資料 ', '●1', '◆1', '▶1', '↻1', 'CI✕1', '62%', '○1'])
   expect(occupied(layout) <= 39).toBe(true)
 })
 
@@ -38,7 +38,7 @@ test('70 columns stops at the first state that cannot fit', () => {
 
 test('120 columns shows every candidate in priority order', () => {
   const layout = layoutBand(demoSnapshot(NOW), { columns: 120, demo: true, paneOpen: false })
-  expect(layout.items.map(item => item.id)).toEqual(['demo', 'next', 'ACTION', 'GATE', 'RUNNING', 'SYNC', 'context', 'IDLE'])
+  expect(layout.items.map(item => item.id)).toEqual(['demo', 'next', 'ACTION', 'GATE', 'RUNNING', 'SYNC', 'ci', 'context', 'IDLE'])
   expect(occupied(layout) <= 120).toBe(true)
   expect(layout.items.every(item => item.width === displayWidth(item.text) && !/[\r\n]/.test(item.text))).toBe(true)
 })

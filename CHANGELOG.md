@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- **Git, PR and CI per project.** Each refresh reads every project's `git status` (without taking the index lock); with `gh` installed, the current branch's pull request and its checks are read every five minutes, every minute while checks run. The table gains a `Git` column (conflicts, failed CI, uncommitted, unpushed, behind, clean), the action menu and card show the branch, upstream and the PR with failing check names and a `↗ 開啟` button, the band shows `CI 失敗 n`, a new CI failure toasts, and a selected project's Git and PR lines ride along with the next prompt. `gitProbe` (`on` / `git` / `off`) controls it.
+- **Action-menu hotkeys.** With the menu open, `v` verify, `s` sync, `c` continue, `d` decide, `g` gate, `o` open STATUS.md and `p` open the PR; the menu lists the keys that apply.
+- **Demo data** shows Git state and a PR with a failing check.
+
 ## 0.2.9
 
 - **Latest output shown once.** A running job with no task row (a review, or a job without a request) put its latest output line both in the elapsed-time meta and on the `›` line below it, in the action menu and the expanded card; the meta could also push the title off a narrow row. The meta now holds only the executor and elapsed time. A task row is matched by executor as well as id.

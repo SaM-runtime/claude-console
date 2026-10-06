@@ -18,6 +18,8 @@ function fixture(on: any) {
     /** ms the `claude agents` probe takes, to model a refresh that is still running. */
     agentsDelay: 0,
     files: {} as Record<string, string>,
+    /** `git status --porcelain=v2 --branch` and `gh pr view --json` output; empty: not a repository / no PR. */
+    git: '', gh: '', gitCalls: [] as any[],
   }
   on('fs.list', () => ({ value: [{ name: 'Project Alpha-hash', kind: 'dir' }] }))
   on('fs.read', (_: any, e: any) => {
@@ -37,6 +39,9 @@ function fixture(on: any) {
   on('process.run', async (_: any, e: any) => {
     if (e.argv[0] === 'claude') { if (data.agentsDelay) await clock.sleep(data.agentsDelay); return { value: result(0, '[]') } }
     if (e.argv.includes('-File')) return { value: result(0, 'OK codex=0.0.0-test') }
+    // Git and PR probes run on every refresh; these tests count only the actions' own commands.
+    if (e.argv[0] === 'git') { data.gitCalls.push(e); return { value: data.git ? result(0, data.git) : result(128, '', 'not a git repository') } }
+    if (e.argv[0] === 'gh') { data.gitCalls.push(e); return { value: data.gh ? result(0, data.gh) : result(1, '', 'no pull requests found') } }
     data.processCalls.push(e)
     return { value: await data.run(e) }
   })
@@ -352,4 +357,87 @@ test('a running job without a task row shows its latest output once, beside the 
   expect(await ui.find({ type: 'Text', text: 'codex · 已跑 12m' })).toBeDefined()
   expect(await ui.findAll({ type: 'Text', text: /3 findings so far/ })).toHaveLength(1)
   await ui.unmount()
+})
+
+const GIT_STATUS = '# branch.oid 0123456789abcdef\n# branch.head feature/parser\n# branch.upstream origin/feature/parser\n# branch.ab +2 -0\n1 .M N... 100644 100644 100644 a b src/a.ts\n1 M. N... 100644 100644 100644 a b src/b.ts\n? notes.txt\n'
+const PR = (checks: any[]) => JSON.stringify({ number: 17, title: 'Parser rewrite', state: 'OPEN', isDraft: false, url: 'https://github.com/example/alpha/pull/17', reviewDecision: 'REVIEW_REQUIRED', statusCheckRollup: checks })
+
+test('the action menu shows the branch, uncommitted work and the PR checks, and the table has a Git column', OPTIONS, async ($, on) => {
+  const { data } = fixture(on)
+  data.git = GIT_STATUS
+  data.gh = PR([{ __typename: 'CheckRun', name: 'build (windows)', status: 'COMPLETED', conclusion: 'FAILURE' }, { __typename: 'CheckRun', name: 'lint', status: 'IN_PROGRESS', conclusion: '' }])
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  expect(data.gitCalls.find(call => call.argv[0] === 'git').argv).toEqual(['git', '--no-optional-locks', '-C', 'D:/Project Alpha', 'status', '--porcelain=v2', '--branch'])
+  expect(data.gitCalls.find(call => call.argv[0] === 'gh').init.cwd).toBe('D:/Project Alpha')
+  const wide = await $.ui.mount({ ...PANE(), props: { ...PANE().props, bodyColumns: 100 } })
+  expect(await wide.find({ type: 'Text', text: 'Git' })).toBeDefined()
+  expect(await wide.find({ type: 'Text', text: 'CI✕1' })).toBeDefined()
+  await wide.unmount()
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)
+  expect(await ui.find({ type: 'Text', text: 'feature/parser → origin/feature/parser　領先 2　2 個檔案未提交　1 個未追蹤' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /#17 Parser rewrite（開啟）　CI ✕ 1 失敗：build \(windows\)　1 進行中　待審查/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /快捷鍵　v 執行驗證・c 繼續下一步・o 開啟 STATUS\.md・p 開啟 PR・Esc 關閉/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a CI failure on a PR is a feed line and a toast; the PR is asked again every tick while checks run', OPTIONS, async ($, on) => {
+  const { data, clock } = fixture(on)
+  data.git = GIT_STATUS
+  data.gh = PR([{ __typename: 'CheckRun', name: 'test', status: 'IN_PROGRESS', conclusion: '' }])
+  on('command.register', () => ({ value: undefined }))
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'D:/Console', surface: 'terminal', isInteractive: true } as any)
+  await clock.settle()
+  const ghCalls = () => data.gitCalls.filter(call => call.argv[0] === 'gh').length
+  expect(ghCalls()).toBe(1)
+  data.gh = PR([{ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'FAILURE' }])
+  await clock.advance(60_000)
+  await clock.settle()
+  expect(ghCalls()).toBe(2)
+  expect(data.toasts.some(t => t.includes('Project Alpha：PR #17 CI 失敗：test'))).toBe(true)
+  expect(data.state.feed.some((ev: any) => ev.text === 'Project　PR #17 CI 失敗：test' && ev.tone === 'red')).toBe(true)
+  // Settled checks are not asked again on the next tick.
+  await clock.advance(60_000)
+  await clock.settle()
+  expect(ghCalls()).toBe(2)
+})
+
+test('menu hotkeys run the action on offer and ignore the ones that are not', OPTIONS, async ($, on) => {
+  const { data, clock } = fixture(on)
+  data.git = GIT_STATUS
+  data.gh = PR([])
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)
+  await ui.post({ key: 'g' }, { in: 'rows' } as any) // no gate on this CARD
+  await ui.post({ key: 's' }, { in: 'rows' } as any) // not SYNC
+  await clock.settle()
+  expect(data.processCalls.length).toBe(0)
+  await ui.post({ key: 'o' }, { in: 'rows' } as any)
+  await clock.settle()
+  expect(data.processCalls.map(call => call.argv[0])).toEqual(['code'])
+  await ui.post({ key: 'p' }, { in: 'rows' } as any)
+  await clock.settle()
+  expect(data.gitCalls.at(-1).argv).toEqual(['gh', 'pr', 'view', '17', '--web'])
+  expect(data.toasts.some(t => t.includes('已開啟 PR #17'))).toBe(true)
+  await ui.unmount()
+})
+
+test('gitProbe off runs neither git nor gh', { options: { ...OPTIONS.options, gitProbe: 'off' } }, async ($, on) => {
+  const { data } = fixture(on)
+  data.git = GIT_STATUS
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  expect(data.gitCalls).toEqual([])
+  expect(data.state.snapshot.projects[0].git).toBeUndefined()
+})
+
+test('gitProbe git reads the branch but never calls gh', { options: { ...OPTIONS.options, gitProbe: 'git' } }, async ($, on) => {
+  const { data } = fixture(on)
+  data.git = GIT_STATUS
+  data.gh = PR([])
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  expect(data.gitCalls.map(call => call.argv[0])).toEqual(['git'])
+  expect(data.state.snapshot.projects[0].git.branch).toBe('feature/parser')
+  expect(data.state.snapshot.projects[0].pr).toBeUndefined()
 })
