@@ -233,6 +233,8 @@ Selecting a project applies only to the next accepted prompt. A downstream rejec
 - The panel reports local evidence and does not replace project-specific verification.
 - Refresh runs every 60 seconds; process probes are cached for five minutes unless forced.
 - Roots with the same final directory name can collide in companion-state matching.
+- Codex support reads the Codex plugin's internal `state.json` and plugin cache layout. An unrecognised state shape is reported on the companion footer line; update console-status when that happens.
+- Keep one console session dispatching at a time. Writes to `claude-sessions.json` are serialized within one Claude Code process and refuse to overwrite a file another process changed, but the plugin file API has no rename or exclusive create, so two consoles writing in the same instant are not fully safe.
 - A selected project adds context to one prompt and does not change the active working directory.
 
 ## Upgrade

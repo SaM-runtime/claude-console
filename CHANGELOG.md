@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Verify commands need approval.** The CARD's `驗證` command is written by background executors, so the pane now shows it in full and runs a new or changed command only after a second press within 10 seconds. Approved commands are remembered per project in the plugin store; a store failure still runs the confirmed command, it just asks again next session.
+- **Codex state format guard.** A companion `state.json` that parses but has no recognisable `jobs` list (the Codex plugin changed its internals) is now reported on the companion footer line with the file and what is missing, instead of silently showing no Codex jobs. Half-written files are still skipped quietly and read again on the next refresh.
 
 ## 0.2.1
 

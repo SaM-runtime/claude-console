@@ -233,6 +233,8 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 - 檔案每 60 秒刷新；process 探測會快取五分鐘，除非強制 refresh。
 - Companion state 以根目錄最後一段名稱配對；同名根目錄可能混淆。
 - 選取專案只附加一次 context，不會改變目前 cwd。
+- Codex 支援會讀取 Codex 外掛內部的 `state.json` 與 plugin cache 目錄結構。state 結構無法辨識時，companion 那一行會顯示警告；出現時請更新 console-status。
+- 同一時間只讓一個主控台 session 派工。`claude-sessions.json` 的寫入在同一個 Claude Code process 內會排隊，若檔案被其他 process 改過也會拒絕覆寫；但外掛檔案 API 沒有 rename 或獨占建立，兩個主控台在同一瞬間寫入仍不保證安全。
 
 ## 升級
 
