@@ -200,7 +200,7 @@ The right-click menu and expanded project cards expose the same actions. Mobile 
 | ⚑ Review gate / final review | Recognized spec, review, or release gate | Sends evidence to the console Claude; release review cannot execute release |
 | ↗ Open STATUS.md | Always | Requests the editor to open the file |
 
-Verification stores the latest timestamp, exit status, and final three captured lines per project. Put only trusted local checks in `驗證`; the command runs through a shell and must not contain deployment or formal-environment operations.
+Verification stores the latest timestamp, exit status, and final three captured lines per project. Put only trusted local checks in `驗證`; the command runs through a shell and must not contain deployment or formal-environment operations. Because background executors write the CARD, the pane shows the full command and runs a command it has not run for that project before (new, or changed since) only after a second press within 10 seconds; approved commands are remembered per project across sessions.
 
 A dispatch shows RUNNING optimistically until managed state is refreshed. Acceptance is not completion. GATE is purple, sorts after ACTION and before RUNNING, and remains busy until its matching Claude review turn ends. `prompt.fill` can refuse when no composer exists or a dialog owns it; the panel reports that failure without submitting a decision. Remote Control composer behavior still needs device acceptance testing.
 

@@ -10,7 +10,7 @@ import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual } from './actions'
+import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -46,6 +46,9 @@ const menuFor = atom({ plugin: 'console-status', key: 'menuFor' } as const, null
 const pendingActions = atom({ plugin: 'console-status', key: 'pendingActions' } as const, {})
 const continueConfirmations = atom({ plugin: 'console-status', key: 'continueConfirmations' } as const, {})
 const verificationResults = atom({ plugin: 'console-status', key: 'verificationResults' } as const, {})
+/** statusPath → the 驗證 command the user approved; mirrored from `$.store` so drawing can read it. */
+const trustedVerify = atom({ plugin: 'console-status', key: 'trustedVerify' } as const, {})
+const TRUST_KEY = 'trustedVerify'
 const actionPulse = atom({ plugin: 'console-status', key: 'actionPulse' } as const, 0)
 const reviewRequests = atom({ plugin: 'console-status', key: 'reviewRequests' } as const, {})
 const fallbackOffers = atom({ plugin: 'console-status', key: 'fallbackOffers' } as const, {})
@@ -349,6 +352,28 @@ async function actionNotice($: any, text: string, ok: boolean) {
 }
 
 /** All entry points share this lock and re-check the latest state, including stale rendered buttons. */
+async function loadTrust($: any): Promise<Record<string, string>> {
+  const value = await Promise.resolve().then(() => $.store.get(TRUST_KEY)).catch(() => undefined)
+  if (value === undefined) return read($, trustedVerify)
+  const trusted = value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) : {}
+  await update($, trustedVerify, () => trusted)
+  return trusted
+}
+
+/** First press arms a confirmation for `signature`; returns true only for a matching press inside the window. */
+async function confirmed($: any, statusPath: string, signature: string, now: number, windowMs: number, message: string): Promise<boolean> {
+  const confirmations = await read($, continueConfirmations)
+  if (confirmationMatches(confirmations[statusPath], signature, now, windowMs)) return true
+  await update($, continueConfirmations, values => ({ ...values, [statusPath]: { at: now, signature } }))
+  $.ui.toast(message, { timeoutMs: windowMs })
+  $.clock.after(windowMs, () => void update($, continueConfirmations, values => {
+    if (values[statusPath]?.at !== now) return values
+    const next = { ...values }; delete next[statusPath]; return next
+  }))
+  return false
+}
+
 async function triggerAction($: any, options: PluginOptions, statusPath: string, kind: ActionKind, request: { useClaude?: boolean } = {}) {
   if (await demoEnabled($)) {
     $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。')
@@ -375,16 +400,18 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     const name = p.name.replace(/\s.*$/, '')
     const now = await $.clock.now()
     if (kind === 'continue' && !request.useClaude) {
-      const signature = workSignature(p)
-      const confirmations = await read($, continueConfirmations)
-      if (!confirmationMatches(confirmations[statusPath], signature, now)) {
-        await update($, continueConfirmations, values => ({ ...values, [statusPath]: { at: now, signature } }))
-        $.ui.toast(`${name}：再按一次確認（3 秒內）`, { timeoutMs: 3000 })
-        $.clock.after(3000, () => void update($, continueConfirmations, values => {
-          if (values[statusPath]?.at !== now) return values
-          const next = { ...values }; delete next[statusPath]; return next
-        }))
-        return
+      if (!await confirmed($, statusPath, workSignature(p), now, 3000, `${name}：再按一次確認（3 秒內）`)) return
+    }
+    if (kind === 'verify') {
+      const trusted = await loadTrust($)
+      if (!verifyTrusted(trusted, statusPath, p.verify)) {
+        const why = trusted[statusPath] === undefined ? '首次執行此驗證指令' : '驗證指令已變更'
+        if (!await confirmed($, statusPath, verifySignature(p.verify), now, VERIFY_CONFIRM_MS,
+          `${name}：${why}，確認後 ${VERIFY_CONFIRM_MS / 1000} 秒內再按一次執行：${p.verify}`)) return
+        const approved = { ...trusted, [statusPath]: p.verify }
+        await update($, trustedVerify, () => approved)
+        // Not remembered across sessions when the store refuses; the confirmed run still goes ahead.
+        await Promise.resolve().then(() => $.store.set(TRUST_KEY, approved)).catch(() => {})
       }
     }
     await update($, continueConfirmations, values => { const next = { ...values }; delete next[statusPath]; return next })
@@ -529,6 +556,7 @@ export const register: Register = (on, options) => {
     await update($, pendingActions, values => Object.fromEntries(Object.entries(values).filter(([path]) => actionLocks.has(path))))
     await update($, continueConfirmations, () => ({}))
     await update($, fallbackOffers, () => ({}))
+    await loadTrust($)
     await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；band 橫帶；demo 示範' })
     refreshTimer = $.clock.every(TICK_MS, () => void refresh($, options))
     void refresh($, options, true)
@@ -702,7 +730,7 @@ export const register: Register = (on, options) => {
     dispatch_effort: '派工 effort：點一下輪換模型支援的推理強度並儲存；也可用 /console effort <level>。切換模型時不支援的 effort 會清空。',
     ACTION: '需決策：專案 STATUS 卡片的「等使用者」欄有內容，代表該專案有業務決策需由使用者拍板。',
     GATE: '待審核：STATUS 的 spec／review 關卡送交主控台判斷；release 只整理可否上線與理由，最後由你決定，不會自動上線。',
-    action_verify: '執行 CARD 驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。只應填入本機驗證，不可填正式環境操作。',
+    action_verify: '執行 CARD 驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。新的或被修改過的指令會先完整顯示，10 秒內再按一次才執行。只應填入本機驗證，不可填正式環境操作。',
     action_sync: '直接請所選執行者將最近結果同步回 STATUS CARD 與歷程，使用派工模型設定與該執行者額度。',
     action_continue: '3 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
@@ -808,6 +836,7 @@ export const register: Register = (on, options) => {
     const pending = await read($, pendingActions)
     const confirmations = await read($, continueConfirmations)
     const verified = await read($, verificationResults)
+    const trusted = await read($, trustedVerify)
     const pulse = await read($, actionPulse)
     const offers = demo ? {} : await read($, fallbackOffers)
     const { config } = demo ? demoContext ?? { config: resolveConfig(options, '', '', '/tmp') } : await paths($, options)
@@ -934,7 +963,7 @@ export const register: Register = (on, options) => {
     const actionButton = (p: Project, kind: ActionKind, key: string) => {
       const active = pending[p.statusPath]
       const blocked = kind === 'continue' || kind === 'sync' ? dispatchBlockReason(p) : ''
-      const confirming = kind === 'continue' && confirmations[p.statusPath]?.signature === workSignature(p)
+      const confirming = confirmations[p.statusPath]?.signature === (kind === 'continue' ? workSignature(p) : kind === 'verify' ? verifySignature(p.verify) : null)
       const label = blocked ? `⇢ 無法派工：${blocked}` : active?.kind === kind ? `${SPINNER[pulse % SPINNER.length]} ${actionLabel(kind, p)}…`
         : confirming ? '再按一次確認' : actionLabel(kind, p)
       return <Box key={'help-' + key} hover={{ scope: 'help-action_' + kind }}>
@@ -971,8 +1000,11 @@ export const register: Register = (on, options) => {
     }
     const verificationView = (p: Project) => {
       const result = verified[p.statusPath]
-      if (!result) return null
+      const command = p.verify.trim() ? <Text color={verifyTrusted(trusted, p.statusPath, p.verify) ? C.dim : C.amber} wrap="wrap">
+        驗證指令{verifyTrusted(trusted, p.statusPath, p.verify) ? '' : (trusted[p.statusPath] === undefined ? '（未確認）' : '（已變更，未確認）')}：{p.verify}</Text> : null
+      if (!result) return command && <Box flexDirection="column" marginTop={1}>{command}</Box>
       return <Box flexDirection="column" marginTop={1}>
+        {command}
         <Text color={result.ok ? C.green : C.red}>{result.ok ? '✓' : '✕'} 最後驗證 {new Date(result.at).toLocaleString()}（{result.exitCode === null ? '未正常結束' : `exit ${result.exitCode}`}）</Text>
         {result.truncated && <Text color={C.amber}>輸出已被執行器截斷，以下是擷取內容</Text>}
         {(result.lines.length ? result.lines : ['（無輸出）']).map((line, index) => <Text key={'output-' + index} color={C.dim} wrap="truncate-end">{line}</Text>)}

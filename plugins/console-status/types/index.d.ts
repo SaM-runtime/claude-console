@@ -73,6 +73,7 @@ declare module 'claude-code' {
       pendingActions: Record<string, PendingAction>
       continueConfirmations: Record<string, ContinueConfirmation>
       verificationResults: Record<string, VerificationResult>
+      trustedVerify: Record<string, string>
       actionPulse: number
       reviewRequests: Record<string, ReviewRequest>
       fallbackOffers: Record<string, FallbackOffer>

@@ -72,6 +72,7 @@ test('session start releases a review left pending by an interrupted plugin life
   const ui = await $.ui.mount(PANE())
   await ui.press({ key: 'detail' })
   await ui.press({ key: 'detail-Project Alpha-verify' })
+  await ui.press({ key: 'detail-Project Alpha-verify' })
   expect(state.verificationResults[STATUS]?.ok).toBe(true)
   await ui.press({ key: 'next-action' })
   expect(state.pendingActions[STATUS]?.kind).toBe('gate')
