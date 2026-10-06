@@ -5,7 +5,8 @@
 import type { ClientModule } from 'claude-code'
 import { displayWidth } from './logic'
 
-export type Cell = { t: string; c?: string; bg?: string; b?: boolean; w?: number; right?: boolean }
+/** `parts`: one-column glyphs, each in its own colour (the pipeline strip); `t` is then ignored. */
+export type Cell = { t: string; c?: string; bg?: string; b?: boolean; w?: number; right?: boolean; parts?: { t: string; c?: string }[] }
 export type RowSpec = {
   id: string
   cells: Cell[]
@@ -201,6 +202,13 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
     const spin = r.shimmer && i === 2 ? ` ${SPIN[state.phase % SPIN.length]}` : ''
     const body = fittedCell(c.t + spin, width, c.right)
     const backgroundColor = i === 0 && r.breathe?.length ? breathColor(r.breathe, state.phase * TICK_MS) : c.bg
+    if (c.parts) {
+      return (
+        <Box width={width} flexShrink={0} overflow="hidden">
+          <Text wrap="truncate-end">{c.parts.slice(0, width).map(part => <Text color={part.c}>{part.t}</Text>)}</Text>
+        </Box>
+      )
+    }
     if (r.shimmer && i === 0) {
       const chars = [...body]
       return (

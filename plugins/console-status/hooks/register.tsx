@@ -15,6 +15,9 @@ import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
 import { stateFormatIssues, stateFormatWarning } from './jobs'
+import { pipeline, projectForCwd, projectModeSection, progressContext, progressSignature } from './pipeline'
+import type { Pipeline } from './pipeline'
+import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
 
 import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
 import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
@@ -50,6 +53,12 @@ const verificationResults = atom({ plugin: 'console-status', key: 'verificationR
 /** statusPath → the 驗證 command the user approved; mirrored from `$.store` so drawing can read it. */
 const trustedVerify = atom({ plugin: 'console-status', key: 'trustedVerify' } as const, {})
 const TRUST_KEY = 'trustedVerify'
+/** `/console mode`: this session's choice over the `projectMode` option. */
+const modeOverride = atom({ plugin: 'console-status', key: 'modeOverride' } as const, 'auto')
+/** Where this Claude Code session runs; a registered project here turns on project mode. */
+let sessionCwd: string | null = null
+/** The progress last attached to a prompt in project mode, so an unchanged one is not repeated. */
+let lastProgress = ''
 const actionPulse = atom({ plugin: 'console-status', key: 'actionPulse' } as const, 0)
 const reviewRequests = atom({ plugin: 'console-status', key: 'reviewRequests' } as const, {})
 const fallbackOffers = atom({ plugin: 'console-status', key: 'fallbackOffers' } as const, {})
@@ -377,6 +386,22 @@ async function actionNotice($: any, text: string, ok: boolean) {
 }
 
 /** All entry points share this lock and re-check the latest state, including stale rendered buttons. */
+type ModeChoice = 'auto' | 'console' | 'project'
+async function projectModeOn($: any, options: PluginOptions): Promise<boolean> {
+  const choice = await read($, modeOverride) as ModeChoice
+  if (choice === 'console') return false
+  if (choice === 'project') return true
+  return String((options as any).projectMode ?? 'auto') !== 'off'
+}
+
+/** Project mode's project and its pipeline, or null (mode off, demo, no match). */
+async function focused($: any, options: PluginOptions, s: Snapshot | null): Promise<{ project: Project; pipeline: Pipeline } | null> {
+  if (!s || s.demo || !(await projectModeOn($, options))) return null
+  const project = projectForCwd(s.projects, sessionCwd, projectRoot)
+  if (!project) return null
+  return { project, pipeline: pipeline(project, (await read($, verificationResults))[project.statusPath]) }
+}
+
 async function loadTrust($: any): Promise<Record<string, string>> {
   const value = await Promise.resolve().then(() => $.store.get(TRUST_KEY)).catch(() => undefined)
   if (value === undefined) return read($, trustedVerify)
@@ -576,6 +601,8 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
 
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
+    sessionCwd = typeof e.cwd === 'string' ? e.cwd.replace(/\\/g, '/') : null
+    lastProgress = ''
     dataGeneration++
     refreshTimer?.cancel()
     if (actionLocks.size === 0) earlyReviewStarts.clear()
@@ -591,8 +618,26 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // Project mode: the CARD contract in the system prompt, stable for the session (cache-friendly).
+  on('prompt.compose', async ($, e, next) => {
+    const result = await next(e)
+    const here = await focused($, options, await read($, snapshot)).catch(() => null)
+    if (!here) return result
+    return { ...result, sections: [...result.sections, { id: 'console-status:project', text: projectModeSection(here.project), scope: 'session' as const }] }
+  })
+
   on('prompt.submit', async ($, e, next) => {
     if (e.origin?.kind === 'plugin') return next(e)
+    // Project mode: the pipeline position rides along with a prompt only when it changed.
+    // A failure here must never hold the person's prompt back.
+    const here = await focused($, options, await read($, snapshot)).catch(() => null)
+    if (here) {
+      const signature = progressSignature(here.project, here.pipeline)
+      if (signature !== lastProgress) {
+        lastProgress = signature
+        e = { ...e, context: [...(e.context ?? []), progressContext(here.project, here.pipeline)] }
+      }
+    }
     const selectedProject = await read($, selected)
     if (!selectedProject || selectionClaim !== null) return next(e)
     const ctx = selectionContext(await read($, snapshot), selectedProject)
@@ -645,6 +690,15 @@ export const register: Register = (on, options) => {
   on('command.run', async ($, e, next) => {
     if (e.command !== 'console') return next(e)
     const arg = e.args.trim()
+    const modeArg = arg.match(/^mode(?:\s+(auto|console|project))?$/)
+    if (modeArg) {
+      if (modeArg[1]) await update($, modeOverride, () => modeArg[1] as ModeChoice)
+      const choice = await read($, modeOverride) as ModeChoice
+      const here = await focused($, options, await read($, snapshot))
+      const text = `模式：${choice === 'auto' ? '自動' : choice === 'console' ? '主控台' : '專案'}（${here ? `專案模式：${here.project.name}` : '主控台模式'}）。可用 /console mode auto|console|project`
+      if (modeArg[1]) $.ui.toast(text)
+      return { text }
+    }
     const projectSetting = arg.match(/^project(?:\s+(executor|model|effort)\s+(\S+)\s+([\s\S]+))?$/)
     if (projectSetting) {
       const { config } = await paths($, options)
@@ -760,7 +814,8 @@ export const register: Register = (on, options) => {
     GATE: '待審核：STATUS 的 spec／review 關卡送交主控台判斷；release 只整理可否上線與理由，最後由你決定，不會自動上線。',
     action_verify: '執行 CARD 驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。新的或被修改過的指令會先完整顯示，10 秒內再按一次才執行。只應填入本機驗證，不可填正式環境操作。',
     action_sync: '直接請所選執行者將最近結果同步回 STATUS CARD 與歷程，使用派工模型設定與該執行者額度。',
-    action_continue: '3 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
+    pipeline: '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線。● 完成　◉ 執行中　◆ 等待（主控台、使用者或同步）　✕ 驗證失敗　○ 未到。由 CARD、執行者工作與最近一次驗證推得。',
+    action_continue: '6 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
     action_gate: '把關卡與專案 context 送給主控台審核，使用 Claude 額度；不會執行 release。',
     action_open: '用編輯器開啟專案 STATUS.md，不使用模型額度。',
@@ -781,6 +836,7 @@ export const register: Register = (on, options) => {
     blue: '#8AADF4', blueBg: '#212D45', purple: '#CA9EE6', purpleBg: '#33283F', grey: '#8A93A0', green: '#A6D189', red: '#E78284', orange: '#EF9F76',
   }
   const SHIMMER = ['#4E8F87', '#6FB3AA', '#9EE0D6', '#E6FFFB']
+  const PIPE = { green: C.green, teal: C.teal, amber: C.amber, purple: C.purple, blue: C.blue, red: C.red, faint: C.faint, dim: C.dim, text: C.text }
   const LABEL: Record<State, string> = { ACTION: '需決策', GATE: '待審核', RUNNING: '執行中', SYNC: '待同步', IDLE: '閒　置', NOCARD: '無狀態' }
   const FG: Record<State, string> = { ACTION: C.amber, GATE: C.purple, RUNNING: C.teal, SYNC: C.blue, IDLE: C.grey, NOCARD: C.red }
   const BG: Record<State, string | undefined> = { ACTION: C.amberBg, GATE: C.purpleBg, RUNNING: C.tealBg, SYNC: C.blueBg, IDLE: undefined, NOCARD: undefined }
@@ -797,6 +853,27 @@ export const register: Register = (on, options) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const paneOpen = await read($, isPaneOpen)
     const columns = Math.max(0, Math.floor(e.props.bodyColumns ?? 80))
+    const here = await focused($, options, s)
+    if (here && generation === dataGeneration) {
+      const button = paneOpen ? '主控台 ▾' : '主控台 ▸'
+      const buttonWidth = button.length + 1
+      const others = s.projects.filter(p => p !== here.project && (hasAsk(p) || parseGate(p.gate))).length
+      return (
+        <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
+          <Box flexShrink={0} height={1}><Text bold color={C.strong}>{here.project.name} </Text></Box>
+          <Box flexGrow={1} flexShrink={1} height={1} overflow="hidden">
+            <Text wrap="truncate-end">
+              {pipelineParts(here.pipeline, PIPE).map((part, index) => <Text key={'bp-' + index} color={part.c}>{part.t}</Text>)}
+              <Text color={C.text}> {pipelineText(here.pipeline).replace(/^\S+\s?/, '')}</Text>
+              {others > 0 && <Text color={C.amber}>{`　其他 ${others} 個專案待處理`}</Text>}
+            </Text>
+          </Box>
+          <Box width={buttonWidth} flexShrink={0} height={1} overflow="hidden">
+            <Button key="pane" plain dimColor label={button} onPress={() => void openPane($)} />
+          </Box>
+        </Box>
+      )
+    }
     const band = layoutBand(s, { columns, demo, paneOpen })
     if (generation !== dataGeneration) return <Box height={1} width={columns} overflow="hidden"><Text color={C.dim} wrap="truncate-end">{demoActive ? ' 示範資料 ' : '讀取中…'}</Text></Box>
     return (
@@ -911,7 +988,9 @@ export const register: Register = (on, options) => {
     const width: number = Math.max(40, (e.props.bodyColumns ?? 80) - 1)
     const list = rows(s)
     const now = await $.clock.now()
-    const W = { state: 8, project: projectColumnWidth(list.map(row => row.project)), age: 4 }
+    const W = { state: 8, project: projectColumnWidth(list.map(row => row.project)), age: 4, flow: width >= 64 ? 6 : 0 }
+    const pipes = new Map(s.projects.map(p => [p.name, pipeline(p, verified[p.statusPath])]))
+    const here = demo ? null : await focused($, options, s)
 
     const specs = list.map(r => ({
       id: r.full,
@@ -922,6 +1001,7 @@ export const register: Register = (on, options) => {
         { t: ` ${LABEL[r.state]} `, c: FG[r.state], bg: BG[r.state], b: r.state !== 'IDLE', w: W.state },
         { t: r.project, c: r.state === 'IDLE' ? C.dim : C.strong, w: W.project },
         { t: r.item, c: r.state === 'IDLE' ? C.dim : C.text },
+        ...(W.flow ? [{ t: '', w: W.flow, parts: pipes.get(r.full) ? pipelineParts(pipes.get(r.full)!, PIPE) : [] }] : []),
         { t: r.age, c: C.dim, w: W.age, right: true },
       ],
     }))
@@ -942,6 +1022,7 @@ export const register: Register = (on, options) => {
                   onPress={() => void update($, selected, v => (v === r.full ? null : r.full))} />
               </Box>
               <Box flexGrow={1} flexShrink={1}><Text color={C.text} wrap={detail ? 'wrap' : 'truncate-end'}>{r.item}</Text></Box>
+              {W.flow > 0 && <Box width={W.flow} flexShrink={0}><Text>{(pipes.get(r.full) ? pipelineParts(pipes.get(r.full)!, PIPE) : []).map((part, index) => <Text key={'fp-' + index} color={part.c}>{part.t}</Text>)}</Text></Box>}
               <Box width={W.age} justifyContent="flex-end"><Text color={C.dim}>{r.age}</Text></Box>
             </Box>
           ))}
@@ -1080,6 +1161,19 @@ export const register: Register = (on, options) => {
           </Box>
         </Box>
 
+        {here && (
+          <Box key="project-mode" flexDirection="column" borderStyle="round" borderColor={C.teal} paddingX={1}>
+            <Box justifyContent="space-between" gap={1}>
+              <Text bold color={C.teal} wrap="truncate-end">專案模式　<Text color={C.strong}>{here.project.name}</Text></Text>
+              <Text color={C.dim}>/console mode console 切回主控台</Text>
+            </Box>
+            {pipelineLine(here.pipeline, PIPE, ui, 'pm-pipeline')}
+            {here.project.next.trim() && !here.pipeline.note.includes(here.project.next.trim()) && <Text color={C.text} wrap="wrap"><Text color={C.dim}>下一步　</Text>{here.project.next}</Text>}
+            {projectActions(here.project, 'pm-')}
+            {verificationView(here.project)}
+          </Box>
+        )}
+
         <Box flexDirection="column" backgroundColor={C.bar} paddingX={1}>
           <Box justifyContent="space-between">
             <Text bold color={n ? C.amber : C.green}>{n ? '下一步' : '就緒'}</Text>
@@ -1101,6 +1195,7 @@ export const register: Register = (on, options) => {
             <Box width={W.state}><Text color={C.dim}> 狀態</Text></Box>
             <Box width={W.project}><Text color={C.dim}>專案</Text></Box>
             <Box flexGrow={1}><Text color={C.dim}>項目</Text></Box>
+            {W.flow > 0 && <Box width={W.flow} flexShrink={0} hover={{ scope: 'help-pipeline' }}><Text color={C.dim}>流程</Text></Box>}
             <Box width={W.age} justifyContent="flex-end"><Text color={C.dim}>更新</Text></Box>
           </Box>
           {rule}
@@ -1109,6 +1204,7 @@ export const register: Register = (on, options) => {
           {menuProject && (
             <Box key="menu" flexDirection="column" borderStyle="round" borderColor={C.blue} paddingX={1} marginTop={1}>
               <Text color={C.blue}>{menuProject.name.replace(/\s.*$/, '')}　動作</Text>
+              {pipes.get(menuProject.name) && pipelineLine(pipes.get(menuProject.name)!, PIPE, ui, 'm-pipeline')}
               {projectActions(menuProject, 'm-')}
               {verificationView(menuProject)}
               <Button key="m-close" plain dimColor label="✕" onPress={() => void update($, menuFor, () => null)} />
@@ -1154,6 +1250,7 @@ export const register: Register = (on, options) => {
                     </Box>
                     <Text color={C.dim}>{row.age && row.age !== '—' ? `${row.age}前更新` : '無卡片'}</Text>
                   </Box>
+                  {pipes.get(p.name) && <Box marginTop={1}>{pipelineLine(pipes.get(p.name)!, PIPE, ui, 'd-pipeline-' + p.name, { noteless: true })}</Box>}
                   <Box flexDirection="column" marginTop={1}>
                     {field('狀態', p.state, C.text)}
                     {field('待決', hasAsk(p) ? p.ask : '', C.amber)}

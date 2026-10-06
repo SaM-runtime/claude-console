@@ -70,6 +70,7 @@ Marketplace management is covered by the official [plugin marketplace documentat
 | `modelsCachePath` | Codex model and effort cache | `~/.codex/models_cache.json` |
 | `codexFallback` | What to do when Codex is unusable: `ask`, `claude`, or `off` | `ask` |
 | `codexMinQuotaPercent` | Codex quota (percent remaining) below which the fallback applies | `10` |
+| `projectMode` | `auto`: a session opened inside a registered project switches to project mode (see [Pipeline and project mode](#pipeline-and-project-mode)); `off`: always the multi-project console | `auto` |
 
 Paths beginning with `~` expand on Windows, macOS, and Linux. Run `/reload-plugins` or start another Claude Code session after plugin configuration changes. See [the registry example](workflow/projects-scope.example.md).
 
@@ -218,8 +219,34 @@ A dispatch shows RUNNING optimistically until managed state is refreshed. Accept
 | `/console effort [level]` | Show choices or set effort |
 | `/console project` | List each project's effective executor, model, and effort |
 | `/console project executor\|model\|effort <value\|inherit> <name>` | Set or clear one project's override |
+| `/console mode [auto\|console\|project]` | Show or choose project mode for this session |
 
 Selecting a project applies only to the next accepted prompt. A downstream rejection retains the selection for retry.
+
+## Pipeline and project mode
+
+Every project shows where it stands in the [workflow](workflow/claude-console/SKILL.md) as a pipeline: **規格 spec → 實作 build → 同步 sync → 驗證 verify → 審核 review → 上線 release**.
+
+| Mark | Meaning |
+| --- | --- |
+| `●` green | Done |
+| `◉` teal | An executor is working on it (a job under a `spec` or `review` gate counts for that gate) |
+| `◆` amber / blue / purple | Waiting: for the user or a continue (amber), for a sync (blue), for a gate decision (purple) |
+| `✕` red | Verification failed: the console's latest run of the same command, else the CARD's `驗證` verdict after `→` |
+| `○` grey | Not reached |
+
+The position comes from what the console already reads: a running job, then an unsynced result, then the gate, then a failed verification, then a next step. A decision in `等使用者` holds the current stage. A `review` or `release` gate implies acceptance passed, as the workflow sets them only then.
+
+The project table has a six-mark `流程` column (from 64 columns wide); project cards and the action menu show the full line with stage names.
+
+**Project mode.** When a Claude Code session starts inside a registered project's root (or a folder under it), the console follows that project:
+
+- the band shows the project's pipeline and current step, plus how many other projects need a decision or gate;
+- the pane opens with a project card (pipeline, next step, actions, verification) above the usual console;
+- the system prompt gets one section with the project's STATUS path and the CARD contract (re-read before writing, `rev + 1`, one gate value, stop at gates, no release). It does not change while the session stays in the project, so it does not break prompt caching;
+- a prompt carries a short progress note (stages, current step, next step, decision, gate) only when that progress changed since the last one.
+
+`/console mode console` turns it off for the session, `/console mode project` forces it, `/console mode auto` follows `projectMode`.
 
 ## Workflow
 

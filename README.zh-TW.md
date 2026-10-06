@@ -70,6 +70,7 @@ Marketplace 管理請參考官方 [plugin marketplace 文件](https://code.claud
 | `modelsCachePath` | Codex 模型與 effort 快取 | `~/.codex/models_cache.json` |
 | `codexFallback` | Codex 無法使用時的處理：`ask`、`claude`、`off` | `ask` |
 | `codexMinQuotaPercent` | Codex 額度剩餘百分比低於此值時啟用備援 | `10` |
+| `projectMode` | `auto`：在已登錄專案內開啟的 session 會切到專案模式（見[流程管線與專案模式](#流程管線與專案模式)）；`off`：一律是多專案主控台 | `auto` |
 
 Windows、macOS、Linux 都會展開開頭的 `~`。變更 plugin 設定後，請執行 `/reload-plugins` 或開新 Claude Code session。登錄表格式見 [範例](workflow/projects-scope.example.md)。
 
@@ -217,8 +218,34 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | `/console effort [level]` | 顯示選項或指定 effort |
 | `/console project` | 列出每個專案實際生效的執行者、model、effort |
 | `/console project executor\|model\|effort <值\|inherit> <名稱>` | 設定或清除單一專案的覆寫 |
+| `/console mode [auto\|console\|project]` | 顯示或選擇此 session 的專案模式 |
 
 選取專案只套用到下一則被接受的提示；下游拒絕提示時會保留選取，供重試使用。
+
+## 流程管線與專案模式
+
+每個專案都會以管線顯示它在 [workflow](workflow/claude-console/SKILL.md) 中的位置：**規格 → 實作 → 同步 → 驗證 → 審核 → 上線**。
+
+| 標記 | 意義 |
+| --- | --- |
+| `●` 綠 | 已完成 |
+| `◉` 青 | 執行者正在處理（在 `spec` 或 `review` 關卡下的工作算該關卡） |
+| `◆` 琥珀／藍／紫 | 等待中：等使用者或等繼續（琥珀）、等同步（藍）、等關卡判斷（紫） |
+| `✕` 紅 | 驗證失敗：以主控台最近一次執行同一指令的結果為準，否則看 CARD `驗證` 欄 `→` 後的結論 |
+| `○` 灰 | 尚未到達 |
+
+位置只由主控台已讀取的資料推得，優先序：執行中的工作 → 未同步的結果 → 關卡 → 驗證失敗 → 下一步。「等使用者」有內容時，目前階段會停在等待。依 workflow，`review` 與 `release` 關卡只在驗收通過後設定，因此視為驗證已完成。
+
+專案表在寬度 64 欄以上會多一欄六個標記的「流程」；專案卡與動作選單會顯示含階段名稱的完整管線。
+
+**專案模式。** Claude Code session 在已登錄專案的根目錄（或其子目錄）啟動時，主控台會跟隨該專案：
+
+- 橫帶顯示該專案的管線與目前步驟，以及其他有待決或關卡的專案數；
+- 面板最上方多一張專案卡（管線、下一步、動作、驗證），下方仍是原本的主控台；
+- system prompt 多一段固定內容：專案的 STATUS 路徑與 CARD 規約（寫入前重讀、`rev + 1`、關卡只填一個值、到關卡就停、不做 release）。只要 session 還在同一個專案，這段內容就不會變，不會破壞 prompt 快取；
+- 進度（各階段、目前步驟、下一步、待決、關卡）只在和上一次不同時，才附在下一則提示上。
+
+`/console mode console` 在此 session 關閉專案模式，`/console mode project` 強制開啟，`/console mode auto` 依 `projectMode` 設定。
 
 ## Workflow
 
