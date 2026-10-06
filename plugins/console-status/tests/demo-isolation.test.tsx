@@ -1,4 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
+import { fixturePath } from './fixture-path'
 
 const OPTIONS = { options: { executor: 'claude', registryPath: 'D:/Fixtures/registry.md', companionStateRoots: '["D:/State"]' } }
 const STATUS = 'D:/Private Fixture/.console/STATUS.md'
@@ -19,7 +20,7 @@ function fixture(on: any) {
     sessionDelay: 0, sessionReadStarted: 0, sessionReadSettled: 0, failSession: false,
   }
   on('fs.read', async (_: any, e: any) => {
-    const path = e.path.replace(/\\/g, '/')
+    const path = fixturePath(e.path)
     data.fsReads += 1
     const files: Record<string, string> = {
       'D:/Fixtures/registry.md': [

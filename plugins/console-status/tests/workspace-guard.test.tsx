@@ -1,5 +1,6 @@
 import { expect, test, mock } from 'claude-code/testing'
 import { rows } from '../hooks/logic'
+import { fixturePath } from './fixture-path'
 
 const OPTIONS = { options: { registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/companion.mjs', companionStateRoots: '["D:/State"]' } }
 const STATUS = 'D:/Project Alpha/.console/STATUS.md'
@@ -27,9 +28,9 @@ function fixture(on: any, source: 'claude' | 'codex') {
     if (source === 'claude') files[SESSIONS] = JSON.stringify({ version: 1, roots: { 'd:/project alpha': { root: 'D:/Project Alpha', jobs: [job] } } })
     else files['D:/State/Project Alpha-hash/state.json'] = JSON.stringify({ jobs: [job] })
   }
-  on('fs.read', (_: any, e: any) => ({ value: files[e.path.replace(/\\/g, '/')] ?? '' }))
-  on('fs.write', (_: any, e: any) => { files[e.path.replace(/\\/g, '/')] = e.text; return { value: undefined } })
-  on('fs.list', (_: any, e: any) => ({ value: e.path.replace(/\\/g, '/') === 'D:/State' ? [{ name: 'Project Alpha-hash', kind: 'dir' }] : [] }))
+  on('fs.read', (_: any, e: any) => ({ value: files[fixturePath(e.path)] ?? '' }))
+  on('fs.write', (_: any, e: any) => { files[fixturePath(e.path)] = e.text; return { value: undefined } })
+  on('fs.list', (_: any, e: any) => ({ value: fixturePath(e.path) === 'D:/State' ? [{ name: 'Project Alpha-hash', kind: 'dir' }] : [] }))
   on('process.run', (_: any, e: any) => {
     if (e.argv.includes('--bg') || e.argv[0] === 'node') launches.push(e)
     return { value: { exitCode: 0, stdout: e.argv[1] === 'agents' ? JSON.stringify(agents) : e.argv[0] === 'node' ? '{"jobId":"new-job"}' : 'OK', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }

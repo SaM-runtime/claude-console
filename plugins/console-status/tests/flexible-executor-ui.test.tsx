@@ -1,4 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
+import { fixturePath } from './fixture-path'
 
 const SETTINGS = 'C:/Users/example/.claude/handoffs/dispatch.json'
 const LEGACY = 'C:/Users/example/.claude/handoffs/codex-dispatch.json'
@@ -26,13 +27,13 @@ function fixture(on: any, opts: Fixture = {}) {
   const toasts: string[] = []
   const sessions: any[] = []
   on('fs.read', (_: any, e: any) => {
-    const path = e.path.replace(/\\/g, '/')
+    const path = fixturePath(e.path)
     if (!(path in files)) throw Object.assign(new Error(`ENOENT: no such file ${path}`), { code: 'ENOENT' })
     return { value: files[path] }
   })
-  on('fs.write', (_: any, e: any) => { files[e.path.replace(/\\/g, '/')] = e.text; return { value: undefined } })
+  on('fs.write', (_: any, e: any) => { files[fixturePath(e.path)] = e.text; return { value: undefined } })
   const lists: Record<string, { name: string; kind: string }[]> = { 'D:/State': [{ name: 'Project Alpha-hash', kind: 'dir' }], ...opts.lists }
-  on('fs.list', (_: any, e: any) => ({ value: lists[e.path.replace(/\\/g, '/')] ?? [] }))
+  on('fs.list', (_: any, e: any) => ({ value: lists[fixturePath(e.path)] ?? [] }))
   on('process.run', (_: any, e: any) => {
     const argv: string[] = [...e.argv]
     let stdout = ''

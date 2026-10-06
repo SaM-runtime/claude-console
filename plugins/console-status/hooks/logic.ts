@@ -99,6 +99,15 @@ export function jobFlags(jobs: Job[], cardMs: number | null): JobFlag[] {
   return flags
 }
 
+/** The verdict part of a 驗證 line: after `→`/`->`, else after the backticked command, else none. */
+export function verifyNote(line: string): string {
+  const quoted = /^`[^`]+`/.test(line)
+  const rest = line.replace(/^`[^`]+`/, '')
+  const arrow = rest.match(/(?:→|->)\s*(.*)$/)
+  if (arrow) return (arrow[1] ?? '').trim()
+  return quoted ? rest.trim() : ''
+}
+
 export function buildProject(row: RegistryRow, cardText: string | null, jobs: Job[], now: number): Project {
   const card = cardText === null ? null : parseCard(cardText)
   const updated = card?.['更新'] ?? ''
@@ -112,6 +121,7 @@ export function buildProject(row: RegistryRow, cardText: string | null, jobs: Jo
     next: card?.['下一步'] ?? '',
     gate: card?.['關卡'] ?? '',
     verify: (card?.['驗證'] ?? '').replace(/^`([^`]+)`.*$/, '$1'),
+    verifyNote: verifyNote(card?.['驗證'] ?? ''),
     updated,
     isStale: ms !== null && now - ms > STALE_DAYS * 86400000,
     jobs: jobFlags(jobs, ms),

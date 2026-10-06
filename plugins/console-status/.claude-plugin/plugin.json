@@ -80,6 +80,12 @@
       "title": "Companion state roots",
       "description": "JSON array of root paths. Blank reads plugin data first, then companionStateDir (Temp).",
       "default": ""
+    },
+    "projectMode": {
+      "type": "string",
+      "title": "Project mode",
+      "description": "auto: in a session opened inside a registered project, show that project's pipeline in the band and pane, add the CARD contract to the system prompt and attach progress to prompts when it changes. off: always the multi-project console. /console mode overrides per session.",
+      "default": "auto"
     }
   },
   "homepage": "https://github.com/SaM-runtime/claude-console"

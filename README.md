@@ -70,6 +70,7 @@ Marketplace management is covered by the official [plugin marketplace documentat
 | `modelsCachePath` | Codex model and effort cache | `~/.codex/models_cache.json` |
 | `codexFallback` | What to do when Codex is unusable: `ask`, `claude`, or `off` | `ask` |
 | `codexMinQuotaPercent` | Codex quota (percent remaining) below which the fallback applies | `10` |
+| `projectMode` | `auto`: a session opened inside a registered project switches to project mode (see [Pipeline and project mode](#pipeline-and-project-mode)); `off`: always the multi-project console | `auto` |
 
 Paths beginning with `~` expand on Windows, macOS, and Linux. Run `/reload-plugins` or start another Claude Code session after plugin configuration changes. See [the registry example](workflow/projects-scope.example.md).
 
@@ -188,19 +189,19 @@ Set `關卡` to `無`, `spec：…`, `review：…`, or `release：…`. Unknown
 
 ## Project actions
 
-The right-click menu and expanded project cards expose the same actions. Mobile uses card Buttons. Every trigger shows an immediate toast, spins and rejects duplicate activation while running, then writes its result to the activity feed.
+The right-click menu (or `m` on the keyboard for the row under the cursor; Esc closes it) and expanded project cards expose the same actions. Mobile uses card Buttons. Every trigger shows an immediate toast, shows elapsed seconds and rejects duplicate activation while running, then writes its result to the activity feed.
 
 | Action | Availability | Behavior |
 | --- | --- | --- |
 | ▶ Run verification | CARD has `驗證` | Runs in the project root with a five-minute timeout; no model quota |
 | ⇢ Sync STATUS | SYNC, executor not `manual` | Dispatches the project's executor to update only CARD and history |
-| ⇢ Continue | IDLE, with a next step and no decision or gate; executor not `manual` | Requires a second press within three seconds, then dispatches the project's executor |
+| ⇢ Continue | IDLE, with a next step and no decision or gate; executor not `manual` | Requires a second press within six seconds (the pane shows the next step it will dispatch), then dispatches the project's executor |
 | ⇢ 改用 Claude 派工 | A Codex dispatch held by `codexFallback: ask` | Sends the same action to Claude, recorded as a fallback |
 | ✎ Decide | `等使用者` is nonempty | Prefills a draft and one-shot project context; Claude runs only when submitted |
 | ⚑ Review gate / final review | Recognized spec, review, or release gate | Sends evidence to the console Claude; release review cannot execute release |
 | ↗ Open STATUS.md | Always | Requests the editor to open the file |
 
-Verification stores the latest timestamp, exit status, and final three captured lines per project. Put only trusted local checks in `驗證`; the command runs through a shell and must not contain deployment or formal-environment operations.
+Verification stores the latest timestamp, exit status, and final three captured lines per project. Put only trusted local checks in `驗證`; the command runs through a shell and must not contain deployment or formal-environment operations. Because background executors write the CARD, the pane shows the full command and runs a command it has not run for that project before (new, or changed since) only after a second press within 10 seconds; approved commands are remembered per project across sessions.
 
 A dispatch shows RUNNING optimistically until managed state is refreshed. Acceptance is not completion. GATE is purple, sorts after ACTION and before RUNNING, and remains busy until its matching Claude review turn ends. `prompt.fill` can refuse when no composer exists or a dialog owns it; the panel reports that failure without submitting a decision. Remote Control composer behavior still needs device acceptance testing.
 
@@ -218,8 +219,34 @@ A dispatch shows RUNNING optimistically until managed state is refreshed. Accept
 | `/console effort [level]` | Show choices or set effort |
 | `/console project` | List each project's effective executor, model, and effort |
 | `/console project executor\|model\|effort <value\|inherit> <name>` | Set or clear one project's override |
+| `/console mode [auto\|console\|project]` | Show or choose project mode for this session |
 
 Selecting a project applies only to the next accepted prompt. A downstream rejection retains the selection for retry.
+
+## Pipeline and project mode
+
+Every project shows where it stands in the [workflow](workflow/claude-console/SKILL.md) as a pipeline: **規格 spec → 實作 build → 同步 sync → 驗證 verify → 審核 review → 上線 release**.
+
+| Mark | Meaning |
+| --- | --- |
+| `●` green | Done |
+| `◉` teal | An executor is working on it (a job under a `spec` or `review` gate counts for that gate) |
+| `◆` amber / blue / purple | Waiting: for the user or a continue (amber), for a sync (blue), for a gate decision (purple) |
+| `✕` red | Verification failed: the console's latest run of the same command, else the CARD's `驗證` verdict after `→` |
+| `○` grey | Not reached |
+
+The position comes from what the console already reads: a running job, then an unsynced result, then the gate, then a failed verification, then a next step. A decision in `等使用者` holds the current stage. A `review` or `release` gate implies acceptance passed, as the workflow sets them only then.
+
+The project table has a six-mark `流程` column (from 64 columns wide); project cards and the action menu show the full line with stage names.
+
+**Project mode.** When a Claude Code session starts inside a registered project's root (or a folder under it), the console follows that project:
+
+- the band shows the project's pipeline and current step, plus how many other projects need a decision or gate;
+- the pane opens with a project card (pipeline, next step, actions, verification) above the usual console;
+- the system prompt gets one section with the project's STATUS path and the CARD contract (re-read before writing, `rev + 1`, one gate value, stop at gates, no release). It does not change while the session stays in the project, so it does not break prompt caching;
+- a prompt carries a short progress note (stages, current step, next step, decision, gate) only when that progress changed since the last one.
+
+`/console mode console` turns it off for the session, `/console mode project` forces it, `/console mode auto` follows `projectMode`.
 
 ## Workflow
 
@@ -233,6 +260,8 @@ Selecting a project applies only to the next accepted prompt. A downstream rejec
 - The panel reports local evidence and does not replace project-specific verification.
 - Refresh runs every 60 seconds; process probes are cached for five minutes unless forced.
 - Roots with the same final directory name can collide in companion-state matching.
+- Codex support reads the Codex plugin's internal `state.json` and plugin cache layout. An unrecognised state shape is reported on the companion footer line; update console-status when that happens.
+- Keep one console session dispatching at a time. Writes to `claude-sessions.json` are serialized within one Claude Code process and refuse to overwrite a file another process changed, but the plugin file API has no rename or exclusive create, so two consoles writing in the same instant are not fully safe.
 - A selected project adds context to one prompt and does not change the active working directory.
 
 ## Upgrade
@@ -250,7 +279,7 @@ Then run `/reload-plugins` or start a new session. See [CHANGELOG.md](CHANGELOG.
 claude plugin validate .
 claude plugin validate plugins/console-status
 claude plugin test plugins/console-status
-node .task/check-docs.mjs
+node scripts/check-docs.mjs
 ```
 
 ## License

@@ -1,10 +1,12 @@
-// Client module: the project table rows. Pointer hover, click to select, right-click to copy the
-// row menu, ↑/↓/Enter from the keyboard, and a shimmer on rows whose executor job is running.
+// Client module: the project table rows. Pointer hover, click to select, right-click (or `m` on the
+// keyboard) opens the row's action menu, ↑/↓/Enter from the keyboard, and a shimmer on rows whose
+// executor job is running.
 // Pattern borrowed from data-goblin/claude-code-filetree (rows.tsx), rewritten for this table.
 import type { ClientModule } from 'claude-code'
 import { displayWidth } from './logic'
 
-export type Cell = { t: string; c?: string; bg?: string; b?: boolean; w?: number; right?: boolean }
+/** `parts`: one-column glyphs, each in its own colour (the pipeline strip); `t` is then ignored. */
+export type Cell = { t: string; c?: string; bg?: string; b?: boolean; w?: number; right?: boolean; parts?: { t: string; c?: string }[] }
 export type RowSpec = {
   id: string
   cells: Cell[]
@@ -180,7 +182,7 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
     }
     const row = props.rows[e.y]
     if (!row || e.type !== 'down') return
-    if (e.button === 'right') surface.post({ copy: row.id })
+    if (e.button === 'right') surface.post({ menu: row.id })
     else surface.post({ press: row.id })
   })
   surface.onKey(e => surface.post({ key: e.key }))
@@ -200,6 +202,13 @@ const Rows: ClientModule<RowsProps, Local> = (props, surface) => {
     const spin = r.shimmer && i === 2 ? ` ${SPIN[state.phase % SPIN.length]}` : ''
     const body = fittedCell(c.t + spin, width, c.right)
     const backgroundColor = i === 0 && r.breathe?.length ? breathColor(r.breathe, state.phase * TICK_MS) : c.bg
+    if (c.parts) {
+      return (
+        <Box width={width} flexShrink={0} overflow="hidden">
+          <Text wrap="truncate-end">{c.parts.slice(0, width).map(part => <Text color={part.c}>{part.t}</Text>)}</Text>
+        </Box>
+      )
+    }
     if (r.shimmer && i === 0) {
       const chars = [...body]
       return (

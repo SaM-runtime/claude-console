@@ -1,4 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
+import { fixturePath } from './fixture-path'
 
 const OPTIONS = { options: { registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/companion.mjs', companionStateRoots: '["D:/State"]' } }
 const STATUS = 'D:/Project Alpha/.console/STATUS.md'
@@ -13,7 +14,7 @@ function fixture(on: any, extra: string) {
   const toasts: string[] = []
   on('fs.list', () => ({ value: [{ name: 'Project Alpha-hash', kind: 'dir' }] }))
   on('fs.read', (_: any, e: any) => {
-    const path = e.path.replace(/\\/g, '/')
+    const path = fixturePath(e.path)
     const files: Record<string, string> = {
       'D:/Fixtures/registry.md': `## STATUS 卡位置\n| Project Alpha | \`${STATUS}\` |`,
       [STATUS]: `<!-- CARD -->\n- 更新：2030-01-05 08:00\n- 狀態：Ready\n- 等使用者：無\n- 下一步：Run local tests\n- 驗證：無\n- 關卡：無\n${extra}\n<!-- /CARD -->`,
@@ -70,6 +71,7 @@ test('session start releases a review left pending by an interrupted plugin life
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   const ui = await $.ui.mount(PANE())
   await ui.press({ key: 'detail' })
+  await ui.press({ key: 'detail-Project Alpha-verify' })
   await ui.press({ key: 'detail-Project Alpha-verify' })
   expect(state.verificationResults[STATUS]?.ok).toBe(true)
   await ui.press({ key: 'next-action' })

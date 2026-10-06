@@ -1,4 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
+import { fixturePath } from './fixture-path'
 
 const OPTIONS = { options: { registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/companion.mjs', companionStateRoots: '["D:/State"]' } }
 const SETTINGS = 'C:/Users/example/.claude/handoffs/dispatch.json'
@@ -19,8 +20,8 @@ test('Claude reconciliation shows an unmanaged resume copy warning in the feed',
       { id: 'pending', launchName: 'resume-launch', sessionId: original, root: 'D:/Project Alpha', prompt: 'resume work', startedAt: '2030-01-05T11:00:00Z', status: 'running', phase: 'unknown' },
     ] } } }),
   }
-  on('fs.read', (_, e) => ({ value: files[e.path.replace(/\\/g, '/')] ?? '' }))
-  on('fs.write', (_, e) => { files[e.path.replace(/\\/g, '/')] = e.text; return { value: undefined } })
+  on('fs.read', (_, e) => ({ value: files[fixturePath(e.path)] ?? '' }))
+  on('fs.write', (_, e) => { files[fixturePath(e.path)] = e.text; return { value: undefined } })
   on('fs.list', () => ({ value: [] }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: JSON.stringify([{ id: 'abc12345', name: 'resume-launch', sessionId: copy, cwd: 'D:/Project Alpha', kind: 'background', state: 'working' }]), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('session.usage', () => ({ value: null }))
@@ -45,8 +46,8 @@ test('executor control defaults to Claude, persists switches, resets settings an
   const calls: any[] = []
   const reads: string[] = []
   let quota = ''
-  on('fs.read', (_, e) => { const path = e.path.replace(/\\/g, '/'); reads.push(path); return { value: files[path] ?? '' } })
-  on('fs.write', (_, e) => { files[e.path.replace(/\\/g, '/')] = e.text; return { value: undefined } })
+  on('fs.read', (_, e) => { const path = fixturePath(e.path); reads.push(path); return { value: files[path] ?? '' } })
+  on('fs.write', (_, e) => { files[fixturePath(e.path)] = e.text; return { value: undefined } })
   on('fs.list', () => ({ value: [] }))
   on('process.run', (_, e) => {
     calls.push(e)
@@ -97,8 +98,8 @@ test('Claude UI dispatch tracks a background session, shows results and resumes 
   const launches: any[] = []
   const toasts: string[] = []
   const sessionId = '12345678-1234-4234-8234-123456789abc'
-  on('fs.read', (_, e) => ({ value: files[e.path.replace(/\\/g, '/')] ?? '' }))
-  on('fs.write', (_, e) => { files[e.path.replace(/\\/g, '/')] = e.text; return { value: undefined } })
+  on('fs.read', (_, e) => ({ value: files[fixturePath(e.path)] ?? '' }))
+  on('fs.write', (_, e) => { files[fixturePath(e.path)] = e.text; return { value: undefined } })
   on('fs.list', () => ({ value: [] }))
   on('process.run', (_, e) => {
     let stdout = ''
