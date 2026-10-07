@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- **Command guard.** An irreversible Bash or PowerShell command (recursive delete outside build output, force push, remote delete, `git reset --hard`, `git clean -f`, discarding all changes, `git branch -D`, history rewrites, `DROP`/`TRUNCATE TABLE`, disk formatting, `terraform destroy`, bulk `kubectl delete`, publishing) asks first in Claude Code's question dialog, whatever the permission mode allows; a refusal tells the model not to retry it another way, and the feed records each decision. `commandGuard`: `ask` / `deny` / `off`.
+- **Prompt cache countdown and re-write cost.** The band shows how long the console's prompt cache stays warm and, once cold, what the next prompt costs to re-write it; a toast warns a minute before it expires and when a prompt goes out on a cold cache. The pane adds the cache line and this session's cost. The TTL is learned (`cacheTtl: auto`) or fixed; `cacheWritePrice` overrides the list price; `cacheHint: off` hides it.
+- **Tests** answer `command.register` the way Claude Code 2.1.292 requires.
+
 ## 0.3.0
 
 - **Git, PR and CI per project.** Each refresh reads every project's `git status` (without taking the index lock); with `gh` installed, the current branch's pull request and its checks are read every five minutes, every minute while checks run. The table gains a `Git` column (conflicts, failed CI, uncommitted, unpushed, behind, clean), the action menu and card show the branch, upstream and the PR with failing check names and a `↗ 開啟` button, the band shows `CI 失敗 n`, a new CI failure toasts, and a selected project's Git and PR lines ride along with the next prompt. `gitProbe` (`on` / `git` / `off`) controls it.

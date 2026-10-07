@@ -20,7 +20,10 @@ import { pipeline, projectForCwd, projectModeSection, progressContext, progressS
 import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
 import { gitBadge, gitLine, gitProbeMode, gitStatusArgs, parseGitStatus, parsePrView, prLine, prViewArgs } from './git'
-import type { PrInfo } from '../types'
+import type { PrInfo, CacheClock } from '../types'
+import { CACHE_WARN_MS, cacheChip, cacheTtlOption, cacheView, cacheWarning, leftText, learnTtl, priceOverride, tokensText, usd } from './cache'
+import type { CacheTtl } from './cache'
+import { commandPreview, dangerReason, guardMode } from './guard'
 
 import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
 import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
@@ -65,6 +68,14 @@ let lastProgress = ''
 const actionPulse = atom({ plugin: 'console-status', key: 'actionPulse' } as const, 0)
 const reviewRequests = atom({ plugin: 'console-status', key: 'reviewRequests' } as const, {})
 const fallbackOffers = atom({ plugin: 'console-status', key: 'fallbackOffers' } as const, {})
+const cacheClock = atom({ plugin: 'console-status', key: 'cacheClock' } as const, null)
+/** Bumped every 15 s while a cache clock runs, so the countdown redraws without a full refresh. */
+const cacheTick = atom({ plugin: 'console-status', key: 'cacheTick' } as const, 0)
+const isTurnRunning = atom({ plugin: 'console-status', key: 'isTurnRunning' } as const, false)
+const CACHE_TTL_KEY = 'cacheTtl'
+/** The cache clock (its `at`) the expiry warning already fired for. */
+let cacheWarnedFor = -1
+let cacheTimer: { cancel(): void } | undefined
 const actionLocks = new Set<string>()
 const earlyReviewStarts = new Map<string, string>()
 let selectionClaim: string | null = null
@@ -346,6 +357,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
       ...(codexInUse ? { codexInUse: true } : {}),
       ...(codexInUse && (companion || formatWarning) ? { companion: { path: companion?.path ?? '', source: companion?.source ?? 'none', ...(companionWarning ? { warning: companionWarning } : {}) } } : {}),
       contextPercent: usage?.context?.percent ?? null, error,
+      ...(typeof usage?.cost?.usd === 'number' ? { costUsd: usage.cost.usd } : {}),
       codexQuota: parseCodexQuota(codexQuotaText, now),
       limits: (usage?.rateLimits ?? []).map((l: any) => ({ kind: String(l.kind), percent: Number(l.percentUsed) || 0, ...(l.resetsAt ? { resetsAt: String(l.resetsAt) } : {}) })),
     }
@@ -622,6 +634,36 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
   }
 }
 
+/** The TTL in force: the option when set, else what an idle gap proved (remembered across sessions), else 5m. */
+async function cacheTtlFor($: any, options: PluginOptions, learned: CacheTtl | null): Promise<CacheTtl> {
+  const option = cacheTtlOption((options as any).cacheTtl)
+  if (option !== 'auto') return option
+  if (learned) {
+    await Promise.resolve().then(() => $.store.set(CACHE_TTL_KEY, learned)).catch(() => {})
+    return learned
+  }
+  const stored = await Promise.resolve().then(() => $.store.get(CACHE_TTL_KEY)).catch(() => null)
+  return stored === '1h' ? '1h' : '5m'
+}
+
+/** Redraws the countdown and warns once, shortly before the cache goes cold. */
+async function cacheTickOnce($: any, options: PluginOptions) {
+  const clock = await read($, cacheClock)
+  if (!clock) return
+  const now = await $.clock.now()
+  const view = cacheView(clock, now, await read($, isTurnRunning), priceOverride((options as any).cacheWritePrice))
+  if (!view) return
+  // Keep redrawing while warm and for an hour after, then stop touching state.
+  if (view.coldForMs < 60 * 60_000) await update($, cacheTick, v => v + 1)
+  if (view.warm && view.leftMs <= CACHE_WARN_MS && cacheWarnedFor !== clock.at && cacheMode(options) !== 'off') {
+    cacheWarnedFor = clock.at
+    $.ui.toast(cacheWarning(clock, view), { timeoutMs: 10_000 })
+  }
+}
+
+/** `cacheHint`: `on` (chip, pane line, toasts) or `off`. */
+const cacheMode = (options: PluginOptions) => String((options as any).cacheHint ?? 'on').trim().toLowerCase() === 'off' ? 'off' : 'on'
+
 /** Opens a project's pull request in the browser: `gh pr view --web`, else the OS URL handler. */
 async function openPullRequest($: any, p: Project) {
   if (!p.pr) return
@@ -653,6 +695,8 @@ export const register: Register = (on, options) => {
     await loadTrust($)
     await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；band 橫帶；demo 示範' })
     refreshTimer = $.clock.every(TICK_MS, () => void refresh($, options))
+    cacheTimer?.cancel()
+    cacheTimer = $.clock.every(15_000, () => void cacheTickOnce($, options).catch(() => {}))
     void refresh($, options, true)
     return next(e)
   })
@@ -667,6 +711,12 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     if (e.origin?.kind === 'plugin') return next(e)
+    if (cacheMode(options) === 'on') {
+      // A prompt on a cold cache re-writes the whole context: say so, never hold the prompt.
+      const clock = await read($, cacheClock).catch(() => null)
+      const view = clock ? cacheView(clock, await $.clock.now(), false, priceOverride((options as any).cacheWritePrice)) : null
+      if (clock && view && !view.warm) $.ui.toast(cacheWarning(clock, view), { timeoutMs: 8000 })
+    }
     // Project mode: the pipeline position rides along with a prompt only when it changed.
     // A failure here must never hold the person's prompt back.
     const here = await focused($, options, await read($, snapshot)).catch(() => null)
@@ -709,7 +759,46 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // The console session's own requests set the cache clock; a subagent's run on its own cache.
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId) return yield* next(e)
+    const startedAt = await $.clock.now()
+    await update($, isTurnRunning, () => true)
+    const result = yield* next(e)
+    const u = result?.usage
+    if (u) {
+      const tokens = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens + u.output_tokens
+      const prev = await read($, cacheClock)
+      const ttl = await cacheTtlFor($, options, learnTtl(prev, startedAt, u.model, u.cache_read_input_tokens))
+      await update($, cacheClock, () => ({ at: startedAt, tokens, model: u.model, ttl }) as CacheClock)
+    }
+    return result
+  })
+
+  // Command guard: an irreversible shell command asks first, whatever the permission mode allows.
+  on('tool.call', async ($, e, next) => {
+    // PowerShell is the Windows shell tool where a build offers it.
+    const tool: string = e.tool
+    if (tool !== 'Bash' && tool !== 'PowerShell') return next(e)
+    const mode = guardMode((options as any).commandGuard)
+    const command = String((e as any).command ?? '')
+    const reason = mode === 'off' ? null : dangerReason(command)
+    if (!reason) return next(e)
+    const preview = commandPreview(command)
+    let allowed = false
+    if (mode === 'ask') {
+      const answer = await $.ui.ask(`指令護欄：${reason}。\n${preview}\n要執行這個指令嗎？`, { header: '指令護欄', options: ['執行一次', '拒絕'] }).catch(() => '')
+      allowed = answer === '執行一次'
+    }
+    const at = await $.clock.now()
+    await update($, feedAtom, list => [{ at, text: `指令護欄${allowed ? '放行' : '攔下'}：${reason}`, tone: allowed ? 'amber' : 'red' } as const, ...list].slice(0, 20))
+    if (allowed) return next(e)
+    $.ui.toast(`指令護欄攔下：${reason}`, { timeoutMs: 6000 })
+    return { deny: `console-status 指令護欄攔下這個指令（${reason}）${mode === 'deny' ? '：commandGuard 設為 deny' : '：使用者沒有同意'}。不要換個寫法重試同樣的效果；改用可復原的做法，或請使用者自己執行。` }
+  })
+
   on('turn.complete', async ($, e, next) => {
+    if (!e.agentId) await update($, isTurnRunning, () => false)
     if (!e.agentId) {
       const requests = await read($, reviewRequests)
       for (const [path, request] of Object.entries(requests)) {
@@ -854,6 +943,7 @@ export const register: Register = (on, options) => {
     action_verify: '執行 CARD 驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。新的或被修改過的指令會先完整顯示，10 秒內再按一次才執行。只應填入本機驗證，不可填正式環境操作。',
     action_sync: '直接請所選執行者將最近結果同步回 STATUS CARD 與歷程，使用派工模型設定與該執行者額度。',
     git: 'Git：✕衝突 合併衝突　CI✕ PR 的檢查失敗　●n 未提交／未追蹤檔案　↑n 未推送　↓n 落後上游　CI… 檢查進行中　✓ 乾淨。git 每次更新讀取（不鎖 index），PR 與 CI 透過 gh 每 5 分鐘讀取，CI 進行中時每分鐘。gitProbe 選項可改為 git 或 off。',
+    cache: '主控台的 prompt 快取：最後一次請求後 5 分鐘（或 1 小時）內送出會讀快取；過期後下一則提示要把整段 context 重寫進快取，費用約為 input 價格的 1.25 倍（1 小時 TTL 為 2 倍）。TTL 由 cacheTtl 設定，auto 會從實際讀取結果學習。',
     pipeline: '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線。● 完成　◉ 執行中　◆ 等待（主控台、使用者或同步）　✕ 驗證失敗　○ 未到。由 CARD、執行者工作與最近一次驗證推得。',
     action_continue: '6 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
@@ -913,13 +1003,16 @@ export const register: Register = (on, options) => {
         </Box>
       )
     }
-    const band = layoutBand(s, { columns, demo, paneOpen })
+    await read($, cacheTick)
+    const cv = demo || cacheMode(options) === 'off' ? null : cacheView(await read($, cacheClock), await $.clock.now(), await read($, isTurnRunning), priceOverride((options as any).cacheWritePrice))
+    const chip = cv ? cacheChip(cv, columns < 40) : null
+    const band = layoutBand(s, { columns, demo, paneOpen, ...(chip ? { cache: chip.text } : {}) })
     if (generation !== dataGeneration) return <Box height={1} width={columns} overflow="hidden"><Text color={C.dim} wrap="truncate-end">{demoActive ? ' 示範資料 ' : '讀取中…'}</Text></Box>
     return (
       <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
         <Box gap={1} flexShrink={0} height={1}>
           {band.items.map(item => <Box key={'band-' + item.id} width={item.width} flexShrink={0} height={1} overflow="hidden">
-            <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' || item.id === 'ci' ? C.red : FG[item.id as State] ?? C.text}
+            <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' || item.id === 'ci' ? C.red : item.id === 'cache' ? (chip?.tone === 'red' ? C.red : chip?.tone === 'amber' ? C.amber : C.green) : FG[item.id as State] ?? C.text}
               backgroundColor={item.id === 'demo' ? C.bar : undefined}>{item.text}</Text>
           </Box>)}
         </Box>
@@ -1277,6 +1370,10 @@ export const register: Register = (on, options) => {
     }
     const rule = <Text color={C.faint} wrap="truncate-end">{'─'.repeat(width)}</Text>
     const limits = (s.limits ?? []).slice(0, 2)
+    await read($, cacheTick)
+    const paneClock = demo || cacheMode(options) === 'off' ? null : await read($, cacheClock)
+    const paneView = paneClock ? cacheView(paneClock, now, await read($, isTurnRunning), priceOverride((options as any).cacheWritePrice)) : null
+    const paneCache = paneClock && paneView ? { clock: paneClock, view: paneView } : null
 
     if (generation !== dataGeneration) return <Text color={C.dim}>{demoActive ? ' 示範資料 ' : '讀取中…'}</Text>
     return (
@@ -1456,6 +1553,21 @@ export const register: Register = (on, options) => {
               <Text bold color={C.strong}>Claude</Text>
               {ctx !== null && <Battery id="ctx" label="上下文" used={ctx} hint={ctx >= ROTATE_PERCENT ? '建議換新主控台' : ''} />}
               {limits.map(l => <Battery key={'lim' + l.kind} id={/five/.test(l.kind) ? 'five_hour' : 'seven_day'} label={limitName(l.kind)} used={l.percent} hint="" note={resetText(l.resetsAt, now)} />)}
+              {paneCache && (
+                <Box key="cache" gap={1} hover={{ scope: 'help-cache' }}>
+                  <Box width={9} flexShrink={0}><Text color={C.dim}>快取</Text></Box>
+                  <Text color={paneCache.view.warm ? (paneCache.view.leftMs <= CACHE_WARN_MS ? C.amber : C.green) : C.red} wrap="truncate-end">
+                    {paneCache.view.warm ? `${leftText(paneCache.view.leftMs)} 後過期（${paneCache.view.ttl}）` : `已冷 ${leftText(paneCache.view.coldForMs)}`}
+                    <Text color={C.dim}>{`　${tokensText(paneCache.clock.tokens)} tokens${paneCache.view.cost === null ? '' : `・${paneCache.view.warm ? '冷了' : '下則'}重寫約 ${usd(paneCache.view.cost)}`}`}</Text>
+                  </Text>
+                </Box>
+              )}
+              {typeof s.costUsd === 'number' && s.costUsd > 0 && !s.demo && (
+                <Box key="cost" gap={1}>
+                  <Box width={9} flexShrink={0}><Text color={C.dim}>本次花費</Text></Box>
+                  <Text color={C.text}>{usd(s.costUsd)}<Text color={C.dim}>　依 API 牌價估算</Text></Text>
+                </Box>
+              )}
             </Box>
             {(s.demo || codexShown) && ((s.codexQuota?.limits.length ?? 0) > 0 || s.codexQuota?.credits) && (
               <Box key="q-codex" flexDirection="column" borderStyle="round" borderColor={C.faint} paddingX={1}>

@@ -244,7 +244,7 @@ test('open checks editor exit status and reports fallback failure through the ac
 
 test('a verify command written by an executor runs only after the user sees and confirms it', OPTIONS, async ($, on) => {
   const { data, clock } = fixture(on)
-  on('command.register', (_: any, e: any) => ({ command: e.command }))
+  on('command.register', () => ({ value: undefined }))
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   const ui = await $.ui.mount(PANE())

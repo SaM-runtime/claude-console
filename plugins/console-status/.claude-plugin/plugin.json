@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -86,6 +86,30 @@
       "title": "Git and PR status",
       "description": "on: each project's branch, uncommitted and unpushed work (git) plus its pull request and CI checks (gh, when installed). git: local git only. off: neither.",
       "default": "on"
+    },
+    "commandGuard": {
+      "type": "string",
+      "title": "Command guard",
+      "description": "ask: an irreversible shell command (recursive delete, force push, hard reset, git clean, dropped tables, publish) asks you first, even when permissions would let it run. deny: always refuse them. off: no guard.",
+      "default": "ask"
+    },
+    "cacheHint": {
+      "type": "string",
+      "title": "Prompt cache hint",
+      "description": "on: show when the console's prompt cache goes cold and what re-writing it costs (band chip, pane line, toasts). off: hide.",
+      "default": "on"
+    },
+    "cacheTtl": {
+      "type": "string",
+      "title": "Prompt cache TTL",
+      "description": "auto: 5m until an idle gap proves 1h (remembered). 5m or 1h: fixed.",
+      "default": "auto"
+    },
+    "cacheWritePrice": {
+      "type": "string",
+      "title": "Cache write price",
+      "description": "USD per million cache-write tokens for the cost estimate; blank uses the model's list price (1.25x input for 5m, 2x for 1h).",
+      "default": ""
     },
     "projectMode": {
       "type": "string",

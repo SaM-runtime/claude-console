@@ -66,7 +66,7 @@ test('rewritten review prompt binds its early turn, completes, and keeps the rel
 test('session start releases a review left pending by an interrupted plugin lifetime', OPTIONS, async ($, on) => {
   const { state } = fixture(on, '- 驗證：node test.mjs\n- 關卡：review：Inspect evidence')
   on('prompt.submit', (_: any, e: any) => ({ text: e.text }))
-  on('command.register', (_: any, e: any) => ({ command: e.command }))
+  on('command.register', () => ({ value: undefined }))
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   const ui = await $.ui.mount(PANE())
