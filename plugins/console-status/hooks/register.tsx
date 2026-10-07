@@ -1374,6 +1374,10 @@ export const register: Register = (on, options) => {
     const paneClock = demo || cacheMode(options) === 'off' ? null : await read($, cacheClock)
     const paneView = paneClock ? cacheView(paneClock, now, await read($, isTurnRunning), priceOverride((options as any).cacheWritePrice)) : null
     const paneCache = paneClock && paneView ? { clock: paneClock, view: paneView } : null
+    // No countdown yet: say when it starts, so the row is findable right after an install or reload.
+    const paneCacheNote = demo || cacheMode(options) === 'off' || paneCache ? ''
+      : !paneClock ? '下一則回應後開始倒數'
+      : await read($, isTurnRunning) ? '回應中，結束後重新倒數' : ''
 
     if (generation !== dataGeneration) return <Text color={C.dim}>{demoActive ? ' 示範資料 ' : '讀取中…'}</Text>
     return (
@@ -1560,6 +1564,12 @@ export const register: Register = (on, options) => {
                     {paneCache.view.warm ? `${leftText(paneCache.view.leftMs)} 後過期（${paneCache.view.ttl}）` : `已冷 ${leftText(paneCache.view.coldForMs)}`}
                     <Text color={C.dim}>{`　${tokensText(paneCache.clock.tokens)} tokens${paneCache.view.cost === null ? '' : `・${paneCache.view.warm ? '冷了' : '下則'}重寫約 ${usd(paneCache.view.cost)}`}`}</Text>
                   </Text>
+                </Box>
+              )}
+              {paneCacheNote && (
+                <Box key="cache-note" gap={1} hover={{ scope: 'help-cache' }}>
+                  <Box width={9} flexShrink={0}><Text color={C.dim}>快取</Text></Box>
+                  <Text color={C.dim} wrap="truncate-end">{paneCacheNote}</Text>
                 </Box>
               )}
               {typeof s.costUsd === 'number' && s.costUsd > 0 && !s.demo && (

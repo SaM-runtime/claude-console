@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+- **Cache row before the first response.** The countdown starts from the console session's next response, so right after installing or reloading the plugin nothing showed and the feature looked missing. The pane's Claude frame now shows `快取　下一則回應後開始倒數` until then, and `回應中，結束後重新倒數` while a turn runs.
+
 ## 0.4.0
 
 - **Command guard.** An irreversible Bash or PowerShell command (recursive delete outside build output, force push, remote delete, `git reset --hard`, `git clean -f`, discarding all changes, `git branch -D`, history rewrites, `DROP`/`TRUNCATE TABLE`, disk formatting, `terraform destroy`, bulk `kubectl delete`, publishing) asks first in Claude Code's question dialog, whatever the permission mode allows; a refusal tells the model not to retry it another way, and the feed records each decision. `commandGuard`: `ask` / `deny` / `off`.
