@@ -83,6 +83,16 @@ export function isActiveJob(job: Job): boolean {
   return ['running', 'queued', 'starting', 'unknown'].includes(job.status ?? '') || ['starting', 'unknown'].includes(job.phase ?? '')
 }
 
+/**
+ * The CARD was written after a job started, so the job (which ends by updating the CARD) already
+ * wrote its result back. 更新 has minute precision and the job finishes after writing it, so its
+ * completion time is no test: compare with the minute the job started in.
+ */
+export function cardWrittenSince(cardMs: number | null, startedAt: string | undefined): boolean {
+  const start = Date.parse(startedAt ?? '')
+  return cardMs !== null && !Number.isNaN(start) && cardMs >= Math.floor(start / 60_000) * 60_000
+}
+
 export function jobFlags(jobs: Job[], cardMs: number | null): JobFlag[] {
   const flags: JobFlag[] = []
   for (const j of jobs) {
@@ -92,10 +102,11 @@ export function jobFlags(jobs: Job[], cardMs: number | null): JobFlag[] {
       continue
     }
     if (j.jobClass !== 'task') continue
-    // A successful sync already incorporates results into CARD; observation time is not new work.
-    if (j.executor === 'claude' && j.kind === 'sync' && j.status === 'completed') continue
+    // A finished sync's output is the CARD itself: whether or not it changed it, the sync is not new work.
+    if (j.kind === 'sync' && j.status === 'completed') continue
+    if (j.status === 'completed' && cardWrittenSince(cardMs, j.startedAt ?? j.createdAt)) continue
     const t = Date.parse(j.completedAt ?? j.createdAt ?? '')
-    if (cardMs === null || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary })
+    if (cardMs === null || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary, ...(j.kind ? { task: j.kind } : {}) })
   }
   return flags
 }

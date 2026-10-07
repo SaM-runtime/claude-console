@@ -41,7 +41,7 @@ async function errorOf(work: () => Promise<unknown>): Promise<string> {
 }
 
 function rowState(jobs: any[]): string {
-  const project = buildProject({ name: 'Project Alpha', statusPath: 'D:/Project Alpha/.console/STATUS.md' }, '<!-- CARD -->\n- 更新：2030-01-05 10:00\n- 狀態：進行中\n- 等使用者：無\n<!-- /CARD -->', jobs, NOW)
+  const project = buildProject({ name: 'Project Alpha', statusPath: 'D:/Project Alpha/.console/STATUS.md' }, '<!-- CARD -->\n- 更新：2030-01-05 08:00\n- 狀態：進行中\n- 等使用者：無\n<!-- /CARD -->', jobs, NOW)
   return rows({ at: NOW, projects: [project], blocked: [], codex: '', contextPercent: null, error: null })[0].state
 }
 
@@ -207,7 +207,9 @@ test('completed Claude sync does not become newer when refresh follows the CARD 
   expect(jobFlags([job], NOW + 60_000)).toEqual([])
   expect(jobFlags([{ ...job, status: 'running' }], NOW + 60_000)[0].kind).toBe('running')
   expect(jobFlags([{ ...job, status: 'failed' }], NOW + 60_000)[0].kind).toBe('newer')
-  expect(jobFlags([{ ...job, kind: 'continue' }], NOW + 60_000)[0].kind).toBe('newer')
+  // A continue job that wrote the CARD after it started has nothing left to sync; one that did not, has.
+  expect(jobFlags([{ ...job, kind: 'continue' }], NOW + 60_000)).toEqual([])
+  expect(jobFlags([{ ...job, kind: 'continue' }], NOW - 60_000)[0].kind).toBe('newer')
 })
 
 test('copy keeps original session and blocks dispatch until it finishes', async () => {

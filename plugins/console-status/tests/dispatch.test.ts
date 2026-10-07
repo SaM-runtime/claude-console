@@ -101,7 +101,7 @@ test('terminal and mobile buttons cycle persisted settings, including model-spec
 })
 
 test('row sync trigger reads latest file and omits each empty dispatch flag independently', {
-  options: { companionScript: 'D:/Tools/run.mjs', executor: 'codex' },
+  options: { autoSync: 'off', companionScript: 'D:/Tools/run.mjs', executor: 'codex' },
 }, async ($, on) => {
   let settings = '{"executor":"codex","model":"fiction-current","effort":"high"}'
   let dispatched: string[] = []

@@ -1,4 +1,4 @@
-export type JobFlag = { executor?: 'claude' | 'codex'; kind: 'running' | 'newer'; id: string; status: string; summary: string; startedAt?: string; phase?: string; logFile?: string; last?: string }
+export type JobFlag = { executor?: 'claude' | 'codex'; kind: 'running' | 'newer'; /** What the console dispatched the job for, when known. */ task?: 'sync' | 'continue'; id: string; status: string; summary: string; startedAt?: string; phase?: string; logFile?: string; last?: string }
 
 /** One executor task of a project, as the console lists it. */
 export type ExecutorTask = { id: string; executor?: 'claude' | 'codex'; fallbackFrom?: 'codex'; status: string; title: string; model: string; effort: string; startedAt?: string; completedAt?: string }
@@ -54,6 +54,22 @@ export type UpdateInfo = { current: string | null; latest: string | null; checke
 
 export type Blocked = { name: string; why: string }
 
+/** Where a 同步 STATUS dispatch is: sending, running, written back, finished without a CARD change, or failed. */
+export type SyncStage = 'dispatch' | 'running' | 'done' | 'unchanged' | 'dispatch-failed' | 'run-failed'
+export type SyncProgress = {
+  stage: SyncStage
+  /** When the sync was pressed (or auto-sync started it). */
+  at: number
+  /** The CARD's 更新 when it was dispatched; a different value later means the result was written. */
+  cardAt: string
+  executor?: 'claude' | 'codex'
+  jobId?: string
+  phase?: string
+  endedAt?: number
+  auto?: boolean
+  detail?: string
+}
+
 export type Snapshot = {
   demo?: boolean
   executor?: 'claude' | 'codex'
@@ -102,6 +118,7 @@ declare module 'claude-code' {
       cacheTick: number
       isTurnRunning: boolean
       updateInfo: UpdateInfo | null
+      syncProgress: Record<string, SyncProgress>
     }
   }
 }

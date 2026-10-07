@@ -35,6 +35,8 @@ import { batteryBody, METER } from './battery'
 import { feedBody } from './feed'
 import { trackRowChanges } from './presentation'
 import { layoutBand } from './band'
+import { advanceSync, autoSyncJobs, autoSyncMode, bandSync, isSyncEnded, syncChip, syncStatus, syncStepsText } from './sync'
+import type { SyncProgress } from '../types'
 
 const dispatchRevision = atom({ plugin: 'console-status', key: 'dispatchRevision' } as const, 0)
 
@@ -74,6 +76,16 @@ let lastProgress = ''
 const actionPulse = atom({ plugin: 'console-status', key: 'actionPulse' } as const, 0)
 const reviewRequests = atom({ plugin: 'console-status', key: 'reviewRequests' } as const, {})
 const fallbackOffers = atom({ plugin: 'console-status', key: 'fallbackOffers' } as const, {})
+/** statusPath → where its 同步 STATUS dispatch is (派工 → 執行 → 寫回), advanced on each refresh. */
+const syncProgress = atom({ plugin: 'console-status', key: 'syncProgress' } as const, {})
+/** Finished jobs auto-sync already dispatched a sync for (in `$.store`, so once per job across sessions). */
+const AUTO_SYNCED_KEY = 'autoSynced'
+const AUTO_SYNCED_MAX = 200
+/** The same, for this process: holds even when the store refuses a write. */
+const autoSynced = new Set<string>()
+/** While a job or a sync is under way the console looks every 20 s instead of every minute. */
+const FAST_TICK_MS = 20_000
+let fastTimer: { cancel(): void } | undefined
 const cacheClock = atom({ plugin: 'console-status', key: 'cacheClock' } as const, null)
 /** Bumped every 15 s while a cache clock runs, so the countdown redraws without a full refresh. */
 const cacheTick = atom({ plugin: 'console-status', key: 'cacheTick' } as const, 0)
@@ -412,6 +424,10 @@ async function refresh($: any, options: PluginOptions, force = false) {
         $.ui.toast(text, { timeoutMs: 8000 })
       }
     })
+    if (current()) {
+      await advanceSyncs($, options)
+      await autoSync($, options)
+    }
   } catch (error) {
     if (!current() || error === DISCARDED_REFRESH) return
     if (refreshConfig && executorSignature((await readDispatch(io, refreshConfig)).settings) !== refreshingExecutor) { owner.queued = true; return }
@@ -485,7 +501,7 @@ async function confirmed($: any, statusPath: string, signature: string, now: num
   return false
 }
 
-async function triggerAction($: any, options: PluginOptions, statusPath: string, kind: ActionKind, request: { useClaude?: boolean } = {}) {
+async function triggerAction($: any, options: PluginOptions, statusPath: string, kind: ActionKind, request: { useClaude?: boolean; auto?: boolean } = {}) {
   if (await demoEnabled($)) {
     $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。')
     return
@@ -530,6 +546,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     $.ui.toast(`${name}：${actionLabel(kind, p)}…`, { timeoutMs: 3000 })
     await update($, pendingActions, values => ({ ...values, [statusPath]: { kind, at: now } }))
     ownsPending = true
+    if (kind === 'sync') await setSync($, statusPath, { stage: 'dispatch', at: now, cardAt: p.updated, ...(request.auto ? { auto: true } : {}) })
     // Once a second: the label shows elapsed seconds; terminal/desktop animate a client spinner beside it,
     // so the whole pane is not redrawn several times a second (or sent to a phone that often).
     timer = $.clock.every(1000, async () => {
@@ -606,6 +623,11 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
         jobs: [{ kind: 'running' as const, id, executor: chosen, status: 'queued', summary: actionLabel(kind, p), startedAt, phase: '等待任務狀態' }, ...item.jobs.filter(j => j.id !== id || j.executor !== chosen)],
         tasks: [{ id, executor: chosen, ...(dispatchOpts.fallbackFrom ? { fallbackFrom: dispatchOpts.fallbackFrom } : {}), status: 'queued', title: actionLabel(kind, p), model: dispatchOpts.model ?? '', effort: dispatchOpts.effort ?? '', startedAt }, ...(item.tasks ?? []).filter(t => t.id !== id)],
       } : item) }, acceptedAt) : value)
+      if (kind === 'sync') {
+        await update($, syncProgress, values => values[statusPath]?.stage !== 'dispatch' ? values
+          : { ...values, [statusPath]: { ...values[statusPath]!, stage: 'running', executor: chosen, jobId: id, phase: 'queued' } })
+        void scheduleFastTick($, options)
+      }
       const fallbackNote = dispatchOpts.fallbackFrom ? `（Codex 改由 Claude：${dispatchOpts.fallbackReason}）` : ''
       await actionNotice($, `${name}：${chosen} 已接受${kind === 'sync' ? '同步 STATUS' : '繼續下一步'}${fallbackNote}，等待執行結果`, true)
     } else if (kind === 'decide') {
@@ -651,12 +673,80 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       await actionNotice($, `${name}：已請求開啟 STATUS.md`, true)
     }
   } catch (error) {
-    await actionNotice($, `${project?.name ?? statusPath}：✕ ${error instanceof Error ? error.message : String(error)}`, false)
+    const message = error instanceof Error ? error.message : String(error)
+    if (kind === 'sync') {
+      const endedAt = await $.clock.now()
+      await update($, syncProgress, values => values[statusPath]?.stage !== 'dispatch' ? values
+        : { ...values, [statusPath]: { ...values[statusPath]!, stage: 'dispatch-failed', endedAt, detail: message } })
+    }
+    await actionNotice($, `${project?.name ?? statusPath}：✕ ${message}`, false)
   } finally {
     if (!keepPending) timer?.cancel()
     try {
       if (ownsPending && !keepPending) await update($, pendingActions, values => { const next = { ...values }; delete next[statusPath]; return next })
     } finally { actionLocks.delete(statusPath) }
+  }
+}
+
+async function setSync($: any, statusPath: string, track: SyncProgress) {
+  await update($, syncProgress, values => ({ ...values, [statusPath]: track }))
+}
+
+/** After a refresh: move each sync along, say when one ends, and keep the fast tick while anything runs. */
+async function advanceSyncs($: any, options: PluginOptions) {
+  const s = await read($, snapshot)
+  if (!s || s.demo) return
+  const ended: { name: string; track: SyncProgress }[] = []
+  await update($, syncProgress, values => {
+    const next: Record<string, SyncProgress> = {}
+    for (const [path, track] of Object.entries(values)) {
+      const project = s.projects.find(p => p.statusPath === path)
+      const moved = advanceSync(track, project, s.at)
+      if (!moved) continue
+      if (project && !isSyncEnded(track.stage) && isSyncEnded(moved.stage)) ended.push({ name: project.name.replace(/\s.*$/, ''), track: moved })
+      next[path] = moved
+    }
+    return next
+  })
+  for (const { name, track } of ended) await actionNotice($, `${name}：${syncStatus(track, s.at)}`, track.stage === 'done')
+  await scheduleFastTick($, options)
+}
+
+/** Refresh every 20 s while a job or a sync is under way; back to the minute tick once all are done. */
+async function scheduleFastTick($: any, options: PluginOptions) {
+  const s = await read($, snapshot)
+  const syncing = Object.values(await read($, syncProgress)).some(track => !isSyncEnded(track.stage))
+  const busy = consoleActive && !s?.demo && (syncing || !!s?.projects.some(p => p.jobs.some(j => j.kind === 'running')))
+  if (busy && !fastTimer) fastTimer = $.clock.every(FAST_TICK_MS, () => void refresh($, options))
+  if (!busy && fastTimer) { fastTimer.cancel(); fastTimer = undefined }
+}
+
+/**
+ * `autoSync: on`: a project in 待同步 whose finished work left the CARD behind gets one sync
+ * dispatched by itself, once per job. Nothing is retried: a sync that fails or writes nothing waits for a person.
+ */
+async function autoSync($: any, options: PluginOptions) {
+  if (autoSyncMode((options as any).autoSync) === 'off' || !consoleActive || await demoEnabled($)) return
+  const s = await read($, snapshot)
+  if (!s || s.demo || s.error) return
+  const pending = await read($, pendingActions)
+  const tracks = await read($, syncProgress)
+  const stored: unknown = await Promise.resolve().then(() => $.store.get(AUTO_SYNCED_KEY)).catch(() => null)
+  const done = new Set([...(Array.isArray(stored) ? stored.filter((item): item is string => typeof item === 'string') : []), ...autoSynced])
+  for (const row of rows(s)) {
+    if (row.state !== 'SYNC') continue
+    const p = s.projects.find(item => item.name === row.full)
+    if (!p || pending[p.statusPath] || actionLocks.has(p.statusPath)) continue
+    const track = tracks[p.statusPath]
+    if (track && !isSyncEnded(track.stage)) continue
+    const jobs = autoSyncJobs(p)
+    if (!jobs.some(job => !done.has(job))) continue
+    for (const job of jobs) { done.add(job); autoSynced.add(job) }
+    while (autoSynced.size > AUTO_SYNCED_MAX) autoSynced.delete(autoSynced.values().next().value as string)
+    const kept = [...done].slice(-AUTO_SYNCED_MAX)
+    // Remembered before dispatching, so another console session (or the next refresh) does not send it twice.
+    await Promise.resolve().then(() => $.store.set(AUTO_SYNCED_KEY, kept)).catch(() => {})
+    await triggerAction($, options, p.statusPath, 'sync', { auto: true })
   }
 }
 
@@ -848,6 +938,7 @@ async function stopConsole($: any) {
   consoleActive = false
   dataGeneration++
   refreshTimer?.cancel(); refreshTimer = undefined
+  fastTimer?.cancel(); fastTimer = undefined
   cacheTimer?.cancel(); cacheTimer = undefined
   updateTimer?.cancel(); updateTimer = undefined
   await rememberSession($, false)
@@ -867,6 +958,7 @@ export const register: Register = (on, options) => {
     dataGeneration++
     consoleActive = false
     refreshTimer?.cancel()
+    fastTimer?.cancel(); fastTimer = undefined
     cacheTimer?.cancel()
     updateTimer?.cancel()
     if (actionLocks.size === 0) earlyReviewStarts.clear()
@@ -1167,7 +1259,8 @@ export const register: Register = (on, options) => {
     action_gate: '把關卡與專案 context 送給主控台審核，使用 Claude 額度；不會執行 release。',
     action_open: '用編輯器開啟專案 STATUS.md，不使用模型額度。',
     RUNNING: '執行中：該專案有 Claude 或 Codex 工作尚未結束；切換執行者仍不得重複派工。',
-    SYNC: '待同步：執行者任務已結束，但結果還沒寫回 STATUS 卡片。',
+    SYNC: '待同步：執行者任務已結束，但 STATUS 卡片在它開始後沒有更新過。autoSync 開啟時主控台會自動派一次同步。',
+    sync_progress: '同步進度：派工（送給執行者）→ 執行（執行者寫回中）→ 寫回 STATUS（CARD 的「更新」有變才算完成）。● 完成　◉ 進行中　○ 未到　✕ 停在這一步。',
     IDLE: '閒置：沒有任務、也沒有待決事項。',
     codex: 'Codex：companion broker 與已安裝的 Codex app 版本一致才算正常；過期時派工會失敗。',
     sessions: '其他工作階段：屬於主控台或已登記專案的其他 Claude Code session，正停在等批准或等輸入，要切到該 session 處理。與「需決策」不同：這是操作層面的卡住，不是專案決策。',
@@ -1212,6 +1305,8 @@ export const register: Register = (on, options) => {
       const button = paneOpen ? '主控台 ▾' : '主控台 ▸'
       const buttonWidth = button.length + 1
       const others = s.projects.filter(p => p !== here.project && (hasAsk(p) || parseGate(p.gate))).length
+      const hereSync = demo ? undefined : (await read($, syncProgress))[here.project.statusPath]
+      const hereTag = hereSync ? syncChip(hereSync, await $.clock.now(), false) : null
       mine = (
         <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
           <Box flexShrink={0} height={1}><Text bold color={C.strong}>{here.project.name} </Text></Box>
@@ -1219,6 +1314,7 @@ export const register: Register = (on, options) => {
             <Text wrap="truncate-end">
               {pipelineParts(here.pipeline, PIPE).map((part, index) => <Text key={'bp-' + index} color={part.c}>{part.t}</Text>)}
               <Text color={C.text}> {pipelineText(here.pipeline).replace(/^\S+\s?/, '')}</Text>
+              {hereTag && <Text color={TONE[hereTag.tone]}>{`　${hereTag.text}`}</Text>}
               {others > 0 && <Text color={C.amber}>{`　其他 ${others} 個專案待處理`}</Text>}
             </Text>
           </Box>
@@ -1231,13 +1327,15 @@ export const register: Register = (on, options) => {
       await read($, cacheTick)
       const cv = demo || cacheMode(options) === 'off' ? null : cacheView(await read($, cacheClock), await $.clock.now(), await read($, isTurnRunning), priceOverride((options as any).cacheWritePrice))
       const chip = cv ? cacheChip(cv, columns < 40) : null
-      const band = layoutBand(s, { columns, demo, paneOpen, ...(chip ? { cache: chip.text } : {}) })
+      const syncing = demo ? null : bandSync(await read($, syncProgress))
+      const syncTag = syncing ? syncChip(syncing, await $.clock.now(), columns < 40) : null
+      const band = layoutBand(s, { columns, demo, paneOpen, ...(chip ? { cache: chip.text } : {}), ...(syncTag ? { sync: syncTag.text } : {}) })
       if (generation !== dataGeneration) mine = <Box height={1} width={columns} overflow="hidden"><Text color={C.dim} wrap="truncate-end">{demoActive ? ' 示範資料 ' : '讀取中…'}</Text></Box>
       else mine = (
         <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
           <Box gap={1} flexShrink={0} height={1}>
             {band.items.map(item => <Box key={'band-' + item.id} width={item.width} flexShrink={0} height={1} overflow="hidden">
-              <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' || item.id === 'ci' ? C.red : item.id === 'cache' ? (chip?.tone === 'red' ? C.red : chip?.tone === 'amber' ? C.amber : C.green) : FG[item.id as State] ?? C.text}
+              <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' || item.id === 'ci' ? C.red : item.id === 'cache' ? (chip?.tone === 'red' ? C.red : chip?.tone === 'amber' ? C.amber : C.green) : item.id === 'sync' ? TONE[syncTag?.tone ?? 'blue'] : FG[item.id as State] ?? C.text}
                 bold={item.id === 'cache' && chip?.tone === 'amber'}
                 backgroundColor={item.id === 'demo' ? C.bar : item.id === 'cache' && chip?.tone === 'amber' ? C.amberBg : undefined}>
                 {item.id === 'next' && item.text.startsWith('▸ 下一步') ? [<Text key="nl" bold>▸ 下一步</Text>, <Text key="nt" color={C.text}>{item.text.slice(5)}</Text>] : item.text}</Text>
@@ -1326,8 +1424,9 @@ export const register: Register = (on, options) => {
     const trusted = await read($, trustedVerify)
     await read($, actionPulse) // redraws running action labels once a second
     const offers = demo ? {} : await read($, fallbackOffers)
+    const syncs = demo ? {} : await read($, syncProgress)
     const version = await read($, updateInfo)
-    const renderedAt = Object.keys(pending).length ? await $.clock.now() : s.at
+    const renderedAt = Object.keys(pending).length || Object.values(syncs).some(track => !isSyncEnded(track.stage)) ? await $.clock.now() : s.at
     const revision = await read($, dispatchRevision)
     // Drawing never touches the disk on its own: settings are re-read after a write (revision) or a refresh (s.at).
     const { config, dispatch } = demo
@@ -1583,7 +1682,17 @@ export const register: Register = (on, options) => {
         )}
         {field('關卡', parseGate(p.gate) ? p.gate ?? '' : '', C.purple)}
         {field('下一步', p.next, C.text)}
-        {field('同步', !running.length && p.jobs.some(j => j.kind === 'newer') ? '執行者已結束，結果未寫回 STATUS' : '', C.blue)}
+        {syncs[p.statusPath] ? (() => {
+          const track = syncs[p.statusPath]!
+          const tone = track.stage === 'done' ? C.green : isSyncEnded(track.stage) ? C.red : C.blue
+          return <Box key={prefix + 'sync'} gap={2} hover={{ scope: 'help-sync_progress' }}>
+            <Box width={6} flexShrink={0}><Text color={C.dim}>同步</Text></Box>
+            <Box flexGrow={1} flexShrink={1} flexDirection="column">
+              <Text color={tone} wrap="truncate-end">{syncStepsText(track)}</Text>
+              <Text color={C.text} wrap="wrap">{syncStatus(track, renderedAt)}</Text>
+            </Box>
+          </Box>
+        })() : field('同步', !running.length && p.jobs.some(j => j.kind === 'newer') ? '執行者已結束，結果未寫回 STATUS' : '', C.blue)}
         {p.git && field('Git', gitLine(p.git), p.git.conflicts ? C.red : p.git.changed || p.git.untracked ? C.amber : p.git.ahead || p.git.behind ? C.blue : C.dim)}
         {p.pr && (
           <Box key={prefix + 'pr'} gap={2}>

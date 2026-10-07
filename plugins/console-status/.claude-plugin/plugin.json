@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -110,6 +110,12 @@
       "title": "Cache write price",
       "description": "USD per million cache-write tokens for the cost estimate; blank uses the model's list price (1.25x input for 5m, 2x for 1h).",
       "default": ""
+    },
+    "autoSync": {
+      "type": "string",
+      "title": "Auto sync",
+      "description": "on: when finished executor work left a project's STATUS CARD behind (待同步), dispatch one sync by itself, once per job; a sync that fails or writes nothing is not retried. off: wait for the 同步 button.",
+      "default": "on"
     },
     "activation": {
       "type": "string",
