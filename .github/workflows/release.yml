@@ -1,0 +1,35 @@
+name: Release
+
+# Tags and publishes a GitHub Release whenever a new console-status version lands on main.
+# The first run also backfills releases for earlier versions; re-runs change nothing.
+on:
+  push:
+    branches: [main]
+    paths:
+      - plugins/console-status/.claude-plugin/plugin.json
+      - CHANGELOG.md
+      - scripts/release.mjs
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Create missing releases
+        run: node scripts/release.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
