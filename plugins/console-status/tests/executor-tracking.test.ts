@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { createExecutor } from '../hooks/executors'
-import { actionKinds, askingSession, dispatchPrompt, freshSession } from '../hooks/actions'
+import { actionKinds, askingSession, dispatchKind, dispatchPrompt, freshSession } from '../hooks/actions'
 import { buildProject, isActiveJob, parseCard, parseRegistry, rows } from '../hooks/logic'
 
 type RunResult = { exitCode: number; stdout: string; stderr: string }
@@ -144,6 +144,16 @@ test('C/D/E: the continue prompt ends the turn at a gate, holds the review gate 
   expect(text).toContain('獨立審核還沒跑完：關卡留 無')
   expect(text).toContain('結束這一輪，不要提問等待')
   expect(dispatchPrompt(p, 'sync')).not.toContain('獨立審核')
+})
+
+// P2: a review's 下一步 must start with its path, or freshSession sends it back to the work session.
+test('P2: the continue prompt says a review task path starts 下一步 and fix-up work starts with a verb; the kind still reads as continue', () => {
+  const p = buildProject({ name: 'Project Alpha', statusPath: 'D:/Project Alpha/.console/STATUS.md' }, '<!-- CARD -->\n- 下一步：x\n<!-- /CARD -->', [], NOW)
+  const text = dispatchPrompt(p, 'continue')
+  expect(text).toContain('審核任務的下一步以 .task/review-<name>.md 路徑開頭')
+  expect(text).toContain('修正工作以動詞開頭')
+  expect(dispatchKind(text)).toBe('continue')
+  expect(dispatchPrompt(p, 'sync')).not.toContain('.task/review-<name>.md')
 })
 
 // C: a finished job that stopped to ask is something to act on, not a quiet sync.

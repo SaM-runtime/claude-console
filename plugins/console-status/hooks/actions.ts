@@ -51,6 +51,7 @@ export function dispatchKind(prompt: string | undefined): 'sync' | 'continue' | 
 const CONTINUE_RULES = [
   '開始前先重讀 CARD，以這次讀到的 rev 為準；寫入前再重讀一次，只有這兩次不同才停下回報（不要跟記憶裡更早的 rev 比）。',
   '驗收綠、獨立審核還沒跑完：關卡留 無，下一步寫審核任務；審核跑完才設 review。',
+  '審核任務的下一步以 .task/review-<name>.md 路徑開頭（才會開新 session）；修正工作以動詞開頭（例如「依 .task/review-x.md 的意見修正」）。',
   '到關卡或需要使用者決定時，把它寫進 CARD（等使用者／關卡）後結束這一輪，不要提問等待。',
 ]
 
