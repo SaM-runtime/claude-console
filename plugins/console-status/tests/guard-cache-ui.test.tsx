@@ -81,6 +81,12 @@ test('the band counts the cache down, warns a minute before it goes cold and pri
   })
   await $.session.start({ cwd: 'D:/Console', surface: 'terminal', isInteractive: true } as any)
   await clock.settle()
+  const PANE = { plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
+    props: { title: 'Console', isFocused: true, bodyColumns: 90, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any
+  // Before the first response since the install or reload, the pane says when the countdown starts.
+  const early = await $.ui.mount(PANE)
+  expect(await early.find({ type: 'Text', text: '下一則回應後開始倒數' })).toBeDefined()
+  await early.unmount()
   await step($, on, 150_000)
   const band = await $.ui.mount(BAND)
   // While the turn runs the cache is being refreshed: no chip.
@@ -96,8 +102,7 @@ test('the band counts the cache down, warns a minute before it goes cold and pri
   await $.prompt.submit({ text: 'next question' } as any).catch(() => {})
   expect(data.toasts.some(t => /^主控台快取已過期 1m：這則提示會重寫約 200k tokens/.test(t))).toBe(true)
   await band.unmount()
-  const pane = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
-    props: { title: 'Console', isFocused: true, bodyColumns: 90, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any)
+  const pane = await $.ui.mount(PANE)
   expect(await pane.find({ type: 'Text', text: /^已冷 1m　200k tokens・下則重寫約 \$1\.00$/ })).toBeDefined()
   await pane.unmount()
 })
