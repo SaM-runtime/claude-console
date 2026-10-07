@@ -1,6 +1,6 @@
 import type { Project, ActionKind, ContinueConfirmation, VerificationResult } from '../types'
 import type { State } from './logic'
-import { hasAsk, parseGate } from './logic'
+import { hasAsk, parseGate, saysNone } from './logic'
 
 export const ACTION_LABEL: Record<ActionKind, string> = {
   verify: '▶ 執行驗證', sync: '⇢ 同步 STATUS', continue: '⇢ 繼續下一步',
@@ -26,7 +26,7 @@ export function actionKinds(project: Project, state: State): ActionKind[] {
   if (dispatchable && state === 'SYNC' && !dispatchBlockReason(project)) kinds.push('sync')
   const gate = parseGate(project.gate)
   const next = project.next.trim()
-  if (dispatchable && state === 'IDLE' && !dispatchBlockReason(project) && next && !/^(?:無|沒有|none|n\/a|-)(?:$|[；;，,。\s])/i.test(next) && !hasAsk(project) && !gate) kinds.push('continue')
+  if (dispatchable && state === 'IDLE' && !dispatchBlockReason(project) && next && !saysNone(next) && !hasAsk(project) && !gate) kinds.push('continue')
   if (hasAsk(project)) kinds.push('decide')
   if (gate && gate.kind !== 'unknown') kinds.push('gate')
   return [...kinds, 'open']

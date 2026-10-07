@@ -24,6 +24,9 @@ test('each workflow position maps to one current stage; earlier stages are done'
   expect(at({ gate: 'release：v1 scope' })).toEqual({ current: 'release', strip: 'dddddw', note: '待使用者核准上線範圍' })
   expect(at({ next: 'Write the importer' })).toEqual({ current: 'build', strip: 'dwtttt', note: '待繼續：Write the importer' })
   expect(at({ next: '無' })).toEqual({ current: null, strip: 'tttttt', note: '閒置' })
+  // A none word with a note in brackets is still nothing to continue.
+  for (const next of ['無（等使用者決定）', '無(等決策)', '沒有（暫停）', 'none (waiting)'])
+    expect([next, at({ next }).current]).toEqual([next, null])
 })
 
 test('verification is evidence: a failure shows wherever the work stands, a pass completes the build side', () => {
@@ -51,6 +54,11 @@ test('CARD verdict text and the 驗證 line parse', () => {
   expect(cardVerdict('PASS; verified 2030-01-01 10:00')).toBe('pass')
   expect(cardVerdict('通過')).toBe('pass')
   expect(cardVerdict('not run yet')).toBe(null)
+  // Zero counts are not failures; any other count still is.
+  for (const note of ['214 pass, 0 fail', '874 passed, 0 failed', 'PASS (failures: 0)', '12 passed, 0 errors', '全部通過，0 個失敗'])
+    expect([note, cardVerdict(note)]).toEqual([note, 'pass'])
+  for (const note of ['213 pass, 1 fail', '3 passed, 10 failed', 'failures: 2', '0 skipped, 1 failed'])
+    expect([note, cardVerdict(note)]).toEqual([note, 'fail'])
   expect(buildProject({ name: 'A', statusPath: 'D:/A/STATUS.md' } as any, '<!-- CARD -->\n- 驗證：`npm test` → FAIL\n<!-- /CARD -->', [], 0).verifyNote).toBe('FAIL')
 })
 
