@@ -46,9 +46,11 @@ test('demo covers all useful states, quotas, tasks and two relative feed events'
   expect(demo.limits?.map(limit => [limit.kind, limit.percent])).toEqual([
     ['five_hour', 31],
     ['seven_day', 75],
+    ['seven_day_fable', 48],
   ])
   expect(Date.parse(demo.limits?.[0].resetsAt ?? '') - NOW).toBe(4 * 3_600_000)
   expect(Date.parse(demo.limits?.[1].resetsAt ?? '') - NOW).toBe(2 * 86_400_000)
+  expect(Date.parse(demo.limits?.[2].resetsAt ?? '') - NOW).toBe(2 * 86_400_000)
   expect(demo.codexQuota?.limits.map(limit => [limit.label, limit.percent])).toEqual([['Codex 週', 12]])
   expect(demo.codexQuota?.credits).toBe('1,000')
   expect((demo.codexQuota?.limits[0].resetsAt ?? '').startsWith('2030-')).toBe(true)

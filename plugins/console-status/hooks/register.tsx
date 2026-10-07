@@ -28,7 +28,7 @@ import { commandPreview, dangerReason, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
-import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
+import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody, METER } from './battery'
@@ -1307,8 +1307,7 @@ export const register: Register = (on, options) => {
     codex: 'Codex：companion broker 與已安裝的 Codex app 版本一致才算正常；過期時派工會失敗。',
     sessions: '其他工作階段：屬於主控台或已登記專案的其他 Claude Code session，正停在等批准或等輸入，要切到該 session 處理。與「需決策」不同：這是操作層面的卡住，不是專案決策。',
     ctx: '上下文：本主控台 session 還剩多少上下文。用掉一半以上建議換新主控台。',
-    five_hour: '5 小時：Claude 帳號 5 小時滾動額度的剩餘量，到重置時間回滿。',
-    seven_day: '本週：Claude 帳號每週額度的剩餘量。',
+    // Rate-limit rows (`limit_<kind>`) are added as the host reports them, so a per-model window explains itself by name.
     version: '版本：目前安裝的 console-status 與 GitHub main 上的最新版，每 30 分鐘與每次載入時檢查。「⬆ 更新」從 marketplace 安裝新版（從本機 git 資料夾載入時改在該資料夾 git pull），完成後自動 /reload-plugins；也可輸入 /console update。',
     codex_quota: 'Codex：Codex 帳號額度的剩餘量，取自最近一次 Codex 工作紀錄（每 5 分鐘讀一次）；很久沒用 Codex 時數字可能是舊的。',
   }
@@ -1518,6 +1517,9 @@ export const register: Register = (on, options) => {
     const n = next(s)
     const c = counts(s)
     const ctx = s.contextPercent
+    // Every window the host reports gets a row and a hover tip of its own; nothing is cut off at two.
+    const limits = s.limits ?? []
+    for (const l of limits) if (!HELP['limit_' + l.kind]) HELP['limit_' + l.kind] = limitHelp(l.kind)
     const time = new Date(s.at).toTimeString().slice(0, 5)
     const health = codexHealth(s.codex)
     const width: number = Math.max(40, (e.props.bodyColumns ?? 80) - 1)
@@ -1599,7 +1601,8 @@ export const register: Register = (on, options) => {
     )
     // One usage row: tool name (first row of its group only), label, then the content.
     const USAGE_TOOL = 7
-    const USAGE_LABEL = 6
+    // Wide enough for `上下文`, and for a per-model label such as `Sonnet 週` when one is shown.
+    const USAGE_LABEL = Math.max(6, ...limits.map(l => displayWidth(limitName(l.kind))))
     const usageRow = (key: string, tool: string, label: string, help: string | null, body: any) => (
       <Box key={key} gap={1} {...(help ? { hover: { scope: 'help-' + help } } : {})}>
         <Box width={USAGE_TOOL} flexShrink={0}><Text bold color={C.strong}>{tool}</Text></Box>
@@ -1769,7 +1772,6 @@ export const register: Register = (on, options) => {
       </Box>
     }
     const rule = <Text color={C.faint} wrap="truncate-end">{'─'.repeat(width)}</Text>
-    const limits = (s.limits ?? []).slice(0, 2)
     await read($, cacheTick)
     const paneClock = demo || cacheMode(options) === 'off' ? null : await read($, cacheClock)
     const paneView = paneClock ? cacheView(paneClock, now, await read($, isTurnRunning), priceOverride((options as any).cacheWritePrice)) : null
@@ -1977,7 +1979,7 @@ export const register: Register = (on, options) => {
               const tool = () => { const t = first ? 'Claude' : ''; first = false; return t }
               const out: any[] = []
               if (ctx !== null) out.push(meterRow('ctx', tool(), { id: 'ctx', label: '上下文', used: ctx, hint: ctx >= ROTATE_PERCENT ? '建議換新主控台' : '' }))
-              for (const l of limits) out.push(meterRow('lim' + l.kind, tool(), { id: /five/.test(l.kind) ? 'five_hour' : 'seven_day', label: limitName(l.kind), used: l.percent, hint: '', note: resetText(l.resetsAt, now) }))
+              for (const l of limits) out.push(meterRow('lim' + l.kind, tool(), { id: 'limit_' + l.kind, label: limitName(l.kind), used: l.percent, hint: '', note: resetText(l.resetsAt, now) }))
               if (paneCache) {
                 const warn = paneCache.view.warm && paneCache.view.leftMs <= CACHE_WARN_MS
                 out.push(usageRow('cache', tool(), '快取', 'cache', <Box flexShrink={1}>

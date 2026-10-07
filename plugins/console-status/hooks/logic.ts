@@ -289,6 +289,7 @@ export function demoSnapshot(now: number): Snapshot & { demo: true } {
     limits: [
       { kind: 'five_hour', percent: 31, resetsAt: new Date(now + 4 * 3_600_000).toISOString() },
       { kind: 'seven_day', percent: 75, resetsAt: new Date(now + 2 * 86_400_000).toISOString() },
+      { kind: 'seven_day_fable', percent: 48, resetsAt: new Date(now + 2 * 86_400_000).toISOString() },
     ],
     codexQuota: {
       at: new Date(now).toISOString(),
@@ -573,12 +574,45 @@ export function meter(percent: number, width = 8): string {
   return '█'.repeat(full) + '░'.repeat(width - full)
 }
 
-/** Readable name of a rate-limit window kind (`five_hour` → `5 小時`). */
+/** A window kind split into its window and the model it is scoped to (`seven_day_fable` → seven_day, fable); null when the kind is not a window. */
+export function parseLimitKind(kind: string): { window: 'five_hour' | 'seven_day'; model: string } | null {
+  const m = /^(five_hour|5_hour|5h|seven_day|7_day|7d|weekly|week)(?:[_-]([a-z0-9]+))?$/i.exec(kind.trim())
+  if (!m) return null
+  return { window: /^(five_hour|5_hour|5h)$/i.test(m[1]) ? 'five_hour' : 'seven_day', model: m[2] ?? '' }
+}
+
+/** Spellings of the model names the host scopes windows to; any other name is shown as sent. */
+const MODEL_NAMES: Record<string, string> = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' }
+
+/** The model a per-model window kind names (`seven_day_fable` → `Fable`), or '' for a window shared by every model. */
+export function limitModel(kind: string): string {
+  const model = parseLimitKind(kind)?.model ?? ''
+  return model ? MODEL_NAMES[model.toLowerCase()] ?? model : ''
+}
+
+/** Readable name of a rate-limit window kind: `five_hour` → `5 小時`, `seven_day` → `本週`, `seven_day_fable` → `Fable 週`, `spend_limit` → `花費上限`; a kind it does not know keeps its name. */
 export function limitName(kind: string): string {
-  if (/five|5h|5_hour/i.test(kind)) return '5 小時'
-  if (/seven|week|7d/i.test(kind)) return '本週'
-  if (/opus/i.test(kind)) return 'Opus'
-  return kind
+  const parsed = parseLimitKind(kind)
+  if (!parsed) return kind === 'spend_limit' ? '花費上限' : kind
+  const model = limitModel(kind)
+  const window = parsed.window === 'five_hour' ? '5 小時' : model ? '週' : '本週'
+  return model ? `${model} ${window}` : window
+}
+
+/** Hover help for a usage row, naming the model when the window is scoped to one. */
+export function limitHelp(kind: string): string {
+  const parsed = parseLimitKind(kind)
+  const model = limitModel(kind)
+  const name = limitName(kind)
+  if (parsed && model) {
+    return parsed.window === 'five_hour'
+      ? `${name}：Claude 帳號 5 小時滾動額度中 ${model} 專用的剩餘量，與整體「5 小時」分開計算，到重置時間回滿。`
+      : `${name}：Claude 帳號本週 ${model} 專用額度的剩餘量，與整體「本週」分開計算，到重置時間回滿。`
+  }
+  if (parsed?.window === 'five_hour') return '5 小時：Claude 帳號 5 小時滾動額度的剩餘量，到重置時間回滿。'
+  if (parsed) return '本週：Claude 帳號每週額度的剩餘量。'
+  if (kind === 'spend_limit') return '花費上限：Claude gateway 為這個帳號設定的花費上限還剩多少，超額後電池見底，到週期重置時回滿。'
+  return `${kind}：host 回報的額度視窗，名稱照原字串顯示。`
 }
 
 /** The activity feed: what changed between two snapshots, newest first, as short system lines. */
