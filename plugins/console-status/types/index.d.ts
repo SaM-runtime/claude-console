@@ -1,4 +1,4 @@
-export type JobFlag = { executor?: 'claude' | 'codex'; kind: 'running' | 'newer'; /** What the console dispatched the job for, when known. */ task?: 'sync' | 'continue'; id: string; status: string; summary: string; startedAt?: string; phase?: string; logFile?: string; last?: string }
+export type JobFlag = { executor?: 'claude' | 'codex'; kind: 'running' | 'newer'; /** What the console dispatched the job for, when known. */ task?: 'sync' | 'continue'; id: string; status: string; summary: string; startedAt?: string; phase?: string; logFile?: string; last?: string; /** A finished job whose turn ended asking the user something. */ asks?: boolean }
 
 /** One executor task of a project, as the console lists it. */
 export type ExecutorTask = { id: string; executor?: 'claude' | 'codex'; fallbackFrom?: 'codex'; status: string; title: string; model: string; effort: string; startedAt?: string; completedAt?: string }

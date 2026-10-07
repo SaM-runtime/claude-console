@@ -10,7 +10,7 @@ import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted } from './actions'
+import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, freshSession, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -385,7 +385,10 @@ async function refresh($: any, options: PluginOptions, force = false) {
       }
       await Promise.all(project.jobs.filter(j => j.kind === 'running').map(async j => {
         const job = jobs.find(item => item.id === j.id && item.executor === j.executor)
-        if (job) j.last = await createExecutor(job.executor ?? listing, deps, withCompanion(config)).lastLine(job).catch(() => '')
+        if (!job) return
+        const last = await createExecutor(job.executor ?? listing, deps, withCompanion(config)).lastLine(job).catch(() => '')
+        // A resume copy speaks from the old session's memory; its words are not this dispatch's result.
+        j.last = last && job.unmanagedSessionId ? `（resume 複本）${last}` : last
       }))
       return { project, warnings }
     })
@@ -613,6 +616,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
         await refresh($, options, true)
         throw new Error(reason)
       }
+      if (kind === 'continue' && chosen === 'claude' && freshSession(p)) dispatchOpts = { ...dispatchOpts, fresh: true }
       const executor = createExecutor(chosen, deps, execConfig)
       const job = await executor.dispatch(root, dispatchPrompt(p, kind), dispatchOpts)
       await update($, fallbackOffers, values => { if (!values[statusPath]) return values; const next = { ...values }; delete next[statusPath]; return next })
@@ -1621,7 +1625,9 @@ export const register: Register = (on, options) => {
     const target = nextProject(s)
     const targetProject = s.projects.find(p => p.name === target)
     const targetState = list.find(r => r.full === target)?.state
-    const primaryAction: ActionKind | null = targetState === 'ACTION' ? 'decide' : targetState === 'GATE' && parseGate(targetProject?.gate)?.kind !== 'unknown' ? 'gate' : targetState === 'SYNC' && targetProject && !isManual(targetProject) ? 'sync' : null
+    const primaryAction: ActionKind | null = targetState === 'ACTION'
+      ? (targetProject && !hasAsk(targetProject) ? (actionKinds(targetProject, 'ACTION').includes('sync') ? 'sync' : null) : 'decide')
+      : targetState === 'GATE' && parseGate(targetProject?.gate)?.kind !== 'unknown' ? 'gate' : targetState === 'SYNC' && targetProject && !isManual(targetProject) ? 'sync' : null
     const focus = sel ?? list[Math.max(0, cur)]?.full ?? null
     const menuProject = menu === null ? null : s.projects.find(x => x.name === menu) ?? null
     const actionButton = (p: Project, kind: ActionKind, key: string) => {

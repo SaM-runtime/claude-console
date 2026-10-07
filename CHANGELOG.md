@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.3
+
+- **A session the daemon retired no longer blocks dispatch.** `claude agents` keeps listing a retired session with its last state (`blocked`) but without `pid` or `status`; it was read as still running, so `⇢ 繼續下一步` failed with `Claude session is already active` for good. Such an agent now counts as finished, and a job still tracked against it is completed.
+- **A resume that comes back as a new session takes the project with it.** `claude --bg --resume` on a session that is gone starts another one; the console called it an unmanaged copy, kept the dead session and resumed it again on every dispatch. When the original is no longer listed, retired or finished, the new session becomes the project's session with no warning. It is still a copy, and the project keeps its session, only while the original lives.
+- **An independent review starts fresh.** A continue whose 下一步 names `.task/review-*.md` launches without `--resume` and never becomes the project's session, so a review carries no memory of the work, or of an older CARD rev. A resume copy's last line is shown as `（resume 複本）…`, not as this dispatch's result.
+- **The continue prompt says how a turn starts and ends.** Re-read the CARD and go by the rev read now; with acceptance green and no review run yet, leave `關卡：無` and name the review task in 下一步; at a gate or a decision, write it into the CARD and end the turn instead of asking. The skill says the same (`workflow/claude-console/SKILL.md`).
+- **A job that ended asking is something to act on.** A finished Claude job whose turn ended on a question (`idle: 等你回覆`) shows its project as `需決策` with `執行者在等你回覆：接手該 session 或同步`, offering `⇢ 同步 STATUS`, instead of a quiet `待同步`. Auto sync leaves it for a person.
+- **CRLF STATUS and registry files parse.** A CARD saved with Windows line ends lost every field (the trailing `\r` broke each line's match), so 更新 was empty, every finished job looked newer than the CARD and auto sync kept dispatching. CARD and registry text are read with line ends normalised.
+
 ## 0.9.0
 
 - **Executor, model and effort are picked from a list.** Each press on a control under the pane title used to move to the next value, so reaching `max` from `low` meant pressing through every level and writing each one to `dispatch.json` on the way, and the model never came back to `預設`. A press now spreads the choices out on the next line (`模型  [預設]  fable  opus  sonnet  ✕`), with the current value in brackets. Pressing one saves it and closes the line; the current value, `✕` or the label again closes it without writing. `預設` hands the choice back to the executor. Efforts follow the chosen model. A model typed with `/console model <name>` is listed while it is chosen. Without a readable Codex model cache, the line says to use `/console model <name>` instead of showing a toast.

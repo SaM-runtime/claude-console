@@ -18,7 +18,7 @@ export type Agent = { name?: string; kind?: string; status?: string; state?: str
  * tables without that column parse exactly as before.
  */
 export function parseRegistry(text: string, home: string): RegistryRow[] {
-  const parts = text.split('## STATUS 卡位置')
+  const parts = lf(text).split('## STATUS 卡位置')
   if (parts.length < 2) return []
   const section = parts[1].split('\n## ')[0]
   const rows: RegistryRow[] = []
@@ -41,9 +41,12 @@ export function parseRegistry(text: string, home: string): RegistryRow[] {
   return rows
 }
 
+/** CRLF (or a lone CR) as LF: a STATUS or registry saved on Windows reads like any other. */
+const lf = (text: string) => text.replace(/\r\n?/g, '\n')
+
 /** `- key：value` lines between `<!-- CARD ... -->` and `<!-- /CARD -->`; null when absent. */
 export function parseCard(text: string): Record<string, string> | null {
-  const m = text.match(/<!-- CARD[\s\S]*?-->([\s\S]*?)<!-- \/CARD -->/)
+  const m = lf(text).match(/<!-- CARD[\s\S]*?-->([\s\S]*?)<!-- \/CARD -->/)
   if (!m) return null
   const card: Record<string, string> = {}
   for (const line of m[1].split('\n')) {
@@ -106,7 +109,9 @@ export function jobFlags(jobs: Job[], cardMs: number | null): JobFlag[] {
     if (j.kind === 'sync' && j.status === 'completed') continue
     if (j.status === 'completed' && cardWrittenSince(cardMs, j.startedAt ?? j.createdAt)) continue
     const t = Date.parse(j.completedAt ?? j.createdAt ?? '')
-    if (cardMs === null || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary, ...(j.kind ? { task: j.kind } : {}) })
+    // A Claude job whose turn ended on a question to the user (the agent went idle while blocked).
+    const asks = j.status === 'completed' && (j.phase ?? '').startsWith('idle: 等你回覆')
+    if (cardMs === null || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary, ...(j.kind ? { task: j.kind } : {}), ...(asks ? { asks: true } : {}) })
   }
   return flags
 }
@@ -497,6 +502,7 @@ export function rows(s: Snapshot): Row[] {
     if (parseGate(p.gate)) return { state: 'GATE', project: name, item: shortAsk(p.gate ?? '', 30), age, full }
     const running = p.jobs.filter(j => j.kind === 'running')
     if (running.length) return { state: 'RUNNING', project: name, item: (running.length > 1 ? `${running.length} 個任務・` : '') + runLine(running[0], s.at), age, full }
+    if (p.jobs.some(j => j.kind === 'newer' && j.asks)) return { state: 'ACTION', project: name, item: '執行者在等你回覆：接手該 session 或同步', age, full }
     if (p.jobs.some(j => j.kind === 'newer')) return { state: 'SYNC', project: name, item: '結果未同步至 STATUS', age, full }
     return { state: 'IDLE', project: name, item: shortAsk(p.state || '—', 30), age, full }
   })
