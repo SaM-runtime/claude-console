@@ -59,7 +59,7 @@ test('refresh consumes userConfig and plugin-relative scripts, then renders the 
   expect(commands[0].join('|').replace(/\\/g, '/').includes('/scripts/codex-preflight.sh|--companion-script|D:/Tools/run.mjs|--state-dir|D:/Jobs')).toBe(true)
   expect(commands[1].join('|').replace(/\\/g, '/').endsWith('/scripts/codex-quota.sh')).toBe(true)
   const ui = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile', props: { bodyColumns: 80, scroll: { offset: 0, total: 0, visible: 0 } } } as any)
-  expect(await ui.find({ type: 'Text', text: /^ 執行中 $/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ ▶ 執行中 $/ })).toBeDefined()
   expect((await ui.find({ key: 'sel-Project Alpha' }))?.text).toBe('Project Alpha')
   expect((await ui.find({ type: 'Text', text: /^● 未檢查$/ }))?.props.color).toBe('#6E7787')
   expect(await ui.find({ type: 'Text', text: /^  ・unknown$/ })).toBeDefined()

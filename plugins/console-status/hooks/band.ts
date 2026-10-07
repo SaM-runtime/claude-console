@@ -74,10 +74,12 @@ export function layoutBand(snapshot: Snapshot, options: { columns: number; demo:
 
   for (const candidate of candidates) {
     if ('nextText' in candidate) {
-      const label = '下一步'
+      const label = '▸ 下一步'
       const available = Math.min(28, remaining())
       if (available < displayWidth(label)) break
-      const text = clipColumns(`${label} ${oneLine(candidate.nextText)}`, available)
+      const full = `${label} ${oneLine(candidate.nextText)}`
+      // A clipped step ends in an ellipsis, so it reads as cut rather than as a typo.
+      const text = displayWidth(full) <= available ? full : clipColumns(full, available - 1) + '…'
       if (!add('next', text)) break
     } else if (!add(candidate.id, candidate.text, candidate.zero)) break
   }

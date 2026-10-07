@@ -21,7 +21,7 @@ test('terminal: Client rows — click selects, keys move and select', async ($, 
   await demo($, on)
   for (const bodyColumns of [70, 120]) {
     const ui = await $.ui.mount({ ...PANE(bodyColumns), surface: 'terminal' } as any)
-    expect(await ui.find({ type: 'Text', text: /^下一步$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^▸ 下一步$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /示範 session/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /工作階段「/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /等你/ })).toBeUndefined()
@@ -52,8 +52,8 @@ test('terminal: Client rows — click selects, keys move and select', async ($, 
 test('mobile: no Client — plain rows with tappable project names', async ($, on) => {
   await demo($, on)
   const ui = await $.ui.mount({ ...PANE(60), surface: 'mobile' } as any)
-  expect(await ui.find({ type: 'Text', text: /^ 需決策 $/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^ 執行中 $/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ ● 需決策 $/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ ▶ 執行中 $/ })).toBeDefined()
   await ui.press({ key: 'sel-Project-Alpha' })
   expect(await ui.find({ type: 'Text', text: /已選取 Project-Alpha/ })).toBeDefined()
   await ui.unmount()
@@ -66,9 +66,9 @@ test('band: next action and non-zero counters only', async ($, on) => {
     props: { hasSurvey: false, bodyColumns: 120, maxRows: 3, bodyRows: 3, scroll } as any,
   } as any)
   // Pane open (demo opened it): the band keeps counters only, the pane carries the next step.
-  expect(await band.find({ type: 'Text', text: /^下一步/ })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: /^▸ 下一步/ })).toBeUndefined()
   await $.command.run({ command: 'console', args: '' } as any)
-  expect(await band.find({ type: 'Text', text: /^下一步/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^▸ 下一步/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /^● 需決策 1$/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /^○ 閒置 1$/ })).toBeDefined()
   await band.unmount()

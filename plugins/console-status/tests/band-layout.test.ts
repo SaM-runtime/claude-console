@@ -25,7 +25,7 @@ test('40 columns reserves the full button and keeps demo then a clipped one-item
   expect(layout.button).toBe('⌗ 面板')
   expect(layout.buttonWidth).toBe(6)
   expect(layout.items.map(item => item.id)).toEqual(['demo', 'next'])
-  expect(layout.items[1].text.startsWith('下一步 ')).toBe(true)
+  expect(layout.items[1].text.startsWith('▸ 下一步 ')).toBe(true)
   expect(layout.items[1].width <= 28).toBe(true)
   expect(occupied(layout) <= 40).toBe(true)
 })

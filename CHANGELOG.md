@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0
+
+- **Usage meters fill from the left.** The Claude and Codex quota bars were drawn as a battery with a coloured cap on the right, so a nearly empty one (3%) showed only a red cell at the far right and the cap looked like a stray block. Each meter is now a 12-cell bar on a dark track that fills from the left in eighths, with no cap; anything above 0% shows at least a sliver, green, then amber when low, red when nearly out.
+- **One usage table instead of two boxed frames.** Context, the 5-hour and weekly limits, the cache countdown, this session's cost and Codex's quota share one table under a `用量` heading: the tool name on its first row, the labels and meters lined up underneath, the reset time on the same line. The Codex and other-sessions health sit on the heading's right.
+- **A tidier pane.** The header and the dispatch line sit together, and the dispatch values are labelled (`派工 codex · 模型 預設 · 強度 預設`) instead of a bare `預設 · 預設`. The state counters moved onto the project table's title line and use the band's glyphs (`● ◆ ▶ ↻ ○`), as do the table's state chips; only the states that wait on you (需決策, 待審核) keep a filled chip. The table has one rule under its header instead of two, the selection hint lives in the help strip instead of its own line, and the footer is one row with the version on the right. `12:00 更新` reads `更新於 12:00`, so it no longer looks like a button.
+- **Band.** The next step starts with an amber `▸ 下一步` and its text in the normal colour, and a step cut to fit ends in `…` instead of mid-word.
+
 ## 0.6.0
 
 - **Light sessions.** The console no longer takes over every session. With the new `activation` option at `auto` (the default), a session runs only the command guard until `/console` is used in it: no git, `gh`, `claude agents` or Codex probes every minute, no band, no project-mode system prompt or progress notes, no cache or update toasts. The first `/console` command starts the console in that session, and a resume or plugin reload of that session starts it again by itself; `/console off` returns a session to light. A non-interactive run (`claude -p`, the SDK) stays light even when it resumes a console session. `activation: always` keeps the earlier behaviour.

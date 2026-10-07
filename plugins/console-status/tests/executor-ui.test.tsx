@@ -125,18 +125,18 @@ test('Claude UI dispatch tracks a background session, shows results and resumes 
   expect(launches[0].argv.includes('--continue')).toBe(false)
   expect(launches[0].argv.includes('sonnet')).toBe(true)
   expect(toasts.filter(text => text.includes('✕'))).toEqual([])
-  expect({ stage: 'first dispatch', running: !!await ui.find({ type: 'Text', text: /^ 執行中 $/ }) }).toEqual({ stage: 'first dispatch', running: true })
+  expect({ stage: 'first dispatch', running: !!await ui.find({ type: 'Text', text: /^ ▶ 執行中 $/ }) }).toEqual({ stage: 'first dispatch', running: true })
   await clock.advance(1000)
   sessions[0].state = 'done'
   sessions[0].status = 'idle'
   await $.command.run({ command: 'console', args: 'refresh' } as any)
-  expect({ stage: 'finished', sync: !!await ui.find({ type: 'Text', text: /^ 待同步 $/ }) }).toEqual({ stage: 'finished', sync: true })
+  expect({ stage: 'finished', sync: !!await ui.find({ type: 'Text', text: /^ ↻ 待同步 $/ }) }).toEqual({ stage: 'finished', sync: true })
   expect(await ui.find({ key: 'q-codex' })).toBeUndefined()
   expect(toasts.some(text => text.includes('完成'))).toBe(true)
   await ui.press({ key: 'detail-Project Alpha-sync' })
   expect(launches.length).toBe(2)
   expect(launches[1].argv[launches[1].argv.indexOf('--resume') + 1]).toBe(sessionId)
-  expect({ stage: 'sync resumed', running: !!await ui.find({ type: 'Text', text: /^ 執行中 $/ }) }).toEqual({ stage: 'sync resumed', running: true })
+  expect({ stage: 'sync resumed', running: !!await ui.find({ type: 'Text', text: /^ ▶ 執行中 $/ }) }).toEqual({ stage: 'sync resumed', running: true })
   const persisted = JSON.parse(files['C:/Users/example/.claude/handoffs/claude-sessions.json'])
   const history = persisted.roots['d:/project alpha'].jobs
   expect(history.length).toBe(2)
@@ -150,6 +150,6 @@ test('Claude UI dispatch tracks a background session, shows results and resumes 
   sessions[0].status = 'idle'
   await clock.advance(120_000)
   await $.command.run({ command: 'console', args: 'refresh' } as any)
-  expect({ stage: 'sync completed after CARD write', sync: !!await ui.find({ type: 'Text', text: /^ 待同步 $/ }) }).toEqual({ stage: 'sync completed after CARD write', sync: false })
+  expect({ stage: 'sync completed after CARD write', sync: !!await ui.find({ type: 'Text', text: /^ ↻ 待同步 $/ }) }).toEqual({ stage: 'sync completed after CARD write', sync: false })
   await ui.unmount()
 })
