@@ -3,7 +3,7 @@
 // Band above the prompt + `/console` pane; toasts on changes. Shows on phones via Remote Control.
 import { atom, read, update } from 'claude-code'
 import type { Register, PluginOptions } from 'claude-code'
-import { resolveConfig, resolveFallbackOptions, legacyDispatchPath } from './config'
+import { resolveConfig, resolveFallbackOptions, legacyDispatchPath, activationMode } from './config'
 import type { ConsoleConfig } from './config'
 import { codexHealth, isActiveJob } from './logic'
 import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles, effectiveDispatch, setProjectOverride, executorSignature, projectOverride } from './dispatch'
@@ -109,6 +109,15 @@ let demoActive = false
 let dataGeneration = 0
 let refreshOwner: { generation: number; queued: boolean } | null = null
 let refreshTimer: { cancel(): void } | undefined
+/**
+ * Whether this session runs the console (polling, band, project mode, cache hints, update check).
+ * Under `activation: auto` a session stays light until `/console` is used in it; the command
+ * guard runs either way.
+ */
+let consoleActive = false
+let sessionStartCwd: string | null = null
+const ACTIVE_SESSIONS_KEY = 'consoleSessions'
+const ACTIVE_SESSIONS_MAX = 50
 let displayWrites: Promise<void> = Promise.resolve()
 let demoContext: { config: ConsoleConfig; dispatch: Awaited<ReturnType<typeof readDispatch>> } | null = null
 const DISCARDED_REFRESH = Symbol('discarded refresh')
@@ -799,12 +808,67 @@ async function runUpdate($: any): Promise<string> {
 const HOTKEYS: Record<string, ActionKind> = { v: 'verify', s: 'sync', c: 'continue', d: 'decide', g: 'gate', o: 'open' }
 const HOTKEY_OF: Partial<Record<ActionKind, string>> = Object.fromEntries(Object.entries(HOTKEYS).map(([k, kind]) => [kind, k]))
 
+async function activeSessions($: any): Promise<string[]> {
+  const value = await Promise.resolve().then(() => $.store.get(ACTIVE_SESSIONS_KEY)).catch(() => null)
+  return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []
+}
+
+async function rememberSession($: any, keep: boolean) {
+  const id = await Promise.resolve().then(() => $.session.id()).catch(() => null)
+  if (typeof id !== 'string' || !id) return
+  const rest = (await activeSessions($)).filter(other => other !== id)
+  const next = keep ? [...rest, id].slice(-ACTIVE_SESSIONS_MAX) : rest
+  await Promise.resolve().then(() => $.store.set(ACTIVE_SESSIONS_KEY, next)).catch(() => {})
+}
+
+/** Starts the console in this session: the refresh and cache timers, the transcript read and the update check. */
+async function startConsole($: any, options: PluginOptions, remember: boolean, refreshNow = true) {
+  if (consoleActive) return
+  consoleActive = true
+  refreshTimer?.cancel()
+  refreshTimer = $.clock.every(TICK_MS, () => void refresh($, options))
+  cacheTimer?.cancel()
+  cacheTimer = $.clock.every(1000, () => void cacheTickOnce($, options).catch(() => {}))
+  // Until a classic hook names the transcript, find it where Claude Code keeps it.
+  if (!transcriptPath) {
+    const configDir = await $.env.get('CLAUDE_CONFIG_DIR') || `${await $.env.get('HOME') || await $.env.get('USERPROFILE') || ''}/.claude`
+    const sessionId = await $.session.id().catch(() => null)
+    if (sessionId && sessionStartCwd && !configDir.startsWith('/.claude')) transcriptPath = transcriptPathFor(configDir, sessionStartCwd, sessionId)
+  }
+  void syncCacheFromTranscript($, options, true).catch(() => {})
+  if (refreshNow) void refresh($, options, true)
+  updateTimer?.cancel()
+  updateTimer = $.clock.every(UPDATE_CHECK_MS, () => void checkUpdate($).catch(() => {}))
+  void checkUpdate($, true).catch(() => {})
+  if (remember) await rememberSession($, true)
+}
+
+/** `/console off`: back to a light session; the guard stays. */
+async function stopConsole($: any) {
+  consoleActive = false
+  dataGeneration++
+  refreshTimer?.cancel(); refreshTimer = undefined
+  cacheTimer?.cancel(); cacheTimer = undefined
+  updateTimer?.cancel(); updateTimer = undefined
+  await rememberSession($, false)
+  if (await read($, isPaneOpen)) {
+    await $.ui.close({ id: PANE }).catch(() => {})
+    await update($, isPaneOpen, () => false)
+  }
+  await update($, snapshot, () => null)
+  await update($, selected, () => null)
+}
+
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     sessionCwd = typeof e.cwd === 'string' ? e.cwd.replace(/\\/g, '/') : null
+    sessionStartCwd = typeof e.cwd === 'string' ? e.cwd : null
     lastProgress = ''
     dataGeneration++
+    consoleActive = false
     refreshTimer?.cancel()
+    cacheTimer?.cancel()
+    updateTimer?.cancel()
     if (actionLocks.size === 0) earlyReviewStarts.clear()
     selectionClaim = null
     await update($, reviewRequests, values => Object.fromEntries(Object.entries(values).filter(([path]) => actionLocks.has(path))))
@@ -812,25 +876,15 @@ export const register: Register = (on, options) => {
     await update($, continueConfirmations, () => ({}))
     await update($, fallbackOffers, () => ({}))
     await loadTrust($)
-    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；band 橫帶；demo 示範；version 版本；update 更新外掛' })
-    refreshTimer = $.clock.every(TICK_MS, () => void refresh($, options))
-    cacheTimer?.cancel()
-    cacheTimer = $.clock.every(1000, () => void cacheTickOnce($, options).catch(() => {}))
-    // Until a classic hook names the transcript, find it where Claude Code keeps it.
+    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；band 橫帶；demo 示範；version 版本；update 更新外掛；off 此 session 不跑主控台' })
     transcriptPath = null
-    {
-      const configDir = await $.env.get('CLAUDE_CONFIG_DIR') || `${await $.env.get('HOME') || await $.env.get('USERPROFILE') || ''}/.claude`
-      const sessionId = await $.session.id().catch(() => null)
-      const cwd = typeof e.cwd === 'string' ? e.cwd : null
-      if (sessionId && cwd && !configDir.startsWith('/.claude')) transcriptPath = transcriptPathFor(configDir, cwd, sessionId)
-    }
-    void syncCacheFromTranscript($, options, true).catch(() => {})
-    void refresh($, options, true)
     // A reload after an update starts a fresh check, which reads the newly installed manifest.
     await update($, updateInfo, value => value && value.phase !== 'idle' ? { ...value, phase: 'idle', checkedAt: 0 } as UpdateInfo : value)
-    updateTimer?.cancel()
-    updateTimer = $.clock.every(UPDATE_CHECK_MS, () => void checkUpdate($).catch(() => {}))
-    void checkUpdate($, true).catch(() => {})
+    // A light session (a quick side task, `claude -p`) gets the guard only: no polling, band or prompt additions.
+    const id = await Promise.resolve().then(() => $.session.id()).catch(() => null)
+    const resumed = typeof id === 'string' && (await activeSessions($)).includes(id)
+    if (activationMode((options as any).activation) === 'always' || (resumed && e.isInteractive !== false)) await startConsole($, options, false)
+    else await update($, snapshot, () => null)
     return next(e)
   })
 
@@ -843,7 +897,7 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin?.kind === 'plugin') return next(e)
+    if (e.origin?.kind === 'plugin' || !consoleActive) return next(e)
     if (cacheMode(options) === 'on') {
       // A prompt on a cold cache re-writes the whole context: say so, never hold the prompt.
       const clock = await read($, cacheClock).catch(() => null)
@@ -912,7 +966,7 @@ export const register: Register = (on, options) => {
   on('classic.Stop', async ($, e, next) => {
     if (typeof (e as any).transcript_path === 'string' && (e as any).transcript_path) transcriptPath = (e as any).transcript_path
     const result = await next(e)
-    void syncCacheFromTranscript($, options, false).catch(() => {})
+    if (consoleActive) void syncCacheFromTranscript($, options, false).catch(() => {})
     return result
   })
 
@@ -952,13 +1006,25 @@ export const register: Register = (on, options) => {
       }
     }
     earlyReviewStarts.delete(e.turnId)
-    void refresh($, options)
+    if (consoleActive) void refresh($, options)
     return next(e)
   })
 
   on('command.run', async ($, e, next) => {
     if (e.command !== 'console') return next(e)
     const arg = e.args.trim()
+    if (arg === 'off') {
+      if (!consoleActive) return { text: '這個 session 沒有啟動主控台（指令護欄照常運作）。' }
+      await stopConsole($)
+      return { text: '這個 session 已關閉主控台：不再輪詢、不顯示橫帶、不加專案內容；指令護欄照常運作。/console 再開啟。' }
+    }
+    if (arg !== 'version' && arg !== 'update' && !consoleActive) {
+      // The first /console in a light session: `refresh` and `demo` load their own data, the pane
+      // fills as the first refresh lands, and the rest read the snapshot, so they wait for it.
+      await startConsole($, options, true, false)
+      if (!arg) void refresh($, options, true)
+      else if (arg !== 'refresh' && arg !== 'demo') await refresh($, options, true)
+    }
     const modeArg = arg.match(/^mode(?:\s+(auto|console|project))?$/)
     if (modeArg) {
       if (modeArg[1]) await update($, modeOverride, () => modeArg[1] as ModeChoice)

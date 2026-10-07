@@ -1,6 +1,6 @@
 import { expect, test, mock } from 'claude-code/testing'
 
-const OPTIONS = { options: { registryPath: 'D:/Fixtures/registry.md' } }
+const OPTIONS = { options: { activation: 'always', registryPath: 'D:/Fixtures/registry.md' } }
 const BAND = { plugin: 'console-status', component: 'AbovePrompt', surface: 'terminal', props: { bodyColumns: 160 } } as any
 const result = (stdout = '') => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 

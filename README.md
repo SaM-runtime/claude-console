@@ -75,6 +75,7 @@ Marketplace management is covered by the official [plugin marketplace documentat
 | `cacheHint` | `on`: show the console's prompt-cache countdown and re-write cost (see [Prompt cache and cost](#prompt-cache-and-cost)); `off`: hide | `on` |
 | `cacheTtl` | `auto` (the TTL the API reports in the session transcript's usage; 5 minutes until one is seen), `5m` or `1h` | `auto` |
 | `cacheWritePrice` | USD per million cache-write tokens for the estimate; empty uses the model's list price | Empty |
+| `activation` | `auto`: only a session where you ran `/console` runs the console, and it starts again when that session resumes; other sessions get the command guard only (see [Light sessions](#light-sessions)). `always`: every session | `auto` |
 | `projectMode` | `auto`: a session opened inside a registered project switches to project mode (see [Pipeline and project mode](#pipeline-and-project-mode)); `off`: always the multi-project console | `auto` |
 
 Paths beginning with `~` expand on Windows, macOS, and Linux. Run `/reload-plugins` or start another Claude Code session after plugin configuration changes. See [the registry example](workflow/projects-scope.example.md).
@@ -238,10 +239,17 @@ A dispatch shows RUNNING optimistically until managed state is refreshed. Accept
 | `/console project` | List each project's effective executor, model, and effort |
 | `/console project executor\|model\|effort <value\|inherit> <name>` | Set or clear one project's override |
 | `/console mode [auto\|console\|project]` | Show or choose project mode for this session |
+| `/console off` | Stop the console in this session (the guard stays); `/console` starts it again |
 | `/console version` | Show the installed and the latest version |
 | `/console update` | Update console-status and reload plugins when a newer version is on `main` |
 
 Selecting a project applies only to the next accepted prompt. A downstream rejection retains the selection for retry.
+
+## Light sessions
+
+With `activation: auto` (the default), a new session is light: it gets the command guard and the `/console` command, and nothing else. It runs no git, `gh`, `claude agents` or Codex probes, draws no band, adds nothing to the system prompt or to prompts, and shows no cache or update toasts. A quick side session, a `claude -p` run and a background executor stay that way.
+
+The first `/console` command in a session (any of them except `version`, `update` and `off`) starts the console there, and the session is remembered: resuming it or reloading plugins starts the console again without asking. `/console off` returns the session to light. Project mode also waits for `/console` in that session. Set `activation` to `always` for the behaviour before 0.6.0, where every session runs the console.
 
 ## Pipeline and project mode
 
@@ -259,7 +267,7 @@ The position comes from what the console already reads: a running job, then an u
 
 The project table has a six-mark `流程` column (from 64 columns wide); project cards and the action menu show the full line with stage names.
 
-**Project mode.** When a Claude Code session starts inside a registered project's root (or a folder under it), the console follows that project:
+**Project mode.** When a console session (see [Light sessions](#light-sessions)) runs inside a registered project's root (or a folder under it), the console follows that project:
 
 - the band shows the project's pipeline and current step, plus how many other projects need a decision or gate;
 - the pane opens with a project card (pipeline, next step, actions, verification) above the usual console;
@@ -272,7 +280,7 @@ The project table has a six-mark `流程` column (from 64 columns wide); project
 
 A Bash or PowerShell command that cannot be taken back asks first in Claude Code's own question dialog, with the reason and the command, even when the permission mode or an allow rule would run it unseen: `執行一次` runs it once, anything else (or no one to ask, as in `claude -p`) refuses it and tells the model not to retry the same effect another way. The activity feed records each decision.
 
-It covers recursive deletes (`rm -r`, `Remove-Item -Recurse`, `rd /s`) except build output and caches (`node_modules`, `dist`, `build`, `.next`, `target`, `coverage`, `__pycache__` and similar), force or mirror pushes and remote deletes, `git reset --hard`, `git clean -f`, discarding all working-tree changes, `git branch -D`, `git stash drop|clear`, history rewrites, `DROP TABLE`/`TRUNCATE TABLE`, disk formatting and raw device writes, `terraform destroy`, bulk `kubectl delete`, `helm uninstall`, `docker system prune -a`, `gh repo|release delete`, and publishing (`npm|pnpm|yarn|cargo publish`, `gh release create`). `--force-with-lease`, single-file deletes and ordinary pushes pass.
+It covers recursive deletes (`rm -r`, `Remove-Item -Recurse`, `rd /s`) except build output and caches (`node_modules`, `dist`, `build`, `.next`, `target`, `coverage`, `__pycache__` and similar), force or mirror pushes and remote deletes, `git reset --hard`, `git clean -f`, discarding all working-tree changes, `git branch -D`, `git stash drop|clear`, history rewrites, `DROP TABLE`/`TRUNCATE TABLE`, disk formatting and raw device writes, `terraform destroy`, bulk `kubectl delete`, `helm uninstall`, `docker system prune -a`, `gh repo|release delete`, and publishing (`npm|pnpm|yarn|cargo publish`, `gh release create`). It also looks inside `bash -c`, `powershell -Command` and `cmd /c`, and catches `+branch` force refspecs, `push --prune`, `checkout -f`/`switch -f`, `find -delete` and `find -exec rm -r`. `--force-with-lease`, single-file deletes, ordinary pushes, dry runs (`-n`, `--dry-run`, `-WhatIf`), deletes inside a temp directory (`/tmp/…`, `$TMPDIR/…`, `$env:TEMP\…`), PowerShell's `rm -Force` on a file and SQL words in text a command only searches or records (`git commit -m "drop table…"`, `grep`) pass.
 
 The guard runs in every session where the plugin is enabled, background executors included: a background agent that hits it waits for an answer like any other question (attach to it), and one with no one to ask is refused. Set `commandGuard` to `deny` to refuse without asking, or `off` to turn it off.
 

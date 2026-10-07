@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+- **Light sessions.** The console no longer takes over every session. With the new `activation` option at `auto` (the default), a session runs only the command guard until `/console` is used in it: no git, `gh`, `claude agents` or Codex probes every minute, no band, no project-mode system prompt or progress notes, no cache or update toasts. The first `/console` command starts the console in that session, and a resume or plugin reload of that session starts it again by itself; `/console off` returns a session to light. A non-interactive run (`claude -p`, the SDK) stays light even when it resumes a console session. `activation: always` keeps the earlier behaviour.
+- **Command guard asks less for ordinary work.** These no longer ask: a commit message, `grep` or `echo` that only mentions `DROP TABLE`; PowerShell's `rm -Force file` (its `-Force` was read as `-r`); deletes inside a temp directory (`/tmp/…`, `$TMPDIR/…`, `$env:TEMP\…`, `%TEMP%\…`, not the directory itself, a bare `*` or a path with `..`); and dry runs (`git clean -n`, `git push -n`, `npm publish --dry-run`, `Remove-Item -WhatIf`).
+- **Command guard catches what slipped past.** A command wrapped in `bash -c`, `sh -c`, `powershell -Command`, `pwsh -c` or `cmd /c` is checked like the command itself; a `+branch` refspec force-pushes; `git push --prune` deletes remote branches; `git checkout -f` and `git switch -f`/`--discard-changes` drop uncommitted work; `find -delete` and `find -exec rm -r`; `Remove-Item` with an abbreviated `-Rec`; `Format-Volume`, `Clear-Disk`, `Initialize-Disk`.
+
 ## 0.5.1
 
 - **Shares the band with other plugins.** The band above the prompt is one row for every plugin, and the console used to draw its line whether or not another plugin had something there, so a plugin beneath it (paste-preview's image thumbnails, for one) never showed. Now what the plugins beneath draw stacks under the console's line; with nothing beneath, the band is as before. A plugin that draws above the console and does not pass the band on still hides it while it shows.

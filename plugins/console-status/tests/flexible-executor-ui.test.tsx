@@ -55,7 +55,7 @@ function fixture(on: any, opts: Fixture = {}) {
   return { clock, files, launches, probes, toasts }
 }
 
-const BASE = { registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/companion.mjs', companionStateRoots: '["D:/State"]' }
+const BASE = { activation: 'always', registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/companion.mjs', companionStateRoots: '["D:/State"]' }
 
 test('registry Executor column selects codex per project and the pane cycles a persisted override', { options: BASE }, async ($, on) => {
   const h = fixture(on, { registry: `## STATUS 卡位置\n| Project | STATUS path | Executor |\n| --- | --- | --- |\n| Project Alpha | \`${STATUS}\` | codex |` })

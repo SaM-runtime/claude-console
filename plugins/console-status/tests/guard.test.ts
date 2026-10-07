@@ -40,6 +40,39 @@ test('irreversible commands are named; ordinary ones and build-output cleanup pa
   for (const command of ordinary) expect([command, dangerReason(command)]).toEqual([command, null])
 })
 
+test('wrapped shells, refspec force pushes and find deletes are caught', () => {
+  const dangerous: [string, RegExp][] = [
+    ['bash -c "rm -rf src"', /遞迴刪除 src/],
+    ['powershell -NoProfile -Command "Remove-Item -Recurse C:\\proj"', /遞迴刪除/],
+    ['cmd /c rd /s /q C:\\proj', /遞迴刪除/],
+    ['pwsh -c "& { Remove-Item C:\\proj -Recurse }"', /遞迴刪除/],
+    ['rm -rfvI src', /遞迴刪除 src/],
+    ['git push origin +main', /強制推送/],
+    ['git push origin --prune', /刪除遠端分支/],
+    ['git checkout -f main', /丟棄未提交/],
+    ['git switch --discard-changes main', /丟棄未提交/],
+    ['find . -name "*.log" -delete', /find -delete/],
+    ['find . -type d -exec rm -rf {} +', /find -exec/],
+    ['Remove-Item -Rec C:\\proj', /遞迴刪除/],
+    ['Format-Volume -DriveLetter D', /格式化/],
+    ['rm -rf /tmp/a/../../etc', /遞迴刪除/],
+    ['rm -rf /tmp', /遞迴刪除/],
+    ['rm -rf /tmp/*', /遞迴刪除/],
+  ]
+  for (const [command, reason] of dangerous) expect([command, dangerReason(command)]).toEqual([command, expect.stringMatching(reason)])
+})
+
+test('mentions, PowerShell -Force, temp scratch and dry runs pass', () => {
+  const ordinary = [
+    'git commit -m "migration: drop table legacy_users"', 'grep -ri "drop table" migrations', 'echo "TRUNCATE TABLE x" > plan.md',
+    'rm -Force notes.txt', 'Remove-Item notes.txt -Force', 'rm -rf /tmp/build-123', 'rm -rf "$TMPDIR/scratch"',
+    'Remove-Item -Recurse -Force "$env:TEMP\\scratch"', 'rd /s /q %TEMP%\\scratch', 'git clean -fdn', 'git push -n --force',
+    'npm publish --dry-run', 'Remove-Item -Recurse C:\\proj -WhatIf', 'bash -c "npm test"', 'git checkout -b feature',
+    'find . -name "*.ts" -exec grep -l foo {} +',
+  ]
+  for (const command of ordinary) expect([command, dangerReason(command)]).toEqual([command, null])
+})
+
 test('segments keep quoted separators together', () => {
   expect(segments('a && b; c | d\ne')).toEqual(['a', 'b', 'c', 'd', 'e'])
   expect(segments('echo "x; rm -rf /" && ls')).toEqual(['echo "x; rm -rf /"', 'ls'])

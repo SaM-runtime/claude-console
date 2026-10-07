@@ -13,6 +13,11 @@ export function guardMode(value: unknown): GuardMode {
 /** Build output and caches: deleting these is routine and never asks. */
 const SCRATCH = /^(?:\.\/)?(?:[\w.-]+\/)*(?:node_modules|dist|build|out|\.next|\.nuxt|\.svelte-kit|\.turbo|\.parcel-cache|\.cache|target|coverage|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.tox|\.venv|venv|tmp|\.tmp|[\w.-]+\.egg-info)\/?$/
 
+/** Temp directories: removing something inside one is scratch cleanup (the directory itself still asks). */
+const TEMP = /^(?!.*\.\.)["']?(?:\/tmp\/|\/var\/tmp\/|\$\{?TMPDIR\}?[\\/]|\$env:(?:TEMP|TMP)[\\/]|%(?:TEMP|TMP)%[\\/])(?!\*)[^\s]+$/i
+
+const scratch = (target: string) => SCRATCH.test(target.replace(/\\/g, '/')) || TEMP.test(target)
+
 /** One shell command line split into simple commands; quotes are kept, separators outside them split. */
 export function segments(command: string): string[] {
   const out: string[] = []
@@ -31,21 +36,28 @@ export function segments(command: string): string[] {
 
 /** Words of one simple command without leading `sudo`, `env`, `command` or `VAR=value` prefixes; quotes removed. */
 function words(segment: string): string[] {
-  const list = (segment.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map(w => w.replace(/^["']|["']$/g, ''))
+  const list = (segment.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map(w => w.replace(/^["']|["']$/g, '')).filter(w => w !== '{' && w !== '}')
   while (list.length && (/^(?:sudo|env|command|nohup|time|exec|xargs)$/.test(list[0]!) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(list[0]!))) list.shift()
   return list
 }
 
 const shortFlags = (args: string[]) => args.filter(a => /^-[A-Za-z]+$/.test(a)).join('')
 const has = (args: string[], ...flags: string[]) => args.some(a => flags.includes(a))
+/**
+ * Recursive, for `rm` (POSIX, or PowerShell's alias for Remove-Item) and Remove-Item: a short flag
+ * cluster of rm's letters with r (`-rf`, `-Rfv`), `--recursive`, or `-Recurse` and its abbreviations
+ * (`-r`, `-Rec`). PowerShell words such as `-Force` are not rm clusters, so their r does not count.
+ */
+const recursive = (args: string[]) => args.some(a => /^-[rRfvidIPWx]+$/.test(a) && /r/i.test(a) || /^--recursive$/.test(a) || /^-r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?$/i.test(a))
 
 function rmReason(args: string[]): string | null {
-  const flags = shortFlags(args)
-  if (!/[rR]/.test(flags) && !has(args, '--recursive')) return null
+  if (!recursive(args)) return null
   const targets = args.filter(a => !a.startsWith('-'))
-  if (!targets.length || targets.every(t => SCRATCH.test(t))) return null
+  if (!targets.length || targets.every(scratch)) return null
   return `遞迴刪除 ${targets.slice(0, 3).join(' ')}${targets.length > 3 ? ' …' : ''}`
 }
+
+const dryRun = (args: string[]) => has(args, '--dry-run', '-n', '--what-if', '-WhatIf')
 
 function gitReason(args: string[]): string | null {
   // `git -C <dir> <sub>` / `git -c k=v <sub>`: skip each option and its value.
@@ -56,12 +68,15 @@ function gitReason(args: string[]): string | null {
   const flags = shortFlags(rest)
   switch (cmd) {
     case 'push':
-      if (has(rest, '--force', '--mirror') || (/f/.test(flags) && !has(rest, '--force-with-lease', '--force-if-includes'))) return '強制推送會覆寫遠端歷史'
-      if (has(rest, '--delete') || /d/.test(flags) || rest.some(a => /^:[^/]/.test(a))) return '刪除遠端分支或標籤'
+      if (dryRun(rest)) return null
+      if (has(rest, '--force', '--mirror') || (/f/.test(flags) && !has(rest, '--force-with-lease', '--force-if-includes')) || rest.some(a => /^\+[^+]/.test(a))) return '強制推送會覆寫遠端歷史'
+      if (has(rest, '--delete', '--prune') || /d/.test(flags) || rest.some(a => /^:[^/]/.test(a))) return '刪除遠端分支或標籤'
       return null
     case 'reset': return has(rest, '--hard') ? 'git reset --hard 會丟棄未提交的變更' : null
-    case 'clean': return /f/.test(flags) || has(rest, '--force') ? 'git clean 會刪除未追蹤的檔案' : null
-    case 'checkout': return rest.includes('.') && (rest.includes('--') || rest.length === 1) ? '丟棄工作區所有變更' : null
+    case 'clean': return (/f/.test(flags) || has(rest, '--force')) && !/n/.test(flags) && !has(rest, '--dry-run') ? 'git clean 會刪除未追蹤的檔案' : null
+    case 'checkout': return rest.includes('.') && (rest.includes('--') || rest.length === 1) ? '丟棄工作區所有變更'
+      : has(rest, '-f', '--force') ? '強制切換分支會丟棄未提交的變更' : null
+    case 'switch': return has(rest, '-f', '--force', '--discard-changes') ? '強制切換分支會丟棄未提交的變更' : null
     case 'restore': return rest.includes('.') && !has(rest, '--staged', '-S') ? '丟棄工作區所有變更' : null
     case 'branch': return /D/.test(flags) || (has(rest, '--delete') && has(rest, '--force')) ? '強制刪除分支（未合併的 commit 會遺失）' : null
     case 'stash': return rest[0] === 'drop' || rest[0] === 'clear' ? '刪除 stash 內容' : null
@@ -71,21 +86,46 @@ function gitReason(args: string[]): string | null {
   }
 }
 
-function segmentReason(segment: string): string | null {
+/** Shells that run their argument as a command line: `bash -c "…"`, `powershell -Command …`, `cmd /c …`. */
+function innerCommand(lower: string, args: string[]): string | null {
+  let at = -1
+  if (/^(?:ba|z|da|k)?sh$/.test(lower)) at = args.findIndex(a => /^-[a-z]*c[a-z]*$/.test(a))
+  else if (lower === 'powershell' || lower === 'pwsh') at = args.findIndex(a => /^-(?:c|command)$/i.test(a))
+  else if (lower === 'cmd') at = args.findIndex(a => /^\/[ck]$/i.test(a))
+  return at >= 0 && at + 1 < args.length ? args.slice(at + 1).join(' ') : null
+}
+
+function segmentReason(segment: string, depth: number): string | null {
   const w = words(segment)
   const head = (w[0] ?? '').replace(/^.*[\\/]/, '').replace(/\.exe$/i, '')
   const args = w.slice(1)
   const lower = head.toLowerCase()
+  const inner = depth < 3 ? innerCommand(lower, args) : null
+  if (inner) return reasonOf(inner, depth + 1)
   if (lower === 'rm') return rmReason(args)
   if (lower === 'git') return gitReason(args)
+  if (lower === 'find') {
+    if (has(args, '-delete')) return 'find -delete 會刪除找到的檔案'
+    const exec = args.findIndex(a => a === '-exec' || a === '-execdir')
+    if (exec >= 0) {
+      const run = words(args.slice(exec + 1).join(' '))
+      const tool = (run[0] ?? '').replace(/^.*[\\/]/, '').toLowerCase()
+      if ((tool === 'rm' || tool === 'remove-item') && recursive(run.slice(1))) return 'find -exec 遞迴刪除找到的項目'
+      return reasonOf(run.filter(a => a !== '{}' && a !== '+' && a !== '\\;' && a !== ';').join(' '), depth + 1)
+    }
+  }
+  if (lower === 'format-volume' || lower === 'clear-disk' || lower === 'initialize-disk') return '格式化磁碟'
   if (lower === 'mkfs' || lower.startsWith('mkfs.')) return '格式化磁碟'
   if (lower === 'dd' && args.some(a => /^of=\/dev\//.test(a))) return '直接寫入磁碟裝置'
   if ((lower === 'chmod' || lower === 'chown') && /R/.test(shortFlags(args)) && args.some(a => a === '/' || a === '~' || a === '/*')) return `遞迴變更根目錄權限`
   if (lower === 'remove-item' || lower === 'ri') {
-    const targets = args.filter(a => !a.startsWith('-'))
-    return args.some(a => /^-r(?:ecurse)?$/i.test(a)) && !(targets.length && targets.every(t => SCRATCH.test(t.replace(/\\/g, '/')))) ? `遞迴刪除 ${targets.slice(0, 2).join(' ')}` : null
+    const targets = args.filter(a => !a.startsWith('-') && !/^-(?:Path|LiteralPath)$/i.test(a))
+    return recursive(args) && !dryRun(args) && !(targets.length && targets.every(scratch)) ? `遞迴刪除 ${targets.slice(0, 2).join(' ')}`.trimEnd() : null
   }
-  if ((lower === 'rd' || lower === 'rmdir') && args.some(a => /^\/s$/i.test(a))) return `遞迴刪除 ${args.filter(a => !a.startsWith('/')).slice(0, 2).join(' ')}`
+  if ((lower === 'rd' || lower === 'rmdir') && args.some(a => /^\/s$/i.test(a))) {
+    const targets = args.filter(a => !a.startsWith('/'))
+    return targets.length && targets.every(scratch) ? null : `遞迴刪除 ${targets.slice(0, 2).join(' ')}`
+  }
   if (lower === 'del' && args.some(a => /^\/s$/i.test(a))) return '遞迴刪除檔案'
   if (lower === 'format' && args.some(a => /^[a-z]:$/i.test(a))) return '格式化磁碟'
   if (lower === 'terraform' && args[0] === 'destroy') return 'terraform destroy 會刪除基礎設施'
@@ -93,21 +133,29 @@ function segmentReason(segment: string): string | null {
   if (lower === 'helm' && (args[0] === 'uninstall' || args[0] === 'delete')) return '移除 Helm release'
   if (lower === 'docker' && args[0] === 'system' && args[1] === 'prune' && has(args, '-a', '--all', '--volumes')) return '清除所有 Docker 映像與資料卷'
   if (lower === 'gh' && ((args[0] === 'repo' && args[1] === 'delete') || (args[0] === 'release' && args[1] === 'delete'))) return `刪除 GitHub ${args[0] === 'repo' ? 'repo' : 'release'}`
-  if ((lower === 'npm' || lower === 'pnpm' || lower === 'yarn' || lower === 'cargo') && (args[0] === 'publish' || args[0] === 'unpublish')) return `${args[0] === 'publish' ? '發布套件' : '撤下已發布的套件'}（正式環境操作）`
+  if ((lower === 'npm' || lower === 'pnpm' || lower === 'yarn' || lower === 'cargo') && (args[0] === 'publish' || args[0] === 'unpublish') && !dryRun(args)) return `${args[0] === 'publish' ? '發布套件' : '撤下已發布的套件'}（正式環境操作）`
   if (lower === 'gh' && args[0] === 'release' && args[1] === 'create') return '建立 GitHub release（正式環境操作）'
   return null
 }
 
 const SQL = /\b(?:drop\s+(?:table|database|schema)|truncate\s+table)\b/i
+/** Commands that only search, show or record text: SQL words in their arguments run nothing (`git commit -m "drop table …"`). */
+const TEXT_ONLY = /^(?:git|grep|egrep|rg|ag|findstr|select-string|sls|echo|printf|write-output|write-host|cat|type|get-content|gc|less|more|head|tail|wc|ls|dir)$/
 
-/** Why `command` needs the person's word, or null when it is ordinary. */
-export function dangerReason(command: string): string | null {
-  if (SQL.test(command)) return '刪除資料表或資料庫'
-  for (const segment of segments(command)) {
-    const reason = segmentReason(segment)
+function reasonOf(command: string, depth: number): string | null {
+  const parts = segments(command)
+  const heads = parts.map(part => (words(part)[0] ?? '').replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase())
+  if (SQL.test(command) && !heads.every(head => TEXT_ONLY.test(head))) return '刪除資料表或資料庫'
+  for (const segment of parts) {
+    const reason = segmentReason(segment, depth)
     if (reason) return reason
   }
   return null
+}
+
+/** Why `command` needs the person's word, or null when it is ordinary. */
+export function dangerReason(command: string): string | null {
+  return reasonOf(command, 0)
 }
 
 /** The command as the person will read it in the question: one line, clipped. */
