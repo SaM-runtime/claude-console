@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- **Shares the band with other plugins.** The band above the prompt is one row for every plugin, and the console used to draw its line whether or not another plugin had something there, so a plugin beneath it (paste-preview's image thumbnails, for one) never showed. Now what the plugins beneath draw stacks under the console's line; with nothing beneath, the band is as before. A plugin that draws above the console and does not pass the band on still hides it while it shows.
+
 ## 0.5.0
 
 - **Update from the console.** The pane's footer shows the installed version against the newest one on `main` (the `plugin.json` that `claude plugin update` would install), checked at each load and every six hours; a new version toasts once. `⬆ 更新到 vX.Y.Z` runs `claude plugin marketplace update claude-console` and `claude plugin update console-status`, then `/reload-plugins`, so the new version runs without leaving the session; a failure shows its last output line and the button stays for a retry. `/console version` shows both versions, `/console update` does the same as the button.
