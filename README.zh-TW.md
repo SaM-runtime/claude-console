@@ -324,7 +324,7 @@ claude plugin install paste-preview@paste-preview
 
 ## 升級
 
-面板底部會顯示目前安裝版本與 `main` 上的最新版本（每次載入與每 6 小時檢查一次；發現新版時也會 toast 一次）。按 `⬆ 更新到 vX.Y.Z` 或輸入 `/console update`，會執行下面兩個指令，再自動 `/reload-plugins`；若重新載入被拒絕，面板會提示你自己輸入 `/reload-plugins`。手動方式：
+面板底部會顯示目前安裝版本與 `main` 上的最新版本（每次載入與每 30 分鐘檢查一次；發現新版時也會 toast 一次）。按 `⬆ 更新到 vX.Y.Z` 或輸入 `/console update`，會執行下面兩個指令，再自動 `/reload-plugins --force`。若 console-status 是從本機資料夾載入（從資料夾加入的 marketplace，或 `--plugin-dir`），這兩個指令只會重讀該資料夾，所以按鈕改在該資料夾執行 `git pull --ff-only`；資料夾不是 git clone、無法 fast-forward，或目前分支仍是舊版時，面板會顯示原因。若重新載入被拒絕或 20 秒內沒有發生，面板會提示你自己輸入 `/reload-plugins`。手動方式：
 
 ```powershell
 claude plugin marketplace update claude-console

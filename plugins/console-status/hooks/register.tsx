@@ -25,7 +25,7 @@ import { CACHE_WARN_MS, cacheChip, cacheTtlOption, cacheView, cacheWarning, left
 import type { TtlSource } from './cache'
 import type { CacheTtl } from './cache'
 import { commandPreview, dangerReason, guardMode } from './guard'
-import { LATEST_MANIFEST_URL, UPDATE_CHECK_MS, hasUpdate, manifestVersion, marketplaceUpdateArgs, updateArgs, versionLine } from './updater'
+import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
 import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
@@ -105,6 +105,7 @@ let updateCheck: Promise<UpdateInfo | null> | null = null
 /** The newest version already announced by a toast (kept in `$.store`, so once per version). */
 const UPDATE_NOTIFIED_KEY = 'updateNotified'
 const RELOAD_DELAY_MS = 1500
+const RELOAD_WATCHDOG_MS = 20_000
 const actionLocks = new Set<string>()
 const earlyReviewStarts = new Map<string, string>()
 let selectionClaim: string | null = null
@@ -863,34 +864,72 @@ function checkUpdate($: any, force = false): Promise<UpdateInfo | null> {
   return updateCheck
 }
 
-/** `claude plugin marketplace update` and `claude plugin update console-status`, then `/reload-plugins` so the new version runs in this session. */
+type RunResult = { exitCode: number; stdout: string; stderr: string }
+const runQuiet = ($: any, argv: string[], timeoutMs: number): Promise<RunResult> => Promise.resolve()
+  .then(() => $.process.run(argv, { timeoutMs }))
+  .catch((error: unknown) => ({ exitCode: -1, stdout: '', stderr: error instanceof Error ? error.message : String(error) }))
+const lastLine = (r: RunResult) => outputTail(r.stdout, r.stderr).at(-1)?.slice(0, 160) || `結束碼 ${r.exitCode}`
+
+/**
+ * Brings the new version to where console-status is loaded from. A plugin read from a local folder
+ * (a directory marketplace or `--plugin-dir`, e.g. a git clone) is updated by `git pull --ff-only`
+ * there: `claude plugin update` only re-reads that folder. Otherwise the marketplace is refreshed
+ * and the plugin updated. Resolves to an error message, or null when a newer version is in place.
+ */
+async function installUpdate($: any, latest: string | null): Promise<string | null> {
+  const list = await runQuiet($, pluginListArgs(), 60_000)
+  const folder = localFolder(list.exitCode === 0 ? list.stdout : null, $.plugin.root)
+  if (folder) {
+    const top = await runQuiet($, gitTopArgs(folder), 15_000)
+    const repo = top.exitCode === 0 ? top.stdout.trim().replace(/\\/g, '/') : ''
+    if (!repo) return `外掛從本機資料夾 ${folder} 載入，但它不是 git 儲存庫；請手動更新該資料夾`
+    const pull = await runQuiet($, gitPullArgs(repo), 120_000)
+    if (pull.exitCode !== 0) return `在 ${repo} 執行 git pull 失敗：${lastLine(pull)}`
+    const now = manifestVersion(await Promise.resolve().then(() => $.fs.read(`${folder}/.claude-plugin/plugin.json`)).catch(() => null))
+    if (latest && (!now || compareVersions(now, latest) < 0)) {
+      const branch = (await runQuiet($, gitBranchArgs(repo), 15_000)).stdout.trim()
+      return `已在 ${repo} 執行 git pull，但資料夾仍是 v${now ?? '?'}${branch ? `（目前分支 ${branch}，新版在 main）` : ''}`
+    }
+    // Records the folder's new version for `claude plugin list`; the folder is what loads either way.
+    await runQuiet($, updateArgs(), 120_000)
+    return null
+  }
+  // Best effort: a marketplace added under another name is still refreshed by the update itself.
+  await runQuiet($, marketplaceUpdateArgs(), 120_000)
+  const result = await runQuiet($, updateArgs(), 180_000)
+  if (result.exitCode !== 0) return lastLine(result)
+  const outcome = updateOutcome(result.stdout)
+  if (outcome && !outcome.updated) return `沒有安裝新版：${outcome.message.slice(0, 160) || '已是 marketplace 上的最新版'}`
+  return null
+}
+
+/** Installs the new version, then `/reload-plugins` so it runs in this session. */
 async function runUpdate($: any): Promise<string> {
   const before = await read($, updateInfo)
   if (before?.phase === 'updating') return '更新進行中。'
   const target = before?.latest ? `v${before.latest}` : '最新版'
   await update($, updateInfo, value => ({ current: value?.current ?? null, latest: value?.latest ?? null, checkedAt: value?.checkedAt ?? 0, phase: 'updating' }) as UpdateInfo)
-  // Best effort: a marketplace added under another name is still refreshed by the update itself.
-  await $.process.run(marketplaceUpdateArgs(), { timeoutMs: 120_000 }).catch(() => null)
-  const result = await $.process.run(updateArgs(), { timeoutMs: 180_000 })
-    .catch((error: unknown) => ({ exitCode: -1, stdout: '', stderr: error instanceof Error ? error.message : String(error) }))
-  if (result.exitCode !== 0) {
-    const message = outputTail(result.stdout, result.stderr).at(-1)?.slice(0, 160) || `結束碼 ${result.exitCode}`
-    await update($, updateInfo, value => value && ({ ...value, phase: 'failed', message }) as UpdateInfo)
-    $.ui.toast(`console-status 更新失敗：${message}`, { timeoutMs: 10_000 })
-    return `更新失敗：${message}\n可在終端機執行：claude plugin update console-status`
+  const failure = await installUpdate($, before?.latest ?? null).catch((error: unknown) => error instanceof Error ? error.message : String(error))
+  if (failure) {
+    await update($, updateInfo, value => value && ({ ...value, phase: 'failed', message: failure }) as UpdateInfo)
+    $.ui.toast(`console-status 更新失敗：${failure}`, { timeoutMs: 12_000 })
+    return `更新失敗：${failure}`
   }
   await update($, updateInfo, value => value && ({ ...value, phase: 'updated' }) as UpdateInfo)
   $.ui.toast(`console-status 已更新到 ${target}，正在重新載入外掛…`, { timeoutMs: 6000 })
+  const notReloaded = async (message: string) => {
+    try {
+      await update($, updateInfo, value => value && ({ ...value, phase: 'failed', message }) as UpdateInfo)
+      $.ui.toast(`console-status ${target} ${message}`, { timeoutMs: 12_000 })
+    } catch { /* unloaded meanwhile */ }
+  }
   // Out of the calling hook (a slash command's turn waits on it, and a run inside it is refused).
-  // The reload replaces this module, so its promise may never settle here; only a refusal is acted on.
+  // `--force`: the interactive reload otherwise holds when it would cost the prompt cache.
   $.clock.after(RELOAD_DELAY_MS, async () => {
-    try { await $.command.run({ command: 'reload-plugins' }) } catch {
-      try {
-        await update($, updateInfo, value => value && ({ ...value, phase: 'failed', message: '已安裝，請輸入 /reload-plugins 套用' }) as UpdateInfo)
-        $.ui.toast(`console-status ${target} 已安裝；請輸入 /reload-plugins 套用`, { timeoutMs: 10_000 })
-      } catch { /* unloaded meanwhile */ }
-    }
+    try { await $.command.run({ command: 'reload-plugins', args: '--force' }) } catch { await notReloaded('已安裝，請輸入 /reload-plugins 套用') }
   })
+  // A reload replaces this module and cancels its timers, so this fires only when none happened.
+  $.clock.after(RELOAD_WATCHDOG_MS, () => void notReloaded('已安裝但尚未重新載入：請輸入 /reload-plugins，或開新 session'))
   return `已更新到 ${target}，正在重新載入外掛；若沒有自動套用，請輸入 /reload-plugins。`
 }
 
@@ -1267,7 +1306,7 @@ export const register: Register = (on, options) => {
     ctx: '上下文：本主控台 session 還剩多少上下文。用掉一半以上建議換新主控台。',
     five_hour: '5 小時：Claude 帳號 5 小時滾動額度的剩餘量，到重置時間回滿。',
     seven_day: '本週：Claude 帳號每週額度的剩餘量。',
-    version: '版本：目前安裝的 console-status 與 GitHub main 上的最新版，每 6 小時與每次載入時檢查。「⬆ 更新」執行 claude plugin update console-status，完成後自動 /reload-plugins；也可輸入 /console update。',
+    version: '版本：目前安裝的 console-status 與 GitHub main 上的最新版，每 30 分鐘與每次載入時檢查。「⬆ 更新」從 marketplace 安裝新版（從本機 git 資料夾載入時改在該資料夾 git pull），完成後自動 /reload-plugins；也可輸入 /console update。',
     codex_quota: 'Codex：Codex 帳號額度的剩餘量，取自最近一次 Codex 工作紀錄（每 5 分鐘讀一次）；很久沒用 Codex 時數字可能是舊的。',
   }
   const C = {

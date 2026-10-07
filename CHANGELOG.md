@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2
+
+- **Update from a local folder.** When console-status is read from a local folder (a marketplace added from a directory, or `--plugin-dir`), `claude plugin update` only re-reads that folder, so `⬆ 更新` installed nothing and the pane stayed on `已安裝，重新載入中…`. The button now finds the folder (`claude plugin list --json`'s `readFromFolder`, or the loaded root outside the plugin cache) and runs `git pull --ff-only` there; a folder that is not a git clone, a pull that cannot fast-forward, or a branch still on the old version is shown in the pane. A marketplace update that installs nothing (`updateOutcome` other than `updated`) is reported instead of called installed.
+- **The reload is applied.** `/reload-plugins` runs with `--force`, so it is not held over the prompt cache, and if the plugin has not reloaded 20 seconds later the pane says to run `/reload-plugins` instead of waiting forever.
+- **Checks every 30 minutes** instead of every six hours.
+
 ## 0.8.1
 
 - **Command guard sees past wrappers.** A wrapper's own options were read as the command, so `sudo -u root rm -rf /srv`, `sudo -E …`, `nice -n 10 rm -rf src`, `timeout 60 rm -rf src` and `xargs -0 rm -rf` ran without asking. The guard now skips `sudo`, `doas`, `env`, `nice`, `timeout`, `stdbuf`, `xargs`, `nohup`, `time`, `exec` and `command` with their options (and `timeout`'s duration, and `--`), and matches them by name when given as a path (`/usr/bin/sudo`).
