@@ -73,6 +73,36 @@ test('mentions, PowerShell -Force, temp scratch and dry runs pass', () => {
   for (const command of ordinary) expect([command, dangerReason(command)]).toEqual([command, null])
 })
 
+test('wrapper options, piped targets, eval and -Recurse:$true do not hide a command', () => {
+  const dangerous: [string, RegExp][] = [
+    ['sudo -u root rm -rf /srv', /遞迴刪除 \/srv/],
+    ['sudo -E rm -rf /srv', /遞迴刪除 \/srv/],
+    ['/usr/bin/sudo -- rm -rf src', /遞迴刪除 src/],
+    ['nice -n 10 rm -rf src', /遞迴刪除 src/],
+    ['timeout 60 rm -rf src', /遞迴刪除 src/],
+    ['timeout -s KILL 5m git reset --hard', /reset --hard/],
+    ['env -i PATH=/bin rm -rf src', /遞迴刪除 src/],
+    ['find . -print0 | xargs -0 rm -rf', /管線/],
+    ['ls | xargs rm -rf', /管線/],
+    ['ls | xargs -I {} rm -rf {}', /管線/],
+    ['git branch | xargs -n1 git branch -D', /強制刪除分支/],
+    ['find . -type d -exec sudo rm -rf {} +', /find -exec/],
+    ['eval "rm -rf src"', /遞迴刪除 src/],
+    ['Invoke-Expression "rm -r C:\\proj"', /遞迴刪除/],
+    ['iex -Command "Remove-Item -Recurse C:\\proj"', /遞迴刪除/],
+    ['Remove-Item -Recurse:$true C:\\data', /遞迴刪除/],
+    ['sudo -u postgres psql -c "DROP TABLE users"', /資料表/],
+  ]
+  for (const [command, reason] of dangerous) expect([command, dangerReason(command)]).toEqual([command, expect.stringMatching(reason)])
+  const ordinary = [
+    'timeout 60 npm test', 'nice -n 10 make', 'sudo -u postgres psql -c "select 1"', 'sudo apt-get update',
+    'ls | xargs -n1 echo', 'git diff --name-only | xargs grep -l "drop table"', 'ls | xargs rm -f',
+    'eval "npm test"', 'eval "$(ssh-agent -s)"', 'iex "Get-Date"', 'Remove-Item -Recurse:$false notes',
+    'sudo rm -rf node_modules', 'rm -rf',
+  ]
+  for (const command of ordinary) expect([command, dangerReason(command)]).toEqual([command, null])
+})
+
 test('segments keep quoted separators together', () => {
   expect(segments('a && b; c | d\ne')).toEqual(['a', 'b', 'c', 'd', 'e'])
   expect(segments('echo "x; rm -rf /" && ls')).toEqual(['echo "x; rm -rf /"', 'ls'])
