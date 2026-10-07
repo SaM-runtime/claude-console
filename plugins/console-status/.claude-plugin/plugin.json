@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -102,7 +102,7 @@
     "cacheTtl": {
       "type": "string",
       "title": "Prompt cache TTL",
-      "description": "auto: 5m until an idle gap proves 1h (remembered). 5m or 1h: fixed.",
+      "description": "auto: the TTL the API reports in the transcript usage (5m until seen). 5m or 1h: fixed.",
       "default": "auto"
     },
     "cacheWritePrice": {

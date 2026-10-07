@@ -73,7 +73,7 @@ Marketplace 管理請參考官方 [plugin marketplace 文件](https://code.claud
 | `gitProbe` | `on`：每個專案的 Git 狀態（分支、未提交、未推送）以及透過 `gh` 讀取的 PR 與 CI 檢查；`git`：只讀本機 Git；`off`：都不讀（見 [Git、PR 與 CI](#gitpr-與-ci)） | `on` |
 | `commandGuard` | `ask`：無法復原的 shell 指令先問你（見[指令護欄](#指令護欄)）；`deny`：一律拒絕；`off`：關閉 | `ask` |
 | `cacheHint` | `on`：顯示主控台 prompt 快取倒數與重寫費用（見[快取與費用](#快取與費用)）；`off`：隱藏 | `on` |
-| `cacheTtl` | `auto`（先當 5 分鐘，閒置後仍讀到快取即改為 1 小時）、`5m` 或 `1h` | `auto` |
+| `cacheTtl` | `auto`（讀 session 記錄裡 API 回報的實際 TTL，讀到前先當 5 分鐘）、`5m` 或 `1h` | `auto` |
 | `cacheWritePrice` | 估算用的快取寫入單價（每百萬 tokens 美元）；空白使用模型牌價 | 空白 |
 | `projectMode` | `auto`：在已登錄專案內開啟的 session 會切到專案模式（見[流程管線與專案模式](#流程管線與專案模式)）；`off`：一律是多專案主控台 | `auto` |
 
@@ -275,9 +275,9 @@ Bash 或 PowerShell 要執行無法復原的指令時，會先用 Claude Code �
 
 ## 快取與費用
 
-主控台 session 的 prompt 快取從最後一次請求開始算，維持 5 分鐘（或 1 小時）；過期後下一則提示要以快取寫入價把整段 context 重寫一次。橫帶在快取有效時顯示 `快取 4m`（最後一分鐘轉琥珀色），過期後顯示 `快取已冷 $0.90`；過期前一分鐘會 toast 提醒，在冷快取上送出提示時也會提醒。面板的 Claude 區塊顯示同一行（含 context 大小），以及 `本次花費`（本 session 依 API 牌價估算的費用）。倒數從主控台 session 的下一則回應開始算，所以剛安裝或 `/reload-plugins` 後，面板會先顯示 `下一則回應後開始倒數`，在主控台送出一則提示後才開始。回合進行中（面板顯示 `回應中，結束後重新倒數`）或 context 少於 20k tokens 時，橫帶不顯示。
+主控台 session 的 prompt 快取從最後一次請求開始算，維持 5 分鐘（或 1 小時）；過期後下一則提示要以快取寫入價把整段 context 重寫一次。橫帶在快取有效時顯示 `快取 4m`（最後一分鐘改用秒數倒數並高亮，如 `快取 45s`），過期後顯示 `快取已冷 $0.90`；過期前一分鐘會 toast 提醒，在冷快取上送出提示時也會提醒。面板的 Claude 區塊顯示同一行（含 context 大小），以及 `本次花費`（本 session 依 API 牌價估算的費用）。剛安裝或 `/reload-plugins` 後，倒數會從 session 記錄裡最後一則回應接著算；讀不到記錄時，面板會先顯示 `下一則回應後開始倒數`，等下一則回應後才開始。回合進行中（面板顯示 `回應中，結束後重新倒數`）或 context 少於 20k tokens 時，橫帶不顯示。
 
-估算方式：最後一次請求的 context tokens × 模型 input 牌價 × 1.25（5 分鐘 TTL）或 × 2（1 小時）；使用 gateway 或議價時可設定 `cacheWritePrice`。`cacheTtl: auto` 先當作 5 分鐘，若閒置 5–60 分鐘後的請求仍從快取讀到大部分 context，就改為 1 小時並跨 session 記住。訂閱方案下這些是依 API 價格換算的參考值，不是實際扣款。
+估算方式：最後一次請求的 context tokens × 模型 input 牌價 × 1.25（5 分鐘 TTL）或 × 2（1 小時）；使用 gateway 或議價時可設定 `cacheWritePrice`。`cacheTtl: auto` 用的是 API 實際採用的 TTL：每則回應的 `usage.cache_creation` 會把快取寫入分成 `ephemeral_5m_input_tokens` 與 `ephemeral_1h_input_tokens`，Claude Code 把它記在 session 記錄裡，主控台每回合結束後讀取（面板標示 `1h・實際`）。還沒看到有寫入快取的回應前先當 5 分鐘（`5m・預設`）；若閒置 5–60 分鐘後的請求仍讀到大部分 context，則推測為 1 小時（`推測`）。結果會跨 session 記住。訂閱方案下這些是依 API 價格換算的參考值，不是實際扣款。
 
 ## Workflow
 

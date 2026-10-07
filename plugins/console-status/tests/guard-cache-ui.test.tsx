@@ -4,11 +4,11 @@ const OPTIONS = { options: { registryPath: 'D:/Fixtures/registry.md' } }
 const BAND = { plugin: 'console-status', component: 'AbovePrompt', surface: 'terminal', props: { bodyColumns: 160 } } as any
 const result = (stdout = '') => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
-function fixture(on: any, answer: string | null) {
+function fixture(on: any, answer: string | null, transcripts: Record<string, string> = {}) {
   const clock = mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:/Users/example', LOCALAPPDATA: 'D:/Local' })
   const data = { ran: [] as string[], asked: [] as string[], toasts: [] as string[], state: {} as Record<string, any> }
-  on('fs.read', (_: any, e: any) => ({ value: e.path.includes('registry') ? '## STATUS 卡位置\n| Alpha | `D:/Alpha/.console/STATUS.md` |' : e.path.includes('claude-sessions') ? '{"version":1,"roots":{}}' : '' }))
+  on('fs.read', (_: any, e: any) => ({ value: e.path.endsWith('.jsonl') ? Object.entries(transcripts).find(([path]) => e.path.endsWith(path))?.[1] ?? '' : e.path.includes('registry') ? '## STATUS 卡位置\n| Alpha | `D:/Alpha/.console/STATUS.md` |' : e.path.includes('claude-sessions') ? '{"version":1,"roots":{}}' : '' }))
   on('fs.list', () => ({ value: [] }))
   on('process.run', (_: any, e: any) => ({ value: result(e.argv[0] === 'claude' ? '[]' : '') }))
   on('session.usage', () => ({ value: null }))
@@ -92,12 +92,16 @@ test('the band counts the cache down, warns a minute before it goes cold and pri
   // While the turn runs the cache is being refreshed: no chip.
   expect(await band.find({ type: 'Text', text: /^快取/ })).toBeUndefined()
   await $.turn.complete({ turnId: 't', answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' } as any)
-  expect(data.state.cacheClock).toEqual({ at: clock.now(), tokens: 200_000, model: 'claude-opus-5-5', ttl: '5m' })
+  expect(data.state.cacheClock).toEqual({ at: clock.now(), tokens: 200_000, model: 'claude-opus-5-5', ttl: '5m', source: 'default' })
   await clock.advance(15_000)
   expect(await band.find({ type: 'Text', text: '快取 4m' })).toBeDefined()
   await clock.advance(4 * 60_000)
-  expect(data.toasts.some(t => /^主控台快取 <?1m 後過期：之後送出的提示會重寫約 200k tokens（約 \$1\.00）$/.test(t))).toBe(true)
-  await clock.advance(2 * 60_000)
+  expect(data.toasts.some(t => /^主控台快取 (?:1m|\d+s) 後過期：之後送出的提示會重寫約 200k tokens（約 \$1\.00）$/.test(t))).toBe(true)
+  // The last minute counts in seconds, highlighted.
+  expect(await band.find({ type: 'Text', text: '快取 45s', bold: true })).toBeDefined()
+  await clock.advance(5_000)
+  expect(await band.find({ type: 'Text', text: '快取 40s' })).toBeDefined()
+  await clock.advance(2 * 60_000 - 5_000)
   expect(await band.find({ type: 'Text', text: '快取已冷 $1.00' })).toBeDefined()
   await $.prompt.submit({ text: 'next question' } as any).catch(() => {})
   expect(data.toasts.some(t => /^主控台快取已過期 1m：這則提示會重寫約 200k tokens/.test(t))).toBe(true)
@@ -105,4 +109,45 @@ test('the band counts the cache down, warns a minute before it goes cold and pri
   const pane = await $.ui.mount(PANE)
   expect(await pane.find({ type: 'Text', text: /^已冷 1m　200k tokens・下則重寫約 \$1\.00$/ })).toBeDefined()
   await pane.unmount()
+})
+
+const transcriptRow = (type: string, at: string, extra: any = {}) => JSON.stringify({ type, isSidechain: false, timestamp: at, ...extra })
+const TRANSCRIPT = [
+  transcriptRow('user', '2030-01-05T11:58:00.000Z'),
+  transcriptRow('assistant', '2030-01-05T11:58:20.000Z', { message: { id: 'm1', model: 'claude-opus-5-5', usage: { input_tokens: 2, output_tokens: 998, cache_read_input_tokens: 150_000, cache_creation_input_tokens: 49_000, cache_creation: { ephemeral_1h_input_tokens: 49_000, ephemeral_5m_input_tokens: 0 } } } }),
+].join('\n')
+
+test('a reload starts the clock from the transcript and shows the TTL the API actually used', OPTIONS, async ($, on) => {
+  const { clock, store } = fixture(on, null, { 'C:/Users/example/.claude/projects/D--Console/console.jsonl': TRANSCRIPT })
+  on('command.register', () => ({ value: undefined }))
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'D:/Console', surface: 'terminal', isInteractive: true } as any)
+  await clock.settle()
+  expect(store.cacheTtl).toEqual({ ttl: '1h', source: 'usage' })
+  const pane = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
+    props: { title: 'Console', isFocused: true, bodyColumns: 90, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any)
+  // The request started at 11:58 on a one-hour TTL: 58 minutes left at 12:00.
+  expect(await pane.find({ type: 'Text', text: /^58m 後過期（1h・實際）/ })).toBeDefined()
+  await pane.unmount()
+})
+
+test('after a turn the Stop hook names the transcript, and its usage replaces a guessed TTL', OPTIONS, async ($, on) => {
+  const { data, clock, store } = fixture(on, null, { 'E:/t/s.jsonl': TRANSCRIPT })
+  on('command.register', () => ({ value: undefined }))
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
+  on('classic.Stop', () => ({}))
+  on('turn.step', async function* (_: any, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn',
+      usage: { model: 'claude-opus-5-5', input_tokens: 2_000, output_tokens: 3_000, cache_read_input_tokens: 150_000, cache_creation_input_tokens: 45_000 } }
+  })
+  await $.session.start({ cwd: 'D:/Console', surface: 'terminal', isInteractive: true } as any)
+  await clock.settle()
+  await step($, on, 150_000)
+  await $.turn.complete({ turnId: 't', answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' } as any)
+  expect(data.state.cacheClock.ttl).toBe('5m')
+  await ($ as any).classic.Stop({ hook_event_name: 'Stop', session_id: 's', transcript_path: 'E:/t/s.jsonl', cwd: 'D:/Console', stop_hook_active: false })
+  await clock.settle()
+  expect(data.state.cacheClock).toEqual({ at: clock.now(), tokens: 200_000, model: 'claude-opus-5-5', ttl: '1h', source: 'usage' })
+  expect(store.cacheTtl).toEqual({ ttl: '1h', source: 'usage' })
 })

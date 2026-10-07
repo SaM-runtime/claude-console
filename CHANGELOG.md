@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2
+
+- **The actual cache TTL.** With `cacheTtl: auto` the console reads the TTL the API used from the session transcript, where Claude Code records each response's `usage.cache_creation` split into `ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`, after every turn (a `classic.Stop` hook names the transcript; a transcript over 4 MiB is read by its tail). The pane labels the TTL `實際`, `設定`, `推測` or `預設`. Before this the TTL was 5 minutes until an idle gap proved one hour.
+- **A reload resumes the countdown.** After an install or `/reload-plugins` the clock starts from the transcript's last response instead of waiting for the next one.
+- **Seconds in the last minute.** The band and pane count the last minute in seconds (`快取 45s`), bold on an amber background, redrawn every second.
+
 ## 0.4.1
 
 - **Cache row before the first response.** The countdown starts from the console session's next response, so right after installing or reloading the plugin nothing showed and the feature looked missing. The pane's Claude frame now shows `快取　下一則回應後開始倒數` until then, and `回應中，結束後重新倒數` while a turn runs.
