@@ -1309,6 +1309,8 @@ export const register: Register = (on, options) => {
     const demo = await demoEnabled($)
     const stored = await read($, snapshot)
     const s = demo && !stored?.demo ? demoSnapshot(await $.clock.now()) : stored
+    // A pane left open across a reload into a light session gets no refresh, so say how to start one.
+    if (s === null && !consoleActive) return <Text color={C.dim}>這個 session 沒有啟動主控台；輸入 /console refresh 開啟。</Text>
     if (s === null) return <Text color={C.dim}>讀取各專案狀態中…</Text>
     const detail = await read($, isDetail)
     const selectedName = await read($, selected)

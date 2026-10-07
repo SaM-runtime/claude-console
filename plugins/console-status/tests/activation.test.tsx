@@ -92,3 +92,26 @@ test('activation always runs the console in every session', { options: { ...OPTI
   await clock.settle()
   expect(data.runs.length).toBeGreaterThan(0)
 })
+
+test('a pane left open across a reload into a light session says how to start the console', OPTIONS, async ($, on) => {
+  const { data, clock, store } = fixture(on)
+  const PANE = { plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'terminal', props: { title: '主控台', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any
+  // The pane was opened before light sessions existed, so this session is not in the active list.
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  await clock.settle()
+  store.consoleSessions = []
+  data.runs = []
+  await $.session.start(START)
+  await clock.settle()
+  expect(data.runs).toEqual([])
+  const pane = await $.ui.mount(PANE)
+  expect(await pane.find({ type: 'Text', text: /讀取各專案狀態中/ })).toBeUndefined()
+  expect(await pane.find({ type: 'Text', text: /\/console refresh/ })).toBeDefined()
+
+  // /console refresh starts the console and the pane fills.
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  await clock.settle()
+  expect(data.runs.length).toBeGreaterThan(0)
+  expect(await pane.find({ type: 'Text', text: /沒有啟動主控台/ })).toBeUndefined()
+  await pane.unmount()
+})

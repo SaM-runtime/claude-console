@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+
+- **An open pane no longer waits forever in a light session.** A pane left open across an upgrade and `/reload-plugins` (opened before 0.6.0, or in a session not remembered as a console session) came back in a light session, where nothing refreshes, and showed `讀取各專案狀態中…` for good. It now says the console is not running in this session and that `/console refresh` starts it.
+
 ## 0.7.0
 
 - **Usage meters fill from the left.** The Claude and Codex quota bars were drawn as a battery with a coloured cap on the right, so a nearly empty one (3%) showed only a red cell at the far right and the cap looked like a stray block. Each meter is now a 12-cell bar on a dark track that fills from the left in eighths, with no cap; anything above 0% shows at least a sliver, green, then amber when low, red when nearly out.
