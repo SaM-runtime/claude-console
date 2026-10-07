@@ -9,7 +9,7 @@ test('band stays one line at 40, 70, 120 and compact widths with the pane contro
   on('ui.close', () => ({ value: undefined }))
   on('command.run', () => ({ text: '' }))
   await $.command.run({ command: 'console', args: 'demo' } as any)
-  const leaves = (node: any, type: string): any[] => typeof node === 'string' ? [] : [...(node?.type === type ? [node] : []), ...(node?.children ?? []).flatMap((child: any) => leaves(child, type))]
+  const leaves = (node: any, type: string): any[] => typeof node === 'string' ? [] : node?.type === type ? [node] : (node?.children ?? []).flatMap((child: any) => leaves(child, type))
   const text = (node: any): string => typeof node === 'string' ? node : (node?.children ?? []).map(text).join('')
   for (const paneOpen of [true, false]) {
     if (!paneOpen) await $.command.run({ command: 'console', args: '' } as any)

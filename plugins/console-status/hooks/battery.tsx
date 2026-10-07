@@ -7,13 +7,29 @@ const STEP = 40
 const DURATION = 400
 const bounded = (n: number) => Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : 0
 
-/** A fixed-width value beside the battery never straddles the fill boundary. */
+/** Cells in the meter: 12 cells of eighths, so 1% still shows as a sliver on the left. */
+export const METER = 12
+const EIGHTHS = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉']
+const TRACK = '#2A313C'
+
+/**
+ * A remaining-amount meter that fills from the left on a dark track, with the value beside it.
+ * Anything above zero shows at least a sliver, so a nearly empty meter still reads as "low", not "blank".
+ */
+export function meterCells(percent: number, width = METER): { full: number; part: string; empty: number } {
+  const value = bounded(percent)
+  const eighths = value > 0 ? Math.max(1, Math.round((value / 100) * width * 8)) : 0
+  const full = Math.min(width, Math.floor(eighths / 8))
+  const part = full < width ? EIGHTHS[eighths % 8]! : ''
+  return { full, part, empty: width - full - (part ? 1 : 0) }
+}
+
 export function batteryBody(percent: number, tone: string, elements: any) {
   const { Box, Text } = elements
   const value = bounded(percent)
-  const filled = Math.round(value / 10)
+  const m = meterCells(value)
   return <Box gap={1}>
-    <Text><Text backgroundColor={tone}>{' '.repeat(filled)}</Text><Text backgroundColor="#2A313C">{' '.repeat(10 - filled)}</Text><Text backgroundColor={tone}> </Text></Text>
+    <Text><Text color={tone} backgroundColor={TRACK}>{'█'.repeat(m.full)}{m.part}</Text><Text backgroundColor={TRACK}>{' '.repeat(m.empty)}</Text></Text>
     <Box width={4} justifyContent="flex-end"><Text bold color={tone}>{`${value}%`}</Text></Box>
   </Box>
 }

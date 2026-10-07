@@ -116,7 +116,7 @@ test('continue requires a fresh second press, dispatches once, and immediately d
   const args = data.processCalls[0].argv
   expect(args.includes('--resume-last')).toBe(true)
   expect(args[args.length - 1].includes('結束時更新 CARD（含關卡欄）')).toBe(true)
-  expect(await ui.find({ type: 'Text', text: /^ 執行中 $/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ ▶ 執行中 $/ })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: /^派工鎖定：/ }))?.text).toBe('派工鎖定：codex 工作尚未結束')
   expect(data.state.feed.some((item: any) => item.text.includes('codex 已接受'))).toBe(true)
   await ui.unmount()
@@ -136,7 +136,7 @@ test('a refresh started before dispatch cannot erase the accepted running job', 
   expect(data.processCalls.length).toBe(1)
   await clock.advance(1000)
   await refreshing
-  expect(await ui.find({ type: 'Text', text: /^ 執行中 $/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ ▶ 執行中 $/ })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: /^派工鎖定：/ }))?.text).toBe('派工鎖定：codex 工作尚未結束')
   expect(data.state.snapshot.projects[0].tasks[0].id).toBe('task-race')
   await ui.unmount()
@@ -173,7 +173,7 @@ test('release review submits context to Claude and cannot start a release proces
   on('turn.complete', (_, e) => ({ text: e.answer }))
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   const ui = await $.ui.mount(PANE())
-  expect(await ui.find({ type: 'Text', text: /^ 待審核 $/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ ◆ 待審核 $/ })).toBeDefined()
   expect((await ui.find({ key: 'next-action' }))?.text).toBe('⚑ 最終審核')
   await ui.press({ key: 'next-action' })
   expect(submitted.text.includes('可上線／不可上線＋理由＋要使用者確認的一句')).toBe(true)
