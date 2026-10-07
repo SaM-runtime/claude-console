@@ -21,7 +21,8 @@ import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
 import { gitBadge, gitLine, gitProbeMode, gitStatusArgs, parseGitStatus, parsePrView, prLine, prViewArgs } from './git'
 import type { PrInfo, CacheClock } from '../types'
-import { CACHE_WARN_MS, cacheChip, cacheTtlOption, cacheView, cacheWarning, leftText, learnTtl, priceOverride, tokensText, usd } from './cache'
+import { CACHE_WARN_MS, cacheChip, cacheTtlOption, cacheView, cacheWarning, leftText, learnTtl, priceOverride, tokensText, transcriptCache, transcriptPathFor, ttlLabel, usd } from './cache'
+import type { TtlSource } from './cache'
 import type { CacheTtl } from './cache'
 import { commandPreview, dangerReason, guardMode } from './guard'
 
@@ -76,6 +77,10 @@ const CACHE_TTL_KEY = 'cacheTtl'
 /** The cache clock (its `at`) the expiry warning already fired for. */
 let cacheWarnedFor = -1
 let cacheTimer: { cancel(): void } | undefined
+/** When the countdown last redrew: every 15 s, every second in the last minute. */
+let cacheDrawnAt = 0
+/** This session's transcript, as a classic hook names it (or as Claude Code lays it out, until one does). */
+let transcriptPath: string | null = null
 const actionLocks = new Set<string>()
 const earlyReviewStarts = new Map<string, string>()
 let selectionClaim: string | null = null
@@ -634,16 +639,52 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
   }
 }
 
-/** The TTL in force: the option when set, else what an idle gap proved (remembered across sessions), else 5m. */
-async function cacheTtlFor($: any, options: PluginOptions, learned: CacheTtl | null): Promise<CacheTtl> {
+/** The TTL in force and where it came from: the option, else what usage showed or an idle gap proved (remembered across sessions), else 5m. */
+async function cacheTtlFor($: any, options: PluginOptions, learned: CacheTtl | null): Promise<{ ttl: CacheTtl; source: TtlSource }> {
   const option = cacheTtlOption((options as any).cacheTtl)
-  if (option !== 'auto') return option
+  if (option !== 'auto') return { ttl: option, source: 'option' }
+  const stored: any = await Promise.resolve().then(() => $.store.get(CACHE_TTL_KEY)).catch(() => null)
+  // What usage reported outranks a guess from an idle gap.
+  if (stored && typeof stored === 'object' && stored.source === 'usage' && (stored.ttl === '5m' || stored.ttl === '1h')) return { ttl: stored.ttl, source: 'usage' }
   if (learned) {
     await Promise.resolve().then(() => $.store.set(CACHE_TTL_KEY, learned)).catch(() => {})
-    return learned
+    return { ttl: learned, source: 'learned' }
   }
-  const stored = await Promise.resolve().then(() => $.store.get(CACHE_TTL_KEY)).catch(() => null)
-  return stored === '1h' ? '1h' : '5m'
+  return stored === '1h' || stored === '5m' ? { ttl: stored, source: 'learned' } : { ttl: '5m', source: 'default' }
+}
+
+/** The transcript's tail: whole when it fits a read, else its last lines through the shell. */
+async function transcriptTail($: any, path: string): Promise<string | null> {
+  const text = await Promise.resolve().then(() => $.fs.read(path)).catch(() => null)
+  if (typeof text === 'string') return text
+  const stat: any = await Promise.resolve().then(() => $.fs.stat(path)).catch(() => null)
+  if (!stat) return null
+  const args = isWindowsOs(await $.env.get('OS'))
+    ? ['powershell', '-NoProfile', '-Command', `Get-Content -LiteralPath '${path.replace(/'/g, "''")}' -Tail 400 -Encoding UTF8`]
+    : ['tail', '-n', '400', path]
+  const r: any = await $.process.run(args, { timeoutMs: 10_000 }).catch(() => null)
+  return r && r.exitCode === 0 ? String(r.stdout ?? '') : null
+}
+
+/**
+ * Reads the TTL actually in force from the transcript's usage (`cache_creation` by TTL) and remembers it;
+ * with `seed`, a console that has no clock yet (just installed or reloaded) starts from the last response.
+ */
+async function syncCacheFromTranscript($: any, options: PluginOptions, seed: boolean) {
+  if (!transcriptPath || demoActive) return
+  const text = await transcriptTail($, transcriptPath)
+  const found = text ? transcriptCache(text) : null
+  if (!found) return
+  const auto = cacheTtlOption((options as any).cacheTtl) === 'auto'
+  if (found.ttl && auto) await Promise.resolve().then(() => $.store.set(CACHE_TTL_KEY, { ttl: found.ttl, source: 'usage' })).catch(() => {})
+  const clock = await read($, cacheClock)
+  if (!clock) {
+    if (!seed || await read($, isTurnRunning)) return
+    const { ttl, source } = found.ttl && auto ? { ttl: found.ttl, source: 'usage' as const } : await cacheTtlFor($, options, null)
+    await update($, cacheClock, value => value ?? ({ at: found.at, tokens: found.tokens, model: found.model, ttl, source }) as CacheClock)
+  } else if (found.ttl && auto && (clock.ttl !== found.ttl || clock.source !== 'usage')) {
+    await update($, cacheClock, value => value ? ({ ...value, ttl: found.ttl!, source: 'usage' }) as CacheClock : value)
+  }
 }
 
 /** Redraws the countdown and warns once, shortly before the cache goes cold. */
@@ -653,8 +694,12 @@ async function cacheTickOnce($: any, options: PluginOptions) {
   const now = await $.clock.now()
   const view = cacheView(clock, now, await read($, isTurnRunning), priceOverride((options as any).cacheWritePrice))
   if (!view) return
-  // Keep redrawing while warm and for an hour after, then stop touching state.
-  if (view.coldForMs < 60 * 60_000) await update($, cacheTick, v => v + 1)
+  // Keep redrawing while warm and for an hour after, then stop touching state; seconds in the last minute.
+  const lastMinute = view.warm && view.leftMs <= CACHE_WARN_MS + 1000
+  if (view.coldForMs < 60 * 60_000 && (lastMinute || now - cacheDrawnAt >= 15_000 || now < cacheDrawnAt)) {
+    cacheDrawnAt = now
+    await update($, cacheTick, v => v + 1)
+  }
   if (view.warm && view.leftMs <= CACHE_WARN_MS && cacheWarnedFor !== clock.at && cacheMode(options) !== 'off') {
     cacheWarnedFor = clock.at
     $.ui.toast(cacheWarning(clock, view), { timeoutMs: 10_000 })
@@ -696,7 +741,16 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；band 橫帶；demo 示範' })
     refreshTimer = $.clock.every(TICK_MS, () => void refresh($, options))
     cacheTimer?.cancel()
-    cacheTimer = $.clock.every(15_000, () => void cacheTickOnce($, options).catch(() => {}))
+    cacheTimer = $.clock.every(1000, () => void cacheTickOnce($, options).catch(() => {}))
+    // Until a classic hook names the transcript, find it where Claude Code keeps it.
+    transcriptPath = null
+    {
+      const configDir = await $.env.get('CLAUDE_CONFIG_DIR') || `${await $.env.get('HOME') || await $.env.get('USERPROFILE') || ''}/.claude`
+      const sessionId = await $.session.id().catch(() => null)
+      const cwd = typeof e.cwd === 'string' ? e.cwd : null
+      if (sessionId && cwd && !configDir.startsWith('/.claude')) transcriptPath = transcriptPathFor(configDir, cwd, sessionId)
+    }
+    void syncCacheFromTranscript($, options, true).catch(() => {})
     void refresh($, options, true)
     return next(e)
   })
@@ -769,9 +823,17 @@ export const register: Register = (on, options) => {
     if (u) {
       const tokens = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens + u.output_tokens
       const prev = await read($, cacheClock)
-      const ttl = await cacheTtlFor($, options, learnTtl(prev, startedAt, u.model, u.cache_read_input_tokens))
-      await update($, cacheClock, () => ({ at: startedAt, tokens, model: u.model, ttl }) as CacheClock)
+      const { ttl, source } = await cacheTtlFor($, options, learnTtl(prev, startedAt, u.model, u.cache_read_input_tokens))
+      await update($, cacheClock, () => ({ at: startedAt, tokens, model: u.model, ttl, source }) as CacheClock)
     }
+    return result
+  })
+
+  // The main thread's turn ended: its transcript now records the TTL the API actually used.
+  on('classic.Stop', async ($, e, next) => {
+    if (typeof (e as any).transcript_path === 'string' && (e as any).transcript_path) transcriptPath = (e as any).transcript_path
+    const result = await next(e)
+    void syncCacheFromTranscript($, options, false).catch(() => {})
     return result
   })
 
@@ -943,7 +1005,7 @@ export const register: Register = (on, options) => {
     action_verify: '執行 CARD 驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。新的或被修改過的指令會先完整顯示，10 秒內再按一次才執行。只應填入本機驗證，不可填正式環境操作。',
     action_sync: '直接請所選執行者將最近結果同步回 STATUS CARD 與歷程，使用派工模型設定與該執行者額度。',
     git: 'Git：✕衝突 合併衝突　CI✕ PR 的檢查失敗　●n 未提交／未追蹤檔案　↑n 未推送　↓n 落後上游　CI… 檢查進行中　✓ 乾淨。git 每次更新讀取（不鎖 index），PR 與 CI 透過 gh 每 5 分鐘讀取，CI 進行中時每分鐘。gitProbe 選項可改為 git 或 off。',
-    cache: '主控台的 prompt 快取：最後一次請求後 5 分鐘（或 1 小時）內送出會讀快取；過期後下一則提示要把整段 context 重寫進快取，費用約為 input 價格的 1.25 倍（1 小時 TTL 為 2 倍）。TTL 由 cacheTtl 設定，auto 會從實際讀取結果學習。',
+    cache: '主控台的 prompt 快取：最後一次請求後 5 分鐘（或 1 小時）內送出會讀快取；過期後下一則提示要把整段 context 重寫進快取，費用約為 input 價格的 1.25 倍（1 小時 TTL 為 2 倍）。TTL 由 cacheTtl 設定，auto 讀取 session 記錄裡 API 回報的實際 TTL（cache_creation 的 5m／1h 分項）。',
     pipeline: '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線。● 完成　◉ 執行中　◆ 等待（主控台、使用者或同步）　✕ 驗證失敗　○ 未到。由 CARD、執行者工作與最近一次驗證推得。',
     action_continue: '6 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
@@ -1013,7 +1075,8 @@ export const register: Register = (on, options) => {
         <Box gap={1} flexShrink={0} height={1}>
           {band.items.map(item => <Box key={'band-' + item.id} width={item.width} flexShrink={0} height={1} overflow="hidden">
             <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' || item.id === 'ci' ? C.red : item.id === 'cache' ? (chip?.tone === 'red' ? C.red : chip?.tone === 'amber' ? C.amber : C.green) : FG[item.id as State] ?? C.text}
-              backgroundColor={item.id === 'demo' ? C.bar : undefined}>{item.text}</Text>
+              bold={item.id === 'cache' && chip?.tone === 'amber'}
+              backgroundColor={item.id === 'demo' ? C.bar : item.id === 'cache' && chip?.tone === 'amber' ? C.amberBg : undefined}>{item.text}</Text>
           </Box>)}
         </Box>
         <Box flexGrow={1} minWidth={band.items.length ? 1 : 0} />
@@ -1560,8 +1623,9 @@ export const register: Register = (on, options) => {
               {paneCache && (
                 <Box key="cache" gap={1} hover={{ scope: 'help-cache' }}>
                   <Box width={9} flexShrink={0}><Text color={C.dim}>快取</Text></Box>
-                  <Text color={paneCache.view.warm ? (paneCache.view.leftMs <= CACHE_WARN_MS ? C.amber : C.green) : C.red} wrap="truncate-end">
-                    {paneCache.view.warm ? `${leftText(paneCache.view.leftMs)} 後過期（${paneCache.view.ttl}）` : `已冷 ${leftText(paneCache.view.coldForMs)}`}
+                  <Text color={paneCache.view.warm ? (paneCache.view.leftMs <= CACHE_WARN_MS ? C.amber : C.green) : C.red} wrap="truncate-end"
+                    bold={paneCache.view.warm && paneCache.view.leftMs <= CACHE_WARN_MS} backgroundColor={paneCache.view.warm && paneCache.view.leftMs <= CACHE_WARN_MS ? C.amberBg : undefined}>
+                    {paneCache.view.warm ? `${leftText(paneCache.view.leftMs)} 後過期（${ttlLabel(paneCache.view.ttl, paneCache.clock.source)}）` : `已冷 ${leftText(paneCache.view.coldForMs)}`}
                     <Text color={C.dim}>{`　${tokensText(paneCache.clock.tokens)} tokens${paneCache.view.cost === null ? '' : `・${paneCache.view.warm ? '冷了' : '下則'}重寫約 ${usd(paneCache.view.cost)}`}`}</Text>
                   </Text>
                 </Box>

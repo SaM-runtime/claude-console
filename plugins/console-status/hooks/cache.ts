@@ -65,9 +65,9 @@ export function tokensText(tokens: number): string {
   return tokens >= 1_000_000 ? `${(tokens / 1_000_000).toFixed(1)}M` : `${Math.round(tokens / 1000)}k`
 }
 
-/** `4m`, `<1m`, `1h`. */
+/** `4m`, `45s` in the last minute, `1h`. */
 export function leftText(ms: number): string {
-  if (ms < 60_000) return '<1m'
+  if (ms < 60_000) return `${Math.max(1, Math.ceil(ms / 1000))}s`
   const minutes = Math.floor(ms / 60_000)
   return minutes >= 60 ? `${Math.floor(minutes / 60)}h` : `${minutes}m`
 }
@@ -95,4 +95,59 @@ export function cacheWarning(clock: CacheClock, view: CacheView): string {
   return view.warm
     ? `主控台快取 ${leftText(view.leftMs)} 後過期：之後送出的提示會重寫約 ${tokensText(clock.tokens)} tokens${cost}`
     : `主控台快取已過期 ${leftText(view.coldForMs)}：這則提示會重寫約 ${tokensText(clock.tokens)} tokens${cost}`
+}
+
+export type TtlSource = 'usage' | 'learned' | 'option' | 'default'
+
+/** The last main-thread response a Claude Code transcript (JSONL) records, with the TTL its cache writes used. */
+export type TranscriptCache = { at: number; tokens: number; model: string; ttl: CacheTtl | null }
+
+/**
+ * Reads a transcript's tail: the newest main-thread response with usage, timed from the entry before it
+ * (the request's start), and the TTL of the newest response that wrote to the cache. Claude Code records
+ * the API's `usage.cache_creation` split (`ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`),
+ * which is the TTL actually in force. Null when no response is there.
+ */
+export function transcriptCache(text: string): TranscriptCache | null {
+  const rows: any[] = []
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith('{')) continue
+    try { rows.push(JSON.parse(line)) } catch { /* a cut first line of a tail */ }
+  }
+  const main = rows.filter(r => r && !r.isSidechain && typeof r.timestamp === 'string' && (r.type === 'assistant' || r.type === 'user'))
+  let last = -1
+  for (let i = main.length - 1; i >= 0; i--) if (main[i].type === 'assistant' && main[i].message?.usage) { last = i; break }
+  if (last < 0) return null
+  const msg = main[last].message
+  const u = msg.usage
+  const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : 0
+  // A response is split into one row per block, all under one message id: start before the first.
+  let first = last
+  while (first > 0 && main[first - 1].type === 'assistant' && main[first - 1].message?.id === msg.id) first--
+  const startRow = first > 0 ? main[first - 1] : main[first]
+  const at = Date.parse(startRow.timestamp)
+  if (!Number.isFinite(at)) return null
+  let ttl: CacheTtl | null = null
+  for (let i = last; i >= 0 && !ttl; i--) {
+    const c = main[i].type === 'assistant' ? main[i].message?.usage?.cache_creation : null
+    if (!c) continue
+    if (num(c.ephemeral_1h_input_tokens) > 0) ttl = '1h'
+    else if (num(c.ephemeral_5m_input_tokens) > 0) ttl = '5m'
+  }
+  return {
+    at,
+    tokens: num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens) + num(u.output_tokens),
+    model: String(msg.model ?? ''),
+    ttl,
+  }
+}
+
+/** Where Claude Code keeps a session's transcript when no hook has named it: `<config>/projects/<cwd, non-alphanumerics as ->/<id>.jsonl`. */
+export function transcriptPathFor(configDir: string, cwd: string, sessionId: string): string {
+  return `${configDir.replace(/[\\/]+$/, '')}/projects/${cwd.replace(/[^a-zA-Z0-9]/g, '-')}/${sessionId}.jsonl`
+}
+
+/** The TTL label in the pane: `1h・實際` when read from usage, `5m・預設` before anything is known. */
+export function ttlLabel(ttl: CacheTtl, source: TtlSource | undefined): string {
+  return `${ttl}・${source === 'usage' ? '實際' : source === 'option' ? '設定' : source === 'learned' ? '推測' : '預設'}`
 }
