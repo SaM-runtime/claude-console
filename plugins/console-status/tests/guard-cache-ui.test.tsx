@@ -8,7 +8,7 @@ function fixture(on: any, answer: string | null, transcripts: Record<string, str
   const clock = mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:/Users/example', LOCALAPPDATA: 'D:/Local' })
   const data = { ran: [] as string[], asked: [] as string[], toasts: [] as string[], state: {} as Record<string, any> }
-  on('fs.read', (_: any, e: any) => ({ value: e.path.endsWith('.jsonl') ? Object.entries(transcripts).find(([path]) => e.path.endsWith(path))?.[1] ?? '' : e.path.includes('registry') ? '## STATUS 卡位置\n| Alpha | `D:/Alpha/.console/STATUS.md` |' : e.path.includes('claude-sessions') ? '{"version":1,"roots":{}}' : '' }))
+  on('fs.read', (_: any, e: any) => ({ value: e.path.endsWith('.jsonl') ? Object.entries(transcripts).find(([path]) => e.path.replace(/\\/g, '/').endsWith(path))?.[1] ?? '' : e.path.includes('registry') ? '## STATUS 卡位置\n| Alpha | `D:/Alpha/.console/STATUS.md` |' : e.path.includes('claude-sessions') ? '{"version":1,"roots":{}}' : '' }))
   on('fs.list', () => ({ value: [] }))
   on('process.run', (_: any, e: any) => ({ value: result(e.argv[0] === 'claude' ? '[]' : '') }))
   on('session.usage', () => ({ value: null }))
