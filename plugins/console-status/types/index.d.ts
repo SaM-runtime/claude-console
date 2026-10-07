@@ -102,6 +102,7 @@ declare module 'claude-code' {
       isRefreshing: boolean
       hovered: string | null
       menuFor: string | null
+      dispatchPicker: 'executor' | 'model' | 'effort' | null
       selected: string | null
       cursor: number
       feed: FeedEvent[]

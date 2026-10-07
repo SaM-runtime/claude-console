@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.0
+
+- **Executor, model and effort are picked from a list.** Each press on a control under the pane title used to move to the next value, so reaching `max` from `low` meant pressing through every level and writing each one to `dispatch.json` on the way, and the model never came back to `預設`. A press now spreads the choices out on the next line (`模型  [預設]  fable  opus  sonnet  ✕`), with the current value in brackets. Pressing one saves it and closes the line; the current value, `✕` or the label again closes it without writing. `預設` hands the choice back to the executor. Efforts follow the chosen model. A model typed with `/console model <name>` is listed while it is chosen. Without a readable Codex model cache, the line says to use `/console model <name>` instead of showing a toast.
+- **Hover help** for the project executor row says a press picks the value; it described cycling, which the row no longer does.
+
 ## 0.8.2
 
 - **Update from a local folder.** When console-status is read from a local folder (a marketplace added from a directory, or `--plugin-dir`), `claude plugin update` only re-reads that folder, so `⬆ 更新` installed nothing and the pane stayed on `已安裝，重新載入中…`. The button now finds the folder (`claude plugin list --json`'s `readFromFolder`, or the loaded root outside the plugin cache) and runs `git pull --ff-only` there; a folder that is not a git clone, a pull that cannot fast-forward, or a branch still on the old version is shown in the pane. A marketplace update that installs nothing (`updateOutcome` other than `updated`) is reported instead of called installed.

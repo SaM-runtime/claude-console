@@ -113,7 +113,7 @@ In the expanded project card and the right-click menu, the `執行者` row offer
 
 A project may hold jobs from both executors (after an executor change or a Claude fallback). Job listing merges both executors for every project; any running or queued job from either executor marks the project RUNNING and blocks a second dispatch.
 
-The executor, model, and effort controls beneath the panel title are plain Buttons. Each press cycles the available values, writes the file, and shows a toast. The same Buttons render on mobile without Client support. Settings apply to the next dispatch; each running task keeps its requested values.
+The executor, model, and effort controls beneath the panel title are plain Buttons. A press spreads that setting's choices out on the line below, with the current one in brackets and `預設` for the executor's own default; pressing a choice writes the file and shows a toast, and pressing the current one, `✕` or the label again closes the line. Efforts follow the chosen model. Without a readable Codex model cache the model line offers only `預設` and the current model, and says to use `/console model <name>`. The same Buttons render on mobile without Client support. Settings apply to the next dispatch; each running task keeps its requested values.
 
 Commands show or set the same values:
 

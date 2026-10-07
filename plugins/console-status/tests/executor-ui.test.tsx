@@ -66,7 +66,10 @@ test('executor control defaults to Claude, persists switches, resets settings an
   await $.command.run({ command: 'console', args: 'model custom-claude-model' } as any)
   await $.command.run({ command: 'console', args: 'effort max' } as any)
   await ui.press({ key: 'dispatch-executor' })
+  expect(JSON.parse(files[SETTINGS]).executor).toBe('claude')
+  await ui.press({ key: 'dispatch-executor-codex' })
   expect(JSON.parse(files[SETTINGS])).toEqual({ executor: 'codex', model: '', effort: '' })
+  expect(await ui.find({ key: 'dispatch-picker' })).toBeUndefined()
   expect((await ui.find({ key: 'dispatch-executor' }))?.text).toBe('codex')
   expect(await ui.find({ key: 'q-codex' })).toBeUndefined()
   quota = '{"rate_limits":{"primary":{"used_percent":20,"window_minutes":300}}}'
@@ -74,6 +77,7 @@ test('executor control defaults to Claude, persists switches, resets settings an
   expect(await ui.find({ key: 'q-codex' })).toBeDefined()
   expect(calls.some(call => call.argv.some((arg: string) => /codex-preflight\.(ps1|sh)$/.test(arg)))).toBe(true)
   await ui.press({ key: 'dispatch-model' })
+  await ui.press({ key: 'dispatch-model-fiction-alpha' })
   expect(JSON.parse(files[SETTINGS]).model).toBe('fiction-alpha')
   await $.command.run({ command: 'console', args: 'executor claude' } as any)
   expect(JSON.parse(files[SETTINGS])).toEqual({ executor: 'claude', model: '', effort: '' })
