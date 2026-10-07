@@ -52,7 +52,8 @@ export type ReviewRequest = { text: string; projectName: string; at: number; tur
 /** This plugin's installed version, the marketplace's latest, and an update in progress. */
 export type UpdateInfo = { current: string | null; latest: string | null; checkedAt: number; error?: string; phase: 'idle' | 'checking' | 'updating' | 'updated' | 'failed'; message?: string }
 
-export type Blocked = { name: string; why: string }
+/** A session waiting on a person; `project` is the registered project it runs in (`主控台` for the console's folder). */
+export type Blocked = { name: string; why: string; project?: string }
 
 /** Where a 同步 STATUS dispatch is: sending, running, written back, finished without a CARD change, or failed. */
 export type SyncStage = 'dispatch' | 'running' | 'done' | 'unchanged' | 'dispatch-failed' | 'run-failed'

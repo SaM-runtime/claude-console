@@ -10,7 +10,7 @@ const NONE = new Set(['', '無', '沒有', '-', '未知'])
 
 export type RegistryRow = { name: string; statusPath: string; executor?: ProjectExecutor }
 export type Job = { id: string; kind?: 'sync' | 'continue'; fallbackFrom?: 'codex'; fallbackReason?: string; unmanagedSessionId?: string; warning?: string; executor?: 'claude' | 'codex'; nativeId?: string; sessionId?: string; jobClass?: string; status?: string; summary?: string; createdAt?: string; updatedAt?: string; completedAt?: string; startedAt?: string; phase?: string; logFile?: string; request?: { prompt?: string; effort?: string; model?: string } }
-export type Agent = { name?: string; kind?: string; status?: string; state?: string; waitingFor?: string; sessionId?: string; cwd?: string }
+export type Agent = { name?: string; kind?: string; status?: string; state?: string; waitingFor?: string; sessionId?: string; cwd?: string; pid?: number | null; startedAt?: number | string }
 
 /**
  * Rows of the "STATUS 卡位置" table in projects-scope.md; `~` expanded to `home`.
@@ -523,16 +523,57 @@ export function next(s: Snapshot): string | null {
 
 const normPath = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 
-/** Sessions that belong to this console (its folder or a registered project), not this one, waiting on a person. */
-export function relevantBlocked(agents: Agent[], selfId: string | null, roots: string[], home: string): Blocked[] {
-  const allowed = roots.map(normPath)
+/** Lines of the waiting-sessions list in the pane; the rest is summed up as `…另 N 條`. */
+export const BLOCKED_MAX = 3
+
+/**
+ * A background session the daemon retired stays in `claude agents` with its last state, but with
+ * neither `pid` nor `status`. Nobody can answer it, so it is not a session waiting on a person.
+ */
+const retiredAgent = (a: Agent) => a.kind === 'background' && (a.pid === undefined || a.pid === null) && !a.status?.trim()
+
+/** What the session is actually waiting for: a permission prompt, a question it stopped on, or other input. */
+function blockedWhy(a: Agent): string {
+  if (a.status === 'waiting') return '等待批准'
+  if (a.status === 'idle' && a.state === 'blocked') return '停在提問'
+  return '等待輸入'
+}
+
+const startedMs = (a: Agent) => typeof a.startedAt === 'number' ? a.startedAt : Date.parse(a.startedAt ?? '') || 0
+
+/**
+ * Sessions that belong to this console (its folder or a registered project), not this one, waiting on a person:
+ * retired ones left out, the newest per project only, newest first, each named with its project.
+ * `roots` may be bare paths (no project name) or `{ root, name }`.
+ */
+export function relevantBlocked(agents: Agent[], selfId: string | null, roots: (string | { root: string; name: string })[], home: string): Blocked[] {
+  const allowed = roots.map(r => typeof r === 'string' ? { root: normPath(r), name: '' } : { root: normPath(r.root), name: r.name })
   const consoleDir = normPath(home)
-  const mine = agents.filter(a => {
-    if (a.sessionId && a.sessionId === selfId) return false
+  const projectOf = (a: Agent): { key: string; name: string } | null => {
     const cwd = normPath(a.cwd ?? '')
-    return cwd === consoleDir || allowed.some(r => cwd === r || cwd.startsWith(r + '/'))
-  })
-  return blockedSessions(mine).map(b => ({ ...b, why: b.why === '等批准' ? '等待批准' : '等待輸入' }))
+    const hit = allowed.filter(r => cwd === r.root || cwd.startsWith(r.root + '/')).sort((x, y) => y.root.length - x.root.length)[0]
+    if (hit) return { key: hit.root, name: hit.name }
+    return cwd === consoleDir ? { key: consoleDir, name: '主控台' } : null
+  }
+  // The same sessions blockedSessions lists: with some identity, blocked or waiting.
+  const listed = agents.filter(a => !(a.sessionId && a.sessionId === selfId) && !retiredAgent(a) && projectOf(a) !== null
+    && Boolean(a.name?.trim() || a.sessionId?.trim() || a.cwd?.trim() || a.waitingFor?.trim())
+    && (a.state === 'blocked' || a.status === 'waiting'))
+  const newest = new Map<string, { agent: Agent; name: string }>()
+  for (const a of listed) {
+    const project = projectOf(a)!
+    const seen = newest.get(project.key)
+    if (!seen || startedMs(a) > startedMs(seen.agent)) newest.set(project.key, { agent: a, name: project.name })
+  }
+  return [...newest.values()]
+    .sort((x, y) => startedMs(y.agent) - startedMs(x.agent))
+    .map(({ agent, name }) => ({ name: agent.name?.trim() || '(未命名 session)', why: blockedWhy(agent), ...(name ? { project: name } : {}) }))
+}
+
+/** The pane's lines for waiting sessions: `name（project）：why`, at most `max`, then `…另 N 條`. */
+export function blockedLines(blocked: Blocked[], max = BLOCKED_MAX): string[] {
+  const lines = blocked.slice(0, max).map(b => `${b.name}${b.project ? `（${b.project}）` : ''}：${b.why}`)
+  return blocked.length > max ? [...lines, `…另 ${blocked.length - max} 條`] : lines
 }
 
 /**

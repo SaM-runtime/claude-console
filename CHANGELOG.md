@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.4
+
+- **Waiting sessions are listed as what they wait for.** Every `claude agents` entry with `state: blocked` was shown as `等待批准`, though none of them was at a permission prompt: on 2026-10-07 the pane listed nine, five retired by the daemon and four executors that had finished a turn on a question. Now `status: waiting` is `等待批准`, `status: idle` with `state: blocked` is `停在提問`, and any other blocked session stays `等待輸入`.
+- **Retired sessions are left out.** A background agent with neither `pid` nor `status` was retired by the daemon; nobody can answer it, so it is no longer listed.
+- **One line per project, at most three.** Only the newest waiting session of each project is listed, named with its project (`console-muy7pbqa-c（claude-console）：停在提問`; `主控台` for the console's own folder). Past three lines the list ends with `…另 N 條`.
+
 ## 0.9.0
 
 - **Executor, model and effort are picked from a list.** Each press on a control under the pane title used to move to the next value, so reaching `max` from `low` meant pressing through every level and writing each one to `dispatch.json` on the way, and the model never came back to `預設`. A press now spreads the choices out on the next line (`模型  [預設]  fable  opus  sonnet  ✕`), with the current value in brackets. Pressing one saves it and closes the line; the current value, `✕` or the label again closes it without writing. `預設` hands the choice back to the executor. Efforts follow the chosen model. A model typed with `/console model <name>` is listed while it is chosen. Without a readable Codex model cache, the line says to use `/console model <name>` instead of showing a toast.
