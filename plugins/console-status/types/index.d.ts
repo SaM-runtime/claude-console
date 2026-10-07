@@ -49,6 +49,9 @@ export type VerificationResult = { command: string; at: number; ok: boolean; exi
 export type PendingAction = { kind: ActionKind; at: number }
 export type ReviewRequest = { text: string; projectName: string; at: number; turnId?: string }
 
+/** This plugin's installed version, the marketplace's latest, and an update in progress. */
+export type UpdateInfo = { current: string | null; latest: string | null; checkedAt: number; error?: string; phase: 'idle' | 'checking' | 'updating' | 'updated' | 'failed'; message?: string }
+
 export type Blocked = { name: string; why: string }
 
 export type Snapshot = {
@@ -98,6 +101,7 @@ declare module 'claude-code' {
       cacheClock: CacheClock | null
       cacheTick: number
       isTurnRunning: boolean
+      updateInfo: UpdateInfo | null
     }
   }
 }

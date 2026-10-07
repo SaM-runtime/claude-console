@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+
+- **Update from the console.** The pane's footer shows the installed version against the newest one on `main` (the `plugin.json` that `claude plugin update` would install), checked at each load and every six hours; a new version toasts once. `⬆ 更新到 vX.Y.Z` runs `claude plugin marketplace update claude-console` and `claude plugin update console-status`, then `/reload-plugins`, so the new version runs without leaving the session; a failure shows its last output line and the button stays for a retry. `/console version` shows both versions, `/console update` does the same as the button.
+
 ## 0.4.2
 
 - **The actual cache TTL.** With `cacheTtl: auto` the console reads the TTL the API used from the session transcript, where Claude Code records each response's `usage.cache_creation` split into `ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`, after every turn (a `classic.Stop` hook names the transcript; a transcript over 4 MiB is read by its tail). The pane labels the TTL `實際`, `設定`, `推測` or `預設`. Before this the TTL was 5 minutes until an idle gap proved one hour.
