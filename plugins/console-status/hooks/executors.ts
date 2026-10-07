@@ -1,6 +1,7 @@
 import type { Job } from './logic'
 import { isActiveJob } from './logic'
 import { readJobs } from './jobs'
+import { dispatchKind } from './actions'
 
 export type ExecutorKind = 'codex' | 'claude'
 export type DispatchOptions = { model?: string; effort?: string; kind?: 'sync' | 'continue'; fallbackFrom?: 'codex'; fallbackReason?: string }
@@ -350,7 +351,10 @@ function createCodex(deps: ExecutorDeps, config: ExecutorConfig): Executor {
   return {
     async listJobs(root) {
       const jobs = await readJobs(deps.files, config.companionStateRoots, slash(root))
-      return jobs.map(job => ({ ...job, executor: 'codex' as const }))
+      return jobs.map(job => {
+        const kind = job.kind ?? dispatchKind(job.request?.prompt)
+        return { ...job, executor: 'codex' as const, ...(kind ? { kind } : {}) }
+      })
     },
     async dispatch(root, prompt, opts) {
       const normalized = slash(root)

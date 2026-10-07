@@ -25,7 +25,7 @@ function clipColumns(value: string, max: number): string {
  * One-line band content in strict priority order. The caller renders the returned items with a
  * one-column gap, then a spacer and the reserved right-hand button.
  */
-export function layoutBand(snapshot: Snapshot, options: { columns: number; demo: boolean; paneOpen: boolean; cache?: string }): BandLayout {
+export function layoutBand(snapshot: Snapshot, options: { columns: number; demo: boolean; paneOpen: boolean; cache?: string; sync?: string }): BandLayout {
   const columns = Math.max(0, Math.floor(Number.isFinite(options.columns) ? options.columns : 0))
   const compact = columns < 40
   const fullButton = compact ? '⌗' : '⌗ 面板'
@@ -49,6 +49,8 @@ export function layoutBand(snapshot: Snapshot, options: { columns: number; demo:
 
   const candidates: Array<{ id: string; text: string; zero?: boolean } | { id: 'next'; nextText: string }> = []
   if (options.demo) candidates.push({ id: 'demo', text: ' 示範資料 ' })
+  // A sync under way (or just ended) comes first: it is what the person pressed.
+  if (options.sync) candidates.push({ id: 'sync', text: options.sync })
 
   const stateCounts = counts(snapshot)
   // Every state keeps its slot (count 0 included) so the band reads the same from glance to glance.

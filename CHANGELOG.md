@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0
+
+- **Finished work no longer shows as 待同步 when it already updated the CARD.** A job counted as unsynced whenever it finished after the CARD's `更新` time. That time has minute precision and is written by the job just before it ends, and a Claude job's finish is stamped when the console next looks (up to a minute later), so nearly every continue, and every Codex sync, landed in 待同步 right after writing the CARD; syncing a Codex sync only produced another one. A finished job now counts as written back when `更新` is at or after the minute it started, and a sync job (Codex ones too, recognised by their prompt) never asks to be synced itself.
+- **Auto sync.** With the new `autoSync` option at `on` (the default), finished work that really left the CARD behind gets one sync dispatched by the console itself, once per job (remembered across sessions). A sync that fails or writes nothing is not retried; it waits for the 同步 button. `autoSync: off` leaves it to you.
+- **Sync progress you can follow.** A sync shows its steps on the project's `同步` line, `● 派工 ─ ◉ 執行 ─ ○ 寫回 STATUS`, with the executor, its phase and the elapsed time, and the band shows `↻ 同步：執行中 …` (`↻ 同步完成`, `↻ 同步未寫回`, `↻ 同步失敗` when it ends). A sync is done when the CARD's `更新` changes; one that ends without changing it says so instead of leaving 待同步 unexplained. Each outcome is also a toast.
+- **Faster updates while work runs.** While a job or a sync is under way, the console refreshes every 20 seconds instead of every minute, so a finished job shows sooner.
+
 ## 0.7.1
 
 - **An open pane no longer waits forever in a light session.** A pane left open across an upgrade and `/reload-plugins` (opened before 0.6.0, or in a session not remembered as a console session) came back in a light session, where nothing refreshes, and showed `讀取各專案狀態中…` for good. It now says the console is not running in this session and that `/console refresh` starts it.

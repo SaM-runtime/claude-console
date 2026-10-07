@@ -32,10 +32,17 @@ export function actionKinds(project: Project, state: State): ActionKind[] {
   return [...kinds, 'open']
 }
 
+const SYNC_INSTRUCTION = '把最近完成的工作結果寫回 STATUS CARD，只改 CARD 與歷程，不做其他變更'
+const CONTINUE_INSTRUCTION = '依 STATUS CARD 的下一步繼續；遵守任務骨架；結束時更新 CARD（含關卡欄）'
+
+/** What a job was dispatched for, read back from its prompt (Codex's state file keeps the prompt, not our kind). */
+export function dispatchKind(prompt: string | undefined): 'sync' | 'continue' | undefined {
+  const text = (prompt ?? '').trimStart()
+  return text.startsWith(SYNC_INSTRUCTION) ? 'sync' : text.startsWith(CONTINUE_INSTRUCTION) ? 'continue' : undefined
+}
+
 export function dispatchPrompt(project: Project, kind: 'sync' | 'continue'): string {
-  const instruction = kind === 'sync'
-    ? '把最近完成的工作結果寫回 STATUS CARD，只改 CARD 與歷程，不做其他變更'
-    : '依 STATUS CARD 的下一步繼續；遵守任務骨架；結束時更新 CARD（含關卡欄）'
+  const instruction = kind === 'sync' ? SYNC_INSTRUCTION : CONTINUE_INSTRUCTION
   return `${instruction}\nSTATUS：${project.statusPath}\n只在此專案授權的本機範圍作業。不得執行正式環境變更或 release；需要上線時填入 release 關卡，交主控台整理後由使用者決定。`
 }
 
