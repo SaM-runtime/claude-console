@@ -69,9 +69,18 @@ export function gatePrompt(project: Project): string {
     : `${base}依證據判斷，指出結果與理由，更新關卡結論；不得執行 release 或正式環境變更。`
 }
 
-/** An independent review (下一步 names `.task/review-*.md`) starts in a new session: it must not carry the work's context. */
+/**
+ * An independent review starts in a new session: it must not carry the work's context. A review's 下一步 starts
+ * with its task path (`.task/review-x.md（…）`); work that follows a review starts with a verb
+ * (`依 .task/review-x.md 的意見修正`) and resumes the project's session.
+ */
 export function freshSession(project: Project): boolean {
-  return /\.task[\\/]+review-[^\s）)`]*\.md/i.test(project.next)
+  return /^`?\.task[\\/]+review-[^\s）)`]*\.md/i.test(project.next.trim())
+}
+
+/** The session of the newest finished job that stopped to ask the user: the one its row's sync must resume. */
+export function askingSession(project: Project): string | undefined {
+  return project.jobs.filter(job => job.kind === 'newer' && job.asks && job.sessionId).pop()?.sessionId
 }
 
 export function workSignature(project: Project): string {

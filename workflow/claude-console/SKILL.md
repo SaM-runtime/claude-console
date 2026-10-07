@@ -96,7 +96,7 @@ A gate approval never substitutes for user authorization. Only the console clear
 - Native background agents in the project root; the mod keeps one managed session per project and resumes it. When a resume comes back as a new session and the original is gone (retired by the daemon, or finished), the new one becomes the project's session.
 - A turn starts by re-reading the CARD; the rev it reads then is the one that counts. Stop only when the CARD changed again before the write, never because a rev remembered from an earlier turn differs.
 - At a gate or a decision, the executor writes it into the CARD (`關卡`, `等使用者`) and ends its turn. It never asks a question and waits: nobody is attached to answer, and a blocked agent drifts out of step with the console. Attach to a blocked agent only for a permission prompt.
-- Review: dispatch a separate review task (`.task/review-*.md`) with the same contract (acceptance output, diff named by the report). It starts in a fresh session, never resumes the project's, and its verdict goes to the `review` gate. Until it finishes, `關卡` stays `無` and `下一步` names the review task, so the panel can dispatch it.
+- Review: dispatch a separate review task (`.task/review-*.md`) with the same contract (acceptance output, diff named by the report). It starts in a fresh session, never resumes the project's, and its verdict goes to the `review` gate. Until it finishes, `關卡` stays `無` and `下一步` names the review task, so the panel can dispatch it. A review's `下一步` starts with its task path (`.task/review-x.md（…）`); work that follows a review starts with a verb (`依 .task/review-x.md 的意見修正`) and resumes the project's session.
 
 ## Decisions
 

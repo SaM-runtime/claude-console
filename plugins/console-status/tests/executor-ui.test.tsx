@@ -23,8 +23,8 @@ test('Claude reconciliation shows an unmanaged resume copy warning in the feed',
   on('fs.read', (_, e) => ({ value: files[fixturePath(e.path)] ?? '' }))
   on('fs.write', (_, e) => { files[fixturePath(e.path)] = e.text; return { value: undefined } })
   on('fs.list', () => ({ value: [] }))
-  // The original session still lives, so the resume that came back as another session is a copy.
-  const alive = { id: '11111111', name: 'previous-launch', sessionId: original, cwd: 'D:/Project Alpha', kind: 'background', state: 'blocked', status: 'idle', pid: 7, startedAt: '2030-01-05T10:00:00Z' }
+  // The original session is at work, so the resume that came back as another session is a copy.
+  const alive = { id: '11111111', name: 'previous-launch', sessionId: original, cwd: 'D:/Project Alpha', kind: 'background', state: 'working', status: 'busy', pid: 7, startedAt: '2030-01-05T10:00:00Z' }
   on('process.run', () => ({ value: { exitCode: 0, stdout: JSON.stringify([alive, { id: 'abc12345', name: 'resume-launch', sessionId: copy, cwd: 'D:/Project Alpha', kind: 'background', state: 'working' }]), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('session.usage', () => ({ value: null }))
   on('session.id', () => ({ value: 'console-session' }))

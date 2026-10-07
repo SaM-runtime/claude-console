@@ -111,7 +111,7 @@ export function jobFlags(jobs: Job[], cardMs: number | null): JobFlag[] {
     const t = Date.parse(j.completedAt ?? j.createdAt ?? '')
     // A Claude job whose turn ended on a question to the user (the agent went idle while blocked).
     const asks = j.status === 'completed' && (j.phase ?? '').startsWith('idle: 等你回覆')
-    if (cardMs === null || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary, ...(j.kind ? { task: j.kind } : {}), ...(asks ? { asks: true } : {}) })
+    if (cardMs === null || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary, ...(j.kind ? { task: j.kind } : {}), ...(asks ? { asks: true, ...(j.sessionId ? { sessionId: j.sessionId } : {}) } : {}) })
   }
   return flags
 }
@@ -502,7 +502,8 @@ export function rows(s: Snapshot): Row[] {
     if (parseGate(p.gate)) return { state: 'GATE', project: name, item: shortAsk(p.gate ?? '', 30), age, full }
     const running = p.jobs.filter(j => j.kind === 'running')
     if (running.length) return { state: 'RUNNING', project: name, item: (running.length > 1 ? `${running.length} 個任務・` : '') + runLine(running[0], s.at), age, full }
-    if (p.jobs.some(j => j.kind === 'newer' && j.asks)) return { state: 'ACTION', project: name, item: '執行者在等你回覆：接手該 session 或同步', age, full }
+    // A manual project has no sync button, so the way on is only taking over the session.
+    if (p.jobs.some(j => j.kind === 'newer' && j.asks)) return { state: 'ACTION', project: name, item: `執行者在等你回覆：接手該 session${p.executor === 'manual' ? '' : ' 或同步'}`, age, full }
     if (p.jobs.some(j => j.kind === 'newer')) return { state: 'SYNC', project: name, item: '結果未同步至 STATUS', age, full }
     return { state: 'IDLE', project: name, item: shortAsk(p.state || '—', 30), age, full }
   })

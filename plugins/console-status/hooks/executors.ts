@@ -4,8 +4,12 @@ import { readJobs } from './jobs'
 import { dispatchKind } from './actions'
 
 export type ExecutorKind = 'codex' | 'claude'
-/** `fresh`: start a new session instead of resuming the project's (an independent review), and never make it the project's session. */
-export type DispatchOptions = { model?: string; effort?: string; kind?: 'sync' | 'continue'; fallbackFrom?: 'codex'; fallbackReason?: string; fresh?: boolean }
+/**
+ * `fresh`: start a new session instead of resuming the project's (an independent review), and never make it the project's session.
+ * `resumeSession`: resume this session instead of the project's (the one a job stopped in to ask the user); when it is not the
+ * project's session (an independent review that asked), the launch stays out of the project's session too.
+ */
+export type DispatchOptions = { model?: string; effort?: string; kind?: 'sync' | 'continue'; fallbackFrom?: 'codex'; fallbackReason?: string; fresh?: boolean; resumeSession?: string }
 export type ExecutorJob = Job & { executor?: ExecutorKind; nativeId?: string; sessionId?: string }
 
 type RunResult = { exitCode: number; stdout: string; stderr: string }
@@ -71,7 +75,7 @@ type Agent = {
 type ClaudeJob = {
   id: string
   kind?: 'sync' | 'continue'
-  /** Launched without `--resume` (an independent review): never becomes the project's session. */
+  /** Never becomes the project's session: launched without `--resume` (an independent review), or resuming one. */
   fresh?: boolean
   /** Set when a Codex dispatch was sent to Claude by the quota/broker fallback. */
   fallbackFrom?: 'codex'
@@ -286,10 +290,15 @@ function retiredAgent(agent: Agent): boolean {
   return (agent.pid === undefined || agent.pid === null) && !agent.status && (state === 'blocked' || state === 'idle')
 }
 
-/** The original session of a `--resume` is still there to keep: listed, not retired and not finished. */
-function sessionAlive(agents: Agent[], sessionId: string): boolean {
+/**
+ * The original session of a `--resume` is at work, so a new session that comes back is a copy beside it: listed,
+ * not retired, not finished and not idle (busy, working or at a permission prompt). One that ended its turn,
+ * even on a question to the user with its process still up, is waiting for this very resume: the new session takes over.
+ */
+function sessionAtWork(agents: Agent[], sessionId: string): boolean {
   return agents.some(agent => (agent.kind === undefined || agent.kind === 'background') && typeof agent.sessionId === 'string'
-    && agent.sessionId.toLowerCase() === sessionId.toLowerCase() && !retiredAgent(agent) && !phaseOf(agent).terminal)
+    && agent.sessionId.toLowerCase() === sessionId.toLowerCase() && !retiredAgent(agent) && !phaseOf(agent).terminal
+    && (agent.status ?? '').toLowerCase() !== 'idle')
 }
 
 /**
@@ -325,9 +334,9 @@ function matchAgent(job: ClaudeJob, agents: Agent[], latest: boolean): Agent | n
   return exactSession.length === 1 ? exactSession[0] : null
 }
 
-// A `--bg --resume` copy made while the original session still lives may already be running the prompt:
+// A `--bg --resume` copy made while the original session is at work may already be running the prompt:
 // it stays an active job (tracked by its unique launch name, so it keeps blocking dispatch) but never
-// replaces the project's session. When the original is gone, the new session simply takes its place.
+// replaces the project's session. When the original is idle, retired or gone, the new session simply takes its place.
 function noteCopy(job: ClaudeJob, agent: Agent): string {
   job.unmanagedSessionId = agent.sessionId
   job.warning = `Claude resume created an unmanaged copy (${agent.sessionId}); original session ${job.sessionId} preserved. The copy blocks new dispatch until it finishes.`
@@ -345,7 +354,7 @@ function reconcile(root: RootState, agents: Agent[], nowIso: string): boolean {
     const sessionId = typeof agent.sessionId === 'string' && UUID.test(agent.sessionId) ? agent.sessionId : undefined
     // Known copies matched by their unique launch name can report status without repeating the UUID.
     if (!sessionId && !job.unmanagedSessionId) continue
-    const isCopy = !!job.unmanagedSessionId || (!!job.sessionId && !!sessionId && job.sessionId.toLowerCase() !== sessionId.toLowerCase() && sessionAlive(agents, job.sessionId))
+    const isCopy = !!job.unmanagedSessionId || (!!job.sessionId && !!sessionId && job.sessionId.toLowerCase() !== sessionId.toLowerCase() && sessionAtWork(agents, job.sessionId))
     if (isCopy && sessionId && job.unmanagedSessionId !== sessionId) { noteCopy(job, agent); changed = true }
     if (typeof agent.id === 'string' && agent.id && job.nativeId !== agent.id) { job.nativeId = agent.id; changed = true }
     if (!isCopy && sessionId) {
@@ -431,10 +440,12 @@ function createClaude(deps: ExecutorDeps, config: ExecutorConfig): Executor {
         const suffix = root.jobs.length.toString(36)
         const pendingId = `starting:${now}:${suffix}`
         const launchName = `console-${now.toString(36)}-${suffix}`
-        const sessionId = opts.fresh ? undefined : root.sessionId
+        const sessionId = opts.fresh ? undefined : opts.resumeSession ?? root.sessionId
+        // Resuming a session other than the project's (a review that stopped to ask) keeps the project where it is.
+        const detached = !!opts.fresh || (!!sessionId && !!root.sessionId && sessionId.toLowerCase() !== root.sessionId.toLowerCase())
         root.jobs.push({
           id: pendingId, kind: opts.kind ?? 'continue', launchName, sessionId, root: rootName, prompt, model: opts.model, effort: opts.effort, startedAt: nowIso, status: 'running', phase: 'starting',
-          ...(opts.fresh ? { fresh: true } : {}),
+          ...(detached ? { fresh: true } : {}),
           ...(opts.fallbackFrom ? { fallbackFrom: opts.fallbackFrom, ...(opts.fallbackReason ? { fallbackReason: opts.fallbackReason } : {}) } : {}),
         })
         return { value: { sessionId, pendingId, launchName }, changed: true }
@@ -469,7 +480,7 @@ function createClaude(deps: ExecutorDeps, config: ExecutorConfig): Executor {
         await markUnknown(deps, path, key, launch.pendingId)
         throw new Error('Claude launch could not uniquely confirm its full session id.')
       }
-      if (launch.sessionId && launch.sessionId.toLowerCase() !== confirmed.sessionId!.toLowerCase() && sessionAlive(after, launch.sessionId)) {
+      if (launch.sessionId && launch.sessionId.toLowerCase() !== confirmed.sessionId!.toLowerCase() && sessionAtWork(after, launch.sessionId)) {
         const warning = await mutateState(deps, path, state => {
           const job = state.roots[key]?.jobs.find(item => item.id === launch.pendingId)
           if (!job) throw new Error('Claude launch metadata was lost before confirmation.')

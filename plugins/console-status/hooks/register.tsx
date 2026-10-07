@@ -10,7 +10,7 @@ import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, freshSession, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted } from './actions'
+import { actionKinds, actionLabel, askingSession, dispatchBlockReason, dispatchPrompt, freshSession, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -617,6 +617,9 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
         throw new Error(reason)
       }
       if (kind === 'continue' && chosen === 'claude' && freshSession(p)) dispatchOpts = { ...dispatchOpts, fresh: true }
+      // A sync of a row whose job stopped to ask resumes that job's session, which may be a review's rather than the project's.
+      const asked = kind === 'sync' && chosen === 'claude' ? askingSession(p) : undefined
+      if (asked) dispatchOpts = { ...dispatchOpts, resumeSession: asked }
       const executor = createExecutor(chosen, deps, execConfig)
       const job = await executor.dispatch(root, dispatchPrompt(p, kind), dispatchOpts)
       await update($, fallbackOffers, values => { if (!values[statusPath]) return values; const next = { ...values }; delete next[statusPath]; return next })
