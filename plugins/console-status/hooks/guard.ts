@@ -34,24 +34,63 @@ export function segments(command: string): string[] {
   return out.map(s => s.trim()).filter(Boolean)
 }
 
-/** Words of one simple command without leading `sudo`, `env`, `command` or `VAR=value` prefixes; quotes removed. */
-function words(segment: string): string[] {
-  const list = (segment.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map(w => w.replace(/^["']|["']$/g, '')).filter(w => w !== '{' && w !== '}')
-  while (list.length && (/^(?:sudo|env|command|nohup|time|exec|xargs)$/.test(list[0]!) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(list[0]!))) list.shift()
-  return list
+/**
+ * Wrappers that run the rest of their words as a command. `value` lists the options that take the
+ * next word as their value (`sudo -u root`, `xargs -I {}`); `operands` counts the plain words before
+ * the command (`timeout 60`). Any other `-x` word is an option on its own.
+ */
+const WRAPPERS: Record<string, { value?: string[], operands?: number }> = {
+  sudo: { value: ['-u', '-g', '-h', '-p', '-C', '-D', '-r', '-t', '-U', '-T', '--user', '--group', '--host', '--prompt', '--chdir', '--role', '--type', '--other-user', '--close-from'] },
+  doas: { value: ['-u', '-C'] },
+  env: { value: ['-u', '-C', '--unset', '--chdir'] },
+  nice: { value: ['-n', '--adjustment'] },
+  timeout: { value: ['-s', '-k', '--signal', '--kill-after'], operands: 1 },
+  stdbuf: { value: ['-i', '-o', '-e'] },
+  xargs: { value: ['-I', '-L', '-n', '-P', '-d', '-E', '-s', '-a', '--max-args', '--max-procs', '--delimiter', '--arg-file'] },
+  nohup: {}, time: {}, exec: { value: ['-a'] }, command: {},
 }
+
+/**
+ * One simple command's words without wrapper prefixes (`sudo -u root`, `timeout 60`, `xargs -0`) or
+ * `VAR=value` assignments; quotes removed. `piped` is set when `xargs` appends words read from stdin.
+ */
+function command(segment: string): { words: string[], piped: boolean } {
+  const list = (segment.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map(w => w.replace(/^["']|["']$/g, '')).filter(w => w !== '{' && w !== '}')
+  let piped = false
+  while (list.length) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(list[0]!)) { list.shift(); continue }
+    const name = list[0]!.replace(/^.*[\\/]/, '')
+    const wrapper = WRAPPERS[name]
+    if (!wrapper) break
+    if (name === 'xargs') piped = true
+    list.shift()
+    let operands = wrapper.operands ?? 0
+    while (list.length) {
+      const w = list[0]!
+      if (w === '--') { list.shift(); break }
+      if (/^-./.test(w)) { list.shift(); if (wrapper.value?.includes(w)) list.shift(); continue }
+      if (operands > 0) { list.shift(); operands--; continue }
+      break
+    }
+  }
+  return { words: list, piped }
+}
+
+const words = (segment: string) => command(segment).words
 
 const shortFlags = (args: string[]) => args.filter(a => /^-[A-Za-z]+$/.test(a)).join('')
 const has = (args: string[], ...flags: string[]) => args.some(a => flags.includes(a))
 /**
  * Recursive, for `rm` (POSIX, or PowerShell's alias for Remove-Item) and Remove-Item: a short flag
  * cluster of rm's letters with r (`-rf`, `-Rfv`), `--recursive`, or `-Recurse` and its abbreviations
- * (`-r`, `-Rec`). PowerShell words such as `-Force` are not rm clusters, so their r does not count.
+ * (`-r`, `-Rec`, `-Recurse:$true`). PowerShell words such as `-Force` are not rm clusters, so their r does not count.
  */
-const recursive = (args: string[]) => args.some(a => /^-[rRfvidIPWx]+$/.test(a) && /r/i.test(a) || /^--recursive$/.test(a) || /^-r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?$/i.test(a))
+const recursive = (args: string[]) => args.some(a => /^-[rRfvidIPWx]+$/.test(a) && /r/i.test(a) || /^--recursive$/.test(a) || /^-r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?(?::\$true)?$/i.test(a))
 
-function rmReason(args: string[]): string | null {
+/** `piped`: `xargs` adds targets from stdin, so the named ones (if any) are not all it deletes. */
+function rmReason(args: string[], piped = false): string | null {
   if (!recursive(args)) return null
+  if (piped) return '遞迴刪除管線傳入的項目'
   const targets = args.filter(a => !a.startsWith('-'))
   if (!targets.length || targets.every(scratch)) return null
   return `遞迴刪除 ${targets.slice(0, 3).join(' ')}${targets.length > 3 ? ' …' : ''}`
@@ -86,8 +125,13 @@ function gitReason(args: string[]): string | null {
   }
 }
 
-/** Shells that run their argument as a command line: `bash -c "…"`, `powershell -Command …`, `cmd /c …`. */
+/** Shells that run their argument as a command line: `bash -c "…"`, `powershell -Command …`, `cmd /c …`, `eval …`, `iex …`. */
 function innerCommand(lower: string, args: string[]): string | null {
+  if (lower === 'eval') return args.length ? args.join(' ') : null
+  if (lower === 'invoke-expression' || lower === 'iex') {
+    const rest = args.filter(a => !/^-command$/i.test(a))
+    return rest.length ? rest.join(' ') : null
+  }
   let at = -1
   if (/^(?:ba|z|da|k)?sh$/.test(lower)) at = args.findIndex(a => /^-[a-z]*c[a-z]*$/.test(a))
   else if (lower === 'powershell' || lower === 'pwsh') at = args.findIndex(a => /^-(?:c|command)$/i.test(a))
@@ -96,13 +140,13 @@ function innerCommand(lower: string, args: string[]): string | null {
 }
 
 function segmentReason(segment: string, depth: number): string | null {
-  const w = words(segment)
+  const { words: w, piped } = command(segment)
   const head = (w[0] ?? '').replace(/^.*[\\/]/, '').replace(/\.exe$/i, '')
   const args = w.slice(1)
   const lower = head.toLowerCase()
   const inner = depth < 3 ? innerCommand(lower, args) : null
   if (inner) return reasonOf(inner, depth + 1)
-  if (lower === 'rm') return rmReason(args)
+  if (lower === 'rm') return rmReason(args, piped)
   if (lower === 'git') return gitReason(args)
   if (lower === 'find') {
     if (has(args, '-delete')) return 'find -delete 會刪除找到的檔案'

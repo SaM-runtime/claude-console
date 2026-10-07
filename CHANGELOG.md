@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+
+- **Command guard sees past wrappers.** A wrapper's own options were read as the command, so `sudo -u root rm -rf /srv`, `sudo -E …`, `nice -n 10 rm -rf src`, `timeout 60 rm -rf src` and `xargs -0 rm -rf` ran without asking. The guard now skips `sudo`, `doas`, `env`, `nice`, `timeout`, `stdbuf`, `xargs`, `nohup`, `time`, `exec` and `command` with their options (and `timeout`'s duration, and `--`), and matches them by name when given as a path (`/usr/bin/sudo`).
+- **Piped deletes ask.** `ls | xargs rm -rf` and `find . -print0 | xargs -0 rm -rf` name no target, and a recursive `rm` with no target was treated as harmless; through `xargs` it now asks, since it deletes whatever the pipe sends. A bare `rm -rf` and a non-recursive `xargs rm -f` still pass.
+- **`eval`, `Invoke-Expression` and `-Recurse:$true`.** `eval "…"`, `Invoke-Expression "…"` and `iex "…"` are checked like `bash -c "…"`, and `Remove-Item -Recurse:$true` counts as `-Recurse` (`-Recurse:$false` does not).
+
 ## 0.8.0
 
 - **Finished work no longer shows as 待同步 when it already updated the CARD.** A job counted as unsynced whenever it finished after the CARD's `更新` time. That time has minute precision and is written by the job just before it ends, and a Claude job's finish is stamped when the console next looks (up to a minute later), so nearly every continue, and every Codex sync, landed in 待同步 right after writing the CARD; syncing a Codex sync only produced another one. A finished job now counts as written back when `更新` is at or after the minute it started, and a sync job (Codex ones too, recognised by their prompt) never asks to be synced itself.
