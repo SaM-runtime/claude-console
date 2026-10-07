@@ -214,7 +214,7 @@ The right-click menu (or `m` on the keyboard for the row under the cursor; Esc c
 
 With the menu open, one key runs an action on offer: `v` verify, `s` sync, `c` continue (still asks for the second press), `d` decide, `g` gate, `o` open STATUS.md, `p` open the pull request. The menu lists the keys that apply to that project; a key for an action not on offer does nothing.
 
-**Other sessions.** Under 用量, `其他工作階段` lists Claude Code sessions in the console's folder or a registered project that wait on you: `等待批准` (a permission prompt), `停在提問` (it finished a turn on a question) or `等待輸入`. Sessions the daemon retired (no process, no status) are left out, each project shows only its newest one with the project's name, and past three lines the list ends with `…另 N 條`. A session stopped on a question is only pointed out here; its project row already offers the decision.
+**Other sessions.** Under 用量, `其他工作階段` lists Claude Code sessions in the console's folder or a registered project that wait on you: `等待批准` (a permission prompt), `停在提問` (it finished a turn on a question) or `等待輸入`. Sessions the daemon retired (no process, no status) are left out, each project shows one, named with the project (the most pressing wording first, then the newest), and past three lines the list ends with `…另 N 條`. A session stopped on a question is only pointed out here; its project row already offers the decision.
 
 ## Git, PR and CI
 

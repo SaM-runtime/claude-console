@@ -533,6 +533,7 @@ export const BLOCKED_MAX = 3
 const retiredAgent = (a: Agent) => a.kind === 'background' && (a.pid === undefined || a.pid === null) && !a.status?.trim()
 
 /** What the session is actually waiting for: a permission prompt, a question it stopped on, or other input. */
+const BLOCKED_RANK = ['等待批准', '停在提問', '等待輸入']
 function blockedWhy(a: Agent): string {
   if (a.status === 'waiting') return '等待批准'
   if (a.status === 'idle' && a.state === 'blocked') return '停在提問'
@@ -559,11 +560,14 @@ export function relevantBlocked(agents: Agent[], selfId: string | null, roots: (
   const listed = agents.filter(a => !(a.sessionId && a.sessionId === selfId) && !retiredAgent(a) && projectOf(a) !== null
     && Boolean(a.name?.trim() || a.sessionId?.trim() || a.cwd?.trim() || a.waitingFor?.trim())
     && (a.state === 'blocked' || a.status === 'waiting'))
+  // Per project the most pressing wording wins (a permission prompt must not hide behind a newer question); then the newest.
+  const rank = (a: Agent) => BLOCKED_RANK.indexOf(blockedWhy(a))
   const newest = new Map<string, { agent: Agent; name: string }>()
   for (const a of listed) {
     const project = projectOf(a)!
     const seen = newest.get(project.key)
-    if (!seen || startedMs(a) > startedMs(seen.agent)) newest.set(project.key, { agent: a, name: project.name })
+    const better = !seen || rank(a) < rank(seen.agent) || (rank(a) === rank(seen.agent) && startedMs(a) > startedMs(seen.agent))
+    if (better) newest.set(project.key, { agent: a, name: project.name })
   }
   return [...newest.values()]
     .sort((x, y) => startedMs(y.agent) - startedMs(x.agent))

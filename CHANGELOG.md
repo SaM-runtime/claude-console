@@ -4,7 +4,8 @@
 
 - **Waiting sessions are listed as what they wait for.** Every `claude agents` entry with `state: blocked` was shown as `等待批准`, though none of them was at a permission prompt: on 2026-10-07 the pane listed nine, five retired by the daemon and four executors that had finished a turn on a question. Now `status: waiting` is `等待批准`, `status: idle` with `state: blocked` is `停在提問`, and any other blocked session stays `等待輸入`.
 - **Retired sessions are left out.** A background agent with neither `pid` nor `status` was retired by the daemon; nobody can answer it, so it is no longer listed.
-- **One line per project, at most three.** Only the newest waiting session of each project is listed, named with its project (`console-muy7pbqa-c（claude-console）：停在提問`; `主控台` for the console's own folder). Past three lines the list ends with `…另 N 條`.
+- **One line per project, at most three.** Each project lists one waiting session, named with its project (`console-muy7pbqa-c（claude-console）：停在提問`; `主控台` for the console's own folder): the most pressing one, `等待批准` before `停在提問` before `等待輸入`, so a permission prompt is never hidden behind a newer question, and the newest among those. Past three lines the list ends with `…另 N 條`.
+- Known: once the listed session of a project is answered, an older one of the same project that stopped on a question takes its place and is announced as new (toast and feed line). It belongs with the replayed warnings after a reload and is left for a later version.
 
 ## 0.9.0
 

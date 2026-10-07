@@ -50,13 +50,23 @@ test('the wording follows the session: waiting = 等待批准, idle + blocked = 
   ])
 })
 
-test('one line per project, its newest session, whatever order the listing came in', () => {
+test('one line per project: among sessions with the same wording, the newest, whatever order the listing came in', () => {
   const b = relevantBlocked([
     { name: 'a-old', kind: 'background', status: 'idle', state: 'blocked', pid: 1, cwd: CONSOLE, startedAt: '2026-10-07T10:00:00Z' },
     { name: 'a-new', kind: 'background', status: 'idle', state: 'blocked', pid: 2, cwd: `${CONSOLE}\\sub`, startedAt: '2026-10-07T12:00:00Z' },
-    { name: 'a-mid', kind: 'background', status: 'waiting', pid: 3, cwd: CONSOLE, startedAt: '2026-10-07T11:00:00Z' },
+    { name: 'a-mid', kind: 'background', status: 'idle', state: 'blocked', pid: 3, cwd: CONSOLE, startedAt: '2026-10-07T11:00:00Z' },
   ] as any, null, PROJECTS, HOME)
   expect(b.map(x => x.name)).toEqual(['a-new'])
+})
+
+test('a permission prompt is not hidden behind a newer question: 等待批准 > 停在提問 > 等待輸入, then the newest', () => {
+  const b = relevantBlocked([
+    { name: 'perm-old', kind: 'background', status: 'waiting', pid: 1, cwd: CONSOLE, startedAt: '2026-10-07T10:00:00Z' },
+    { name: 'asked-new', kind: 'background', status: 'idle', state: 'blocked', pid: 2, cwd: CONSOLE, startedAt: '2026-10-07T12:00:00Z' },
+    { name: 'input-newest', kind: 'background', status: 'busy', state: 'blocked', pid: 3, cwd: INVOICE, startedAt: '2026-10-07T13:00:00Z' },
+    { name: 'asked-invoice', kind: 'background', status: 'idle', state: 'blocked', pid: 4, cwd: INVOICE, startedAt: '2026-10-07T09:00:00Z' },
+  ] as any, null, PROJECTS, HOME)
+  expect(b.map(x => [x.name, x.why])).toEqual([['perm-old', '等待批准'], ['asked-invoice', '停在提問']])
 })
 
 test('at most BLOCKED_MAX lines, the rest summed up as …另 N 條', () => {
