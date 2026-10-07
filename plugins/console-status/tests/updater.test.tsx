@@ -1,5 +1,6 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { compareVersions, hasUpdate, manifestVersion, marketplaceUpdateArgs, updateArgs, versionLine, LATEST_MANIFEST_URL } from '../hooks/updater'
+import { fixturePath } from './fixture-path'
+import { compareVersions, hasUpdate, localFolder, manifestVersion, marketplaceUpdateArgs, updateArgs, updateOutcome, versionLine, LATEST_MANIFEST_URL } from '../hooks/updater'
 
 const OPTIONS = { options: { registryPath: 'D:/Fixtures/registry.md' } }
 const PANE = { plugin: 'console-status', component: 'Pane', requestId: 'console-status',
@@ -17,25 +18,51 @@ test('versions compare numerically and a manifest gives its version', () => {
   expect(hasUpdate({ current: '0.4.2', latest: '0.4.3', checkedAt: 0, phase: 'idle' })).toBe(true)
   expect(hasUpdate({ current: '0.4.3', latest: '0.4.3', checkedAt: 0, phase: 'idle' })).toBe(false)
   expect(hasUpdate({ current: null, latest: '0.4.3', checkedAt: 0, phase: 'idle' })).toBe(false)
-  expect(updateArgs()).toEqual(['claude', 'plugin', 'update', 'console-status'])
+  expect(updateArgs()).toEqual(['claude', 'plugin', 'update', 'console-status', '--json'])
   expect(marketplaceUpdateArgs()).toEqual(['claude', 'plugin', 'marketplace', 'update', 'claude-console'])
   expect(versionLine({ current: '0.4.2', latest: '0.4.3', checkedAt: 0, phase: 'idle' })).toBe('v0.4.2　有新版 v0.4.3')
   expect(versionLine({ current: '0.4.3', latest: '0.4.3', checkedAt: 0, phase: 'idle' })).toBe('v0.4.3　已是最新版')
   expect(versionLine({ current: '0.4.2', latest: null, checkedAt: 0, phase: 'idle', error: 'HTTP 503' })).toBe('v0.4.2　無法檢查最新版（HTTP 503）')
 })
 
-function fixture(on: any, latest: string | null, update = result('✔ Updated console-status')) {
+test('the local folder comes from readFromFolder, else an unlisted root outside the plugin cache', () => {
+  const listed = JSON.stringify([{ id: 'other@x', readFromFolder: 'C:/elsewhere' }, { id: 'console-status@claude-console', enabled: true, readFromFolder: 'C:\\Users\\me\\Documents\\Codex\\claude-console\\plugins\\console-status' }])
+  expect(localFolder(listed, 'C:/whatever')).toBe('C:/Users/me/Documents/Codex/claude-console/plugins/console-status')
+  const cached = JSON.stringify([{ id: 'console-status@claude-console', enabled: true, installPath: 'C:/Users/me/.claude/plugins/cache/claude-console/console-status/0.8.1' }])
+  expect(localFolder(cached, 'D:/dev/console-status')).toBeNull()
+  expect(localFolder('[]', 'D:\\dev\\claude-console\\plugins\\console-status\\')).toBe('D:/dev/claude-console/plugins/console-status')
+  expect(localFolder(null, 'C:/Users/me/.claude/plugins/cache/claude-console/console-status/0.8.1')).toBeNull()
+  expect(updateOutcome('noise\n{"outcome":"ok","updateOutcome":"updated","message":"updated from 0.4.2 to 0.4.3"}')).toEqual({ updated: true, message: 'updated from 0.4.2 to 0.4.3' })
+  expect(updateOutcome('{"updateOutcome":"already_latest","message":"already at the latest version"}')?.updated).toBe(false)
+  expect(updateOutcome('✔ Updated')).toBeNull()
+})
+
+const UPDATED = result('{"command":"update","outcome":"ok","updateOutcome":"updated","message":"updated from 0.4.2 to 0.4.3"}')
+const CACHED = JSON.stringify([{ id: 'console-status@claude-console', enabled: true, installPath: 'C:/Users/example/.claude/plugins/cache/claude-console/console-status/0.4.2' }])
+const FOLDER = 'C:/Users/example/Documents/Codex/claude-console'
+const IN_FOLDER = JSON.stringify([{ id: 'console-status@claude-console', enabled: true, readFromFolder: `${FOLDER}/plugins/console-status` }])
+
+function fixture(on: any, latest: string | null, update = UPDATED, list = CACHED) {
   const clock = mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:/Users/example', LOCALAPPDATA: 'D:/Local' })
-  const data = { refuseReload: false, fetched: [] as string[], ran: [] as string[][], commands: [] as string[], toasts: [] as string[], state: {} as Record<string, any> }
-  on('fs.read', (_: any, e: any) => ({ value: e.path.replace(/\\/g, '/').endsWith('/.claude-plugin/plugin.json') ? '{"name":"console-status","version":"0.4.2"}' : e.path.includes('claude-sessions') ? '{"version":1,"roots":{}}' : '' }))
+  const data = { refuseReload: false, pulled: '0.4.3', pull: result('Updating 1234..5678\nFast-forward'), isRepo: true, fetched: [] as string[], ran: [] as string[][], commands: [] as string[], reloadArgs: [] as string[], toasts: [] as string[], state: {} as Record<string, any> }
+  on('fs.read', (_: any, e: any) => {
+    const path = fixturePath(e.path)
+    if (path === `${FOLDER}/plugins/console-status/.claude-plugin/plugin.json`) return { value: JSON.stringify({ version: data.ran.some(argv => argv.includes('pull')) ? data.pulled : '0.4.2' }) }
+    return { value: path.endsWith('/.claude-plugin/plugin.json') ? '{"name":"console-status","version":"0.4.2"}' : path.includes('claude-sessions') ? '{"version":1,"roots":{}}' : '' }
+  })
   on('fs.list', () => ({ value: [] }))
   on('http.fetch', (_: any, e: any) => {
     data.fetched.push(e.url)
     return { value: latest === null ? { status: 503, ok: false, headers: {}, text: '' } : { status: 200, ok: true, headers: {}, text: JSON.stringify({ name: 'console-status', version: latest }) } }
   })
   on('process.run', (_: any, e: any) => {
-    if (e.argv.join(' ').startsWith('claude plugin ')) { data.ran.push([...e.argv]); return { value: e.argv[2] === 'update' ? update : result() } }
+    const argv = e.argv.join(' ')
+    if (argv === 'claude plugin list --json') return { value: result(list) }
+    if (argv.startsWith('claude plugin ')) { data.ran.push([...e.argv]); return { value: e.argv[2] === 'update' ? update : result() } }
+    if (e.argv[0] === 'git' && e.argv.includes('--show-toplevel')) return { value: data.isRepo ? result(`${FOLDER}\n`) : result('', 128, 'fatal: not a git repository') }
+    if (e.argv[0] === 'git' && e.argv.includes('--abbrev-ref')) return { value: result('feature/x\n') }
+    if (e.argv[0] === 'git' && e.argv.includes('pull')) { data.ran.push([...e.argv]); return { value: data.pull } }
     return { value: result(e.argv[0] === 'claude' ? '[]' : '') }
   })
   on('session.usage', () => ({ value: null }))
@@ -49,6 +76,7 @@ function fixture(on: any, latest: string | null, update = result('✔ Updated co
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
   on('command.run', (_: any, e: any) => {
     data.commands.push(e.command)
+    if (e.command === 'reload-plugins') data.reloadArgs.push(e.args)
     if (e.command === 'reload-plugins' && data.refuseReload) throw new Error('refused')
     return { text: '' }
   })
@@ -72,13 +100,50 @@ test('a session start finds a newer version on main and toasts it once per versi
 test('/console update runs claude plugin update, then /reload-plugins', OPTIONS, async ($, on) => {
   const data = fixture(on, '0.4.3')
   const out: any = await $.command.run({ command: 'console', args: 'update' } as any)
-  expect(data.ran).toEqual([['claude', 'plugin', 'marketplace', 'update', 'claude-console'], ['claude', 'plugin', 'update', 'console-status']])
+  expect(data.ran).toEqual([['claude', 'plugin', 'marketplace', 'update', 'claude-console'], ['claude', 'plugin', 'update', 'console-status', '--json']])
   expect(out.text).toMatch(/已更新到 v0\.4\.3/)
   expect(data.state.updateInfo.phase).toBe('updated')
-  // The reload runs once the slash command's own turn is over.
+  // The reload runs once the slash command's own turn is over, forced past the prompt-cache hold.
   expect(data.commands).not.toContain('reload-plugins')
   await data.clock.advance(1500)
+  expect(data.reloadArgs).toEqual(['--force'])
+  // No reload replaced the module (a test never does): after 20 s the pane stops saying it is reloading.
+  await data.clock.advance(20_000)
+  expect(data.state.updateInfo).toMatchObject({ phase: 'failed', message: '已安裝但尚未重新載入：請輸入 /reload-plugins，或開新 session' })
+})
+
+test('a marketplace update that installs nothing is not called installed', OPTIONS, async ($, on) => {
+  const data = fixture(on, '0.4.3', result('{"updateOutcome":"already_latest","message":"console-status is already at the latest version (0.4.2)."}'))
+  const out: any = await $.command.run({ command: 'console', args: 'update' } as any)
+  expect(out.text).toBe('更新失敗：沒有安裝新版：console-status is already at the latest version (0.4.2).')
+  expect(data.state.updateInfo.phase).toBe('failed')
+  await data.clock.advance(1500)
+  expect(data.commands).not.toContain('reload-plugins')
+})
+
+test('a plugin read from a local git folder is updated with git pull there, then reloaded', OPTIONS, async ($, on) => {
+  const data = fixture(on, '0.4.3', UPDATED, IN_FOLDER)
+  const out: any = await $.command.run({ command: 'console', args: 'update' } as any)
+  expect(data.ran).toEqual([['git', '-C', FOLDER, 'pull', '--ff-only'], ['claude', 'plugin', 'update', 'console-status', '--json']])
+  expect(out.text).toMatch(/已更新到 v0\.4\.3/)
+  await data.clock.advance(1500)
   expect(data.commands).toContain('reload-plugins')
+})
+
+test('a local folder that cannot fast-forward, is not a clone, or stays old says so', OPTIONS, async ($, on) => {
+  const data = fixture(on, '0.4.3', UPDATED, IN_FOLDER)
+  data.pull = result('', 128, 'fatal: Not possible to fast-forward, aborting.')
+  expect(((await $.command.run({ command: 'console', args: 'update' } as any)) as any).text)
+    .toBe(`更新失敗：在 ${FOLDER} 執行 git pull 失敗：fatal: Not possible to fast-forward, aborting.`)
+  data.pull = result('Already up to date.')
+  data.pulled = '0.4.2'
+  expect(((await $.command.run({ command: 'console', args: 'update' } as any)) as any).text)
+    .toBe(`更新失敗：已在 ${FOLDER} 執行 git pull，但資料夾仍是 v0.4.2（目前分支 feature/x，新版在 main）`)
+  data.isRepo = false
+  expect(((await $.command.run({ command: 'console', args: 'update' } as any)) as any).text)
+    .toMatch(/本機資料夾 .*不是 git 儲存庫/)
+  await data.clock.advance(1500)
+  expect(data.commands).not.toContain('reload-plugins')
 })
 
 test('a refused /reload-plugins tells the person to run it', OPTIONS, async ($, on) => {

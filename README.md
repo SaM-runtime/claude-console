@@ -325,7 +325,7 @@ Thanks to alan890104 for paste-preview.
 
 ## Upgrade
 
-The pane's footer shows the installed version against the newest one on `main` (checked at each load and every six hours; a new version also toasts once). Press `⬆ 更新到 vX.Y.Z`, or run `/console update`: it runs the two commands below and then `/reload-plugins`. If the reload is refused, the pane says to run `/reload-plugins` yourself. By hand:
+The pane's footer shows the installed version against the newest one on `main` (checked at each load and every 30 minutes; a new version also toasts once). Press `⬆ 更新到 vX.Y.Z`, or run `/console update`: it runs the two commands below and then `/reload-plugins --force`. When console-status is read from a local folder (a marketplace added from a directory, or `--plugin-dir`), those commands only re-read that folder, so the button runs `git pull --ff-only` in it instead; a folder that is not a git clone, a pull that cannot fast-forward, or a branch that still has the old version is reported in the pane. If the reload is refused or does not happen within 20 seconds, the pane says to run `/reload-plugins` yourself. By hand:
 
 ```powershell
 claude plugin marketplace update claude-console
