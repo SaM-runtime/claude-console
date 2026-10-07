@@ -28,7 +28,7 @@ function fixture(on: any, latest: string | null, update = result('✔ Updated co
   const clock = mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:/Users/example', LOCALAPPDATA: 'D:/Local' })
   const data = { refuseReload: false, fetched: [] as string[], ran: [] as string[][], commands: [] as string[], toasts: [] as string[], state: {} as Record<string, any> }
-  on('fs.read', (_: any, e: any) => ({ value: e.path.endsWith('/.claude-plugin/plugin.json') ? '{"name":"console-status","version":"0.4.2"}' : e.path.includes('claude-sessions') ? '{"version":1,"roots":{}}' : '' }))
+  on('fs.read', (_: any, e: any) => ({ value: e.path.replace(/\\/g, '/').endsWith('/.claude-plugin/plugin.json') ? '{"name":"console-status","version":"0.4.2"}' : e.path.includes('claude-sessions') ? '{"version":1,"roots":{}}' : '' }))
   on('fs.list', () => ({ value: [] }))
   on('http.fetch', (_: any, e: any) => {
     data.fetched.push(e.url)
