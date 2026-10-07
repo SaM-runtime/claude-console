@@ -26,7 +26,7 @@ test('config expands home paths, normalizes Windows paths and supplies state def
 })
 
 test('refresh consumes userConfig and plugin-relative scripts, then renders the configured project', {
-  options: { registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/run.mjs', companionStateDir: 'D:/Jobs', companionStateRoots: '["D:/Jobs"]', executor: 'codex' },
+  options: { activation: 'always', registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/run.mjs', companionStateDir: 'D:/Jobs', companionStateRoots: '["D:/Jobs"]', executor: 'codex' },
 }, async ($, on) => {
   const commands: string[][] = []
   const now = Date.parse('2030-01-05T04:00:00Z')

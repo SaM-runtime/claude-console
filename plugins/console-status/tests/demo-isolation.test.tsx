@@ -1,7 +1,7 @@
 import { expect, test, mock } from 'claude-code/testing'
 import { fixturePath } from './fixture-path'
 
-const OPTIONS = { options: { executor: 'claude', registryPath: 'D:/Fixtures/registry.md', companionStateRoots: '["D:/State"]' } }
+const OPTIONS = { options: { activation: 'always', executor: 'claude', registryPath: 'D:/Fixtures/registry.md', companionStateRoots: '["D:/State"]' } }
 const STATUS = 'D:/Private Fixture/.console/STATUS.md'
 const NOW = Date.parse('2030-01-05T12:00:00Z')
 const PANE = { plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',

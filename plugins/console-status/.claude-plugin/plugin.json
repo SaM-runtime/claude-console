@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -110,6 +110,12 @@
       "title": "Cache write price",
       "description": "USD per million cache-write tokens for the cost estimate; blank uses the model's list price (1.25x input for 5m, 2x for 1h).",
       "default": ""
+    },
+    "activation": {
+      "type": "string",
+      "title": "Console activation",
+      "description": "auto: a session runs the console (polling, band, project mode, cache hints, update check) only after /console is used in it, and again when that session resumes; other sessions get only the command guard. always: every session runs it. /console off turns it off for one session.",
+      "default": "auto"
     },
     "projectMode": {
       "type": "string",

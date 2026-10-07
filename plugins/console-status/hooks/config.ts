@@ -59,3 +59,9 @@ export function legacyDispatchPath(dispatchSettingsPath: string): string {
   const cut = path.lastIndexOf('/')
   return `${cut >= 0 ? path.slice(0, cut) : '.'}/codex-dispatch.json`
 }
+
+export type Activation = 'auto' | 'always'
+/** `activation` option: `auto` (default) starts the console in a session where `/console` is used, `always` in every session. */
+export function activationMode(value: unknown): Activation {
+  return String(value ?? '').trim().toLowerCase() === 'always' ? 'always' : 'auto'
+}

@@ -1,7 +1,7 @@
 import { expect, test, mock } from 'claude-code/testing'
 import { fixturePath } from './fixture-path'
 
-const OPTIONS = { options: { executor: 'codex', registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/companion.mjs', companionStateRoots: '["D:/State"]' } }
+const OPTIONS = { options: { activation: 'always', executor: 'codex', registryPath: 'D:/Fixtures/registry.md', companionScript: 'D:/Tools/companion.mjs', companionStateRoots: '["D:/State"]' } }
 const STATUS = 'D:/Project Alpha/.console/STATUS.md'
 const PANE = (surface = 'mobile') => ({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface,
   props: { title: 'Console', isFocused: true, bodyColumns: 70, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any)

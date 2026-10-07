@@ -77,7 +77,7 @@ test('the system prompt section depends only on the project identity; progress c
 // ── UI: project mode in a session opened inside a registered project ──
 
 const STATUS = 'D:/Project Alpha/.console/STATUS.md'
-const OPTIONS = { options: { executor: 'claude', registryPath: 'D:/Fixtures/registry.md' } }
+const OPTIONS = { options: { activation: 'always', executor: 'claude', registryPath: 'D:/Fixtures/registry.md' } }
 const PANE = { plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
   props: { title: 'Console', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any
 const BAND = { plugin: 'console-status', component: 'AbovePrompt', surface: 'mobile', props: { bodyColumns: 120 } } as any
