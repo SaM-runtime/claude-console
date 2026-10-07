@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.3
+
+- **`下一步：無（…）` is nothing to continue.** A none word followed by a note in brackets (`無（等使用者決定）`, `無(等決策)`) was read as a real next step: the pipeline showed `待繼續：無（等使用者決定）` and `⇢ 繼續下一步` offered to dispatch it. The next step and `等使用者` now share one check, which already accepted brackets for the ask.
+- **`0 fail` is not a failure.** A CARD 驗證 verdict that copies a test runner's summary, such as `214 pass, 0 fail` from `claude plugin test` or `874 passed, 0 failed`, showed the verify stage as `✕` because the word `fail` appeared. Zero counts (`0 fail`, `0 failed`, `0 errors`, `failures: 0`, `0 個失敗`) no longer count; `1 fail` and `10 failed` still do, and `failures: 2` now reads as failed too.
+
 ## 0.8.2
 
 - **Update from a local folder.** When console-status is read from a local folder (a marketplace added from a directory, or `--plugin-dir`), `claude plugin update` only re-reads that folder, so `⬆ 更新` installed nothing and the pane stayed on `已安裝，重新載入中…`. The button now finds the folder (`claude plugin list --json`'s `readFromFolder`, or the loaded root outside the plugin cache) and runs `git pull --ff-only` there; a folder that is not a git clone, a pull that cannot fast-forward, or a branch still on the old version is shown in the pane. A marketplace update that installs nothing (`updateOutcome` other than `updated`) is reported instead of called installed.

@@ -12,6 +12,8 @@ test('project actions follow state and never continue across a decision or gate'
   expect(actionKinds(project('- 關卡：release：Review evidence'), 'GATE')).toEqual(['verify', 'gate', 'open'])
   expect(actionKinds(project('- 關卡：future：Unknown gate'), 'IDLE')).toEqual(['verify', 'open'])
   expect(actionKinds(project('- 下一步：無'), 'IDLE')).toEqual(['verify', 'open'])
+  expect(actionKinds(project('- 下一步：無（等使用者決定）'), 'IDLE')).toEqual(['verify', 'open'])
+  expect(actionKinds(project('- 下一步：無(等決策)'), 'IDLE')).toEqual(['verify', 'open'])
 })
 
 test('dispatch prompts retain task scope and gate reviews use the renamed workflow', () => {

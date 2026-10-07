@@ -2,7 +2,7 @@
 // Derived only from what the console already reads (CARD, executor jobs, the latest local
 // verification); nothing here touches the disk. See workflow/claude-console/SKILL.md "Order of work".
 import type { Project, VerificationResult } from '../types'
-import { hasAsk, parseGate } from './logic'
+import { hasAsk, parseGate, saysNone } from './logic'
 
 export type StageId = 'spec' | 'build' | 'sync' | 'verify' | 'review' | 'release'
 /** done: passed · active: an executor is working on it · wait: needs the console or the user ·
@@ -22,14 +22,16 @@ export const STAGES: readonly { id: StageId; label: string }[] = [
 const INDEX = Object.fromEntries(STAGES.map((stage, index) => [stage.id, index])) as Record<StageId, number>
 
 const PASS = /\b(?:pass(?:ed)?|ok|green)\b|通過|成功|✓|✔/i
-const FAIL = /\b(?:fail(?:ed|ing)?|error|red)\b|失敗|未通過|✕|✗|✘/i
+const FAIL = /\b(?:fail(?:ed|ing|ures?)?|error|red)\b|失敗|未通過|✕|✗|✘/i
+/** A zero count names no failure: `214 pass, 0 fail`, `0 failed`, `failures: 0`, `0 失敗`. */
+const ZERO_FAIL = /\b0\s*(?:fail(?:ed|ures?)?|errors?)\b|\b(?:fail(?:ed|ures?)?|errors?)\s*[:=]\s*0\b|\b0\s*個?失敗|失敗\s*[:：=]?\s*0\b/gi
 
 /**
  * The verdict a CARD 驗證 line records after its command (`→ PASS; verified …`). FAIL wins over
  * PASS so `3 passed, 1 failed` reads as failed; neither word means no verdict.
  */
 export function cardVerdict(note: string): 'pass' | 'fail' | null {
-  if (FAIL.test(note)) return 'fail'
+  if (FAIL.test(note.replace(ZERO_FAIL, ''))) return 'fail'
   if (PASS.test(note)) return 'pass'
   return null
 }
@@ -48,7 +50,7 @@ export function pipeline(p: Project, local?: VerificationResult): Pipeline {
   const running = p.jobs.some(job => job.kind === 'running')
   const unsynced = !running && p.jobs.some(job => job.kind === 'newer')
   const result = verdict(p, local)
-  const next = p.next.trim() && !/^(?:無|沒有|none|n\/a|-)(?:$|[；;，,。\s])/i.test(p.next.trim())
+  const next = p.next.trim() && !saysNone(p.next)
 
   let current: StageId | null
   let status: StageStatus

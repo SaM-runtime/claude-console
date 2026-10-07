@@ -32,6 +32,8 @@ test('card fields parse; 無 is not an ask; verify command is unwrapped', () => 
   expect(parseCard(card('無'))?.['狀態']).toBe('SAMPLE PASS')
   const row = { name: 'Project Beta', statusPath: 'x' }
   expect(hasAsk(buildProject(row, card('無'), [], NOW))).toBe(false)
+  for (const ask of ['無（示範）', '無(之後再說)', '無；示範結果等待整理', '-'])
+    expect([ask, hasAsk(buildProject(row, card(ask), [], NOW))]).toEqual([ask, false])
   const p = buildProject(row, card('選擇範例配色'), [], NOW)
   expect(hasAsk(p)).toBe(true)
   expect(p.verify).toBe('php t.php')

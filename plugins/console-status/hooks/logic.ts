@@ -141,9 +141,12 @@ export function buildProject(row: RegistryRow, cardText: string | null, jobs: Jo
   }
 }
 
+/** A CARD value that says "nothing": a none word alone or before punctuation or a note (「無；…」, 「無（等使用者決定）」). */
+export const saysNone = (value: string) => /^(?:無|沒有|none|n\/a|-)(?:$|[；;，,。\s(（])/i.test(value.trim())
+
 /** An ask counts unless it is empty or starts with a "none" word (e.g. 「無；示範結果等待整理」). */
 export const hasAsk = (p: Project) =>
-  p.hasCard && !NONE.has(p.ask) && !/^(無|沒有|none|n\/a)([；;，,。\s(（]|$)/i.test(p.ask)
+  p.hasCard && !NONE.has(p.ask) && !saysNone(p.ask)
 
 export type Severity = 'ask' | 'running' | 'stale' | 'ok' | 'missing'
 
