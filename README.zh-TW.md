@@ -285,6 +285,17 @@ Bash 或 PowerShell 要執行無法復原的指令時，會先用 Claude Code �
 
 [claude-console workflow](workflow/claude-console/SKILL.md) 定義主控台操作程序。日常讀取限於登錄表、CARD 與簡短的受管理工作摘要。
 
+## 與其他 plugin 並用
+
+輸入框上方的區塊是所有 plugin 共用的。從 0.5.1 起，其他 plugin 畫在那裡的內容會疊在主控台那一列下面，不會被蓋掉。這是為了能和 [alan890104](https://github.com/alan890104) 的 [paste-preview](https://github.com/alan890104/claude-code-paste-preview)（MIT 授權）一起使用而加的：它會在輸入框上方顯示貼上圖片的縮圖，並開啟編輯器讓你標註。claude-console 沒有包含 paste-preview 的任何程式碼，請另外安裝：
+
+```powershell
+claude plugin marketplace add alan890104/claude-code-paste-preview
+claude plugin install paste-preview@paste-preview
+```
+
+感謝 alan890104 製作 paste-preview。
+
 ## 限制
 
 - 內附探測：Windows 用 PowerShell 腳本，macOS 與 Linux 用 `sh` 腳本（Linux 已有測試與模擬過期 broker 驗證，但未經日常使用）。在這兩個平台上，若 broker 的 `codex app-server` 啟動時間早於 Codex CLI 最近一次升級，會判定為 STALE。

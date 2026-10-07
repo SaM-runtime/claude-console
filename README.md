@@ -286,6 +286,17 @@ The estimate is the context tokens of the last request times the model's input l
 
 [The `claude-console` workflow](workflow/claude-console/SKILL.md) defines the console operating procedure. Normal console reads stay limited to the registry, CARD blocks, and short managed-task summaries.
 
+## Works with other plugins
+
+The band above the prompt is shared: since 0.5.1, what other plugins draw there stacks under the console's line instead of being hidden by it. This was added so the console can be used beside [paste-preview](https://github.com/alan890104/claude-code-paste-preview) by [alan890104](https://github.com/alan890104) (MIT License), which shows thumbnails of pasted images above the prompt and opens an editor to mark them up. claude-console contains none of paste-preview's code; install it separately:
+
+```powershell
+claude plugin marketplace add alan890104/claude-code-paste-preview
+claude plugin install paste-preview@paste-preview
+```
+
+Thanks to alan890104 for paste-preview.
+
 ## Limitations
 
 - Bundled probes: PowerShell scripts on Windows, `sh` scripts on macOS and Linux (Linux is covered by tests and a simulated stale broker, not daily use). There a broker is reported STALE when its `codex app-server` started before the installed Codex CLI was last upgraded.
