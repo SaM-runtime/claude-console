@@ -238,6 +238,8 @@ A dispatch shows RUNNING optimistically until managed state is refreshed. Accept
 | `/console project` | List each project's effective executor, model, and effort |
 | `/console project executor\|model\|effort <value\|inherit> <name>` | Set or clear one project's override |
 | `/console mode [auto\|console\|project]` | Show or choose project mode for this session |
+| `/console version` | Show the installed and the latest version |
+| `/console update` | Update console-status and reload plugins when a newer version is on `main` |
 
 Selecting a project applies only to the next accepted prompt. A downstream rejection retains the selection for retry.
 
@@ -298,6 +300,8 @@ The estimate is the context tokens of the last request times the model's input l
 - A selected project adds context to one prompt and does not change the active working directory.
 
 ## Upgrade
+
+The pane's footer shows the installed version against the newest one on `main` (checked at each load and every six hours; a new version also toasts once). Press `⬆ 更新到 vX.Y.Z`, or run `/console update`: it runs the two commands below and then `/reload-plugins`. If the reload is refused, the pane says to run `/reload-plugins` yourself. By hand:
 
 ```powershell
 claude plugin marketplace update claude-console

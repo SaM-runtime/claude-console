@@ -21,6 +21,8 @@ function fixture(on: any) {
   }
   on('fs.read', async (_: any, e: any) => {
     const path = fixturePath(e.path)
+    // The plugin's own manifest (the update check's installed version) is not project data.
+    if (path.endsWith('/.claude-plugin/plugin.json')) throw new Error('no manifest in this fixture')
     data.fsReads += 1
     const files: Record<string, string> = {
       'D:/Fixtures/registry.md': [

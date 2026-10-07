@@ -237,6 +237,8 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | `/console project` | 列出每個專案實際生效的執行者、model、effort |
 | `/console project executor\|model\|effort <值\|inherit> <名稱>` | 設定或清除單一專案的覆寫 |
 | `/console mode [auto\|console\|project]` | 顯示或選擇此 session 的專案模式 |
+| `/console version` | 顯示目前安裝版本與最新版本 |
+| `/console update` | `main` 上有新版時更新 console-status 並重新載入外掛 |
 
 選取專案只套用到下一則被接受的提示；下游拒絕提示時會保留選取，供重試使用。
 
@@ -297,6 +299,8 @@ Bash 或 PowerShell 要執行無法復原的指令時，會先用 Claude Code �
 - 同一時間只讓一個主控台 session 派工。`claude-sessions.json` 的寫入在同一個 Claude Code process 內會排隊，若檔案被其他 process 改過也會拒絕覆寫；但外掛檔案 API 沒有 rename 或獨占建立，兩個主控台在同一瞬間寫入仍不保證安全。
 
 ## 升級
+
+面板底部會顯示目前安裝版本與 `main` 上的最新版本（每次載入與每 6 小時檢查一次；發現新版時也會 toast 一次）。按 `⬆ 更新到 vX.Y.Z` 或輸入 `/console update`，會執行下面兩個指令，再自動 `/reload-plugins`；若重新載入被拒絕，面板會提示你自己輸入 `/reload-plugins`。手動方式：
 
 ```powershell
 claude plugin marketplace update claude-console

@@ -20,11 +20,12 @@ import { pipeline, projectForCwd, projectModeSection, progressContext, progressS
 import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
 import { gitBadge, gitLine, gitProbeMode, gitStatusArgs, parseGitStatus, parsePrView, prLine, prViewArgs } from './git'
-import type { PrInfo, CacheClock } from '../types'
+import type { PrInfo, CacheClock, UpdateInfo } from '../types'
 import { CACHE_WARN_MS, cacheChip, cacheTtlOption, cacheView, cacheWarning, leftText, learnTtl, priceOverride, tokensText, transcriptCache, transcriptPathFor, ttlLabel, usd } from './cache'
 import type { TtlSource } from './cache'
 import type { CacheTtl } from './cache'
 import { commandPreview, dangerReason, guardMode } from './guard'
+import { LATEST_MANIFEST_URL, UPDATE_CHECK_MS, hasUpdate, manifestVersion, marketplaceUpdateArgs, updateArgs, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
 import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
@@ -73,6 +74,8 @@ const cacheClock = atom({ plugin: 'console-status', key: 'cacheClock' } as const
 /** Bumped every 15 s while a cache clock runs, so the countdown redraws without a full refresh. */
 const cacheTick = atom({ plugin: 'console-status', key: 'cacheTick' } as const, 0)
 const isTurnRunning = atom({ plugin: 'console-status', key: 'isTurnRunning' } as const, false)
+/** Installed vs. latest version and an update in progress; kept across a reload so the result shows after it. */
+const updateInfo = atom({ plugin: 'console-status', key: 'updateInfo' } as const, null)
 const CACHE_TTL_KEY = 'cacheTtl'
 /** The cache clock (its `at`) the expiry warning already fired for. */
 let cacheWarnedFor = -1
@@ -81,6 +84,11 @@ let cacheTimer: { cancel(): void } | undefined
 let cacheDrawnAt = 0
 /** This session's transcript, as a classic hook names it (or as Claude Code lays it out, until one does). */
 let transcriptPath: string | null = null
+let updateTimer: { cancel(): void } | undefined
+let updateCheck: Promise<UpdateInfo | null> | null = null
+/** The newest version already announced by a toast (kept in `$.store`, so once per version). */
+const UPDATE_NOTIFIED_KEY = 'updateNotified'
+const RELOAD_DELAY_MS = 1500
 const actionLocks = new Set<string>()
 const earlyReviewStarts = new Map<string, string>()
 let selectionClaim: string | null = null
@@ -721,6 +729,68 @@ async function openPullRequest($: any, p: Project) {
   $.ui.toast(`${name}：已開啟 PR #${p.pr.number}`, { timeoutMs: 3000 })
 }
 
+/** Reads the installed manifest and the marketplace's latest one; toasts once per new version. */
+function checkUpdate($: any, force = false): Promise<UpdateInfo | null> {
+  if (updateCheck) return updateCheck
+  updateCheck = (async () => {
+    const prev = await read($, updateInfo)
+    if (prev?.phase === 'updating') return prev
+    const now = await $.clock.now()
+    if (!force && prev && prev.phase === 'idle' && !prev.error && now - prev.checkedAt < UPDATE_CHECK_MS - 60_000) return prev
+    await update($, updateInfo, value => ({ current: value?.current ?? null, latest: value?.latest ?? null, checkedAt: value?.checkedAt ?? 0, phase: 'checking' }) as UpdateInfo)
+    const current = manifestVersion(await Promise.resolve().then(() => $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)).catch(() => null))
+    let latest: string | null = null
+    let error: string | undefined
+    try {
+      const response = await $.http.fetch(LATEST_MANIFEST_URL, { headers: { 'cache-control': 'no-cache' } })
+      latest = response.ok ? manifestVersion(response.text) : null
+      if (!latest) error = response.ok ? '回應不是 plugin.json' : `HTTP ${response.status}`
+    } catch { error = '連不上 GitHub' }
+    const info: UpdateInfo = { current, latest, checkedAt: now, phase: 'idle', ...(error ? { error } : {}) }
+    await update($, updateInfo, () => info)
+    if (hasUpdate(info)) {
+      const notified = await Promise.resolve().then(() => $.store.get(UPDATE_NOTIFIED_KEY)).catch(() => null)
+      if (notified !== info.latest) {
+        $.ui.toast(`console-status 有新版 v${info.latest}（目前 v${info.current}）：/console 面板按「⬆ 更新」或輸入 /console update`, { timeoutMs: 10_000 })
+        await Promise.resolve().then(() => $.store.set(UPDATE_NOTIFIED_KEY, info.latest)).catch(() => {})
+      }
+    }
+    return info
+  })().finally(() => { updateCheck = null })
+  return updateCheck
+}
+
+/** `claude plugin marketplace update` and `claude plugin update console-status`, then `/reload-plugins` so the new version runs in this session. */
+async function runUpdate($: any): Promise<string> {
+  const before = await read($, updateInfo)
+  if (before?.phase === 'updating') return '更新進行中。'
+  const target = before?.latest ? `v${before.latest}` : '最新版'
+  await update($, updateInfo, value => ({ current: value?.current ?? null, latest: value?.latest ?? null, checkedAt: value?.checkedAt ?? 0, phase: 'updating' }) as UpdateInfo)
+  // Best effort: a marketplace added under another name is still refreshed by the update itself.
+  await $.process.run(marketplaceUpdateArgs(), { timeoutMs: 120_000 }).catch(() => null)
+  const result = await $.process.run(updateArgs(), { timeoutMs: 180_000 })
+    .catch((error: unknown) => ({ exitCode: -1, stdout: '', stderr: error instanceof Error ? error.message : String(error) }))
+  if (result.exitCode !== 0) {
+    const message = outputTail(result.stdout, result.stderr).at(-1)?.slice(0, 160) || `結束碼 ${result.exitCode}`
+    await update($, updateInfo, value => value && ({ ...value, phase: 'failed', message }) as UpdateInfo)
+    $.ui.toast(`console-status 更新失敗：${message}`, { timeoutMs: 10_000 })
+    return `更新失敗：${message}\n可在終端機執行：claude plugin update console-status`
+  }
+  await update($, updateInfo, value => value && ({ ...value, phase: 'updated' }) as UpdateInfo)
+  $.ui.toast(`console-status 已更新到 ${target}，正在重新載入外掛…`, { timeoutMs: 6000 })
+  // Out of the calling hook (a slash command's turn waits on it, and a run inside it is refused).
+  // The reload replaces this module, so its promise may never settle here; only a refusal is acted on.
+  $.clock.after(RELOAD_DELAY_MS, async () => {
+    try { await $.command.run({ command: 'reload-plugins' }) } catch {
+      try {
+        await update($, updateInfo, value => value && ({ ...value, phase: 'failed', message: '已安裝，請輸入 /reload-plugins 套用' }) as UpdateInfo)
+        $.ui.toast(`console-status ${target} 已安裝；請輸入 /reload-plugins 套用`, { timeoutMs: 10_000 })
+      } catch { /* unloaded meanwhile */ }
+    }
+  })
+  return `已更新到 ${target}，正在重新載入外掛；若沒有自動套用，請輸入 /reload-plugins。`
+}
+
 /** Action-menu hotkeys: one letter per action, shown in the menu; only actions on offer respond. */
 const HOTKEYS: Record<string, ActionKind> = { v: 'verify', s: 'sync', c: 'continue', d: 'decide', g: 'gate', o: 'open' }
 const HOTKEY_OF: Partial<Record<ActionKind, string>> = Object.fromEntries(Object.entries(HOTKEYS).map(([k, kind]) => [kind, k]))
@@ -738,7 +808,7 @@ export const register: Register = (on, options) => {
     await update($, continueConfirmations, () => ({}))
     await update($, fallbackOffers, () => ({}))
     await loadTrust($)
-    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；band 橫帶；demo 示範' })
+    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；band 橫帶；demo 示範；version 版本；update 更新外掛' })
     refreshTimer = $.clock.every(TICK_MS, () => void refresh($, options))
     cacheTimer?.cancel()
     cacheTimer = $.clock.every(1000, () => void cacheTickOnce($, options).catch(() => {}))
@@ -752,6 +822,11 @@ export const register: Register = (on, options) => {
     }
     void syncCacheFromTranscript($, options, true).catch(() => {})
     void refresh($, options, true)
+    // A reload after an update starts a fresh check, which reads the newly installed manifest.
+    await update($, updateInfo, value => value && value.phase !== 'idle' ? { ...value, phase: 'idle', checkedAt: 0 } as UpdateInfo : value)
+    updateTimer?.cancel()
+    updateTimer = $.clock.every(UPDATE_CHECK_MS, () => void checkUpdate($).catch(() => {}))
+    void checkUpdate($, true).catch(() => {})
     return next(e)
   })
 
@@ -974,6 +1049,16 @@ export const register: Register = (on, options) => {
       await update($, isPaneOpen, () => true)
       return { text: '已載入示範資料；/console refresh 換回實際狀態。' }
     }
+    if (arg === 'version') {
+      const info = await checkUpdate($, true).catch(() => null)
+      return { text: `console-status ${versionLine(info)}${hasUpdate(info) ? '\n輸入 /console update 或在面板按「⬆ 更新」。' : ''}` }
+    }
+    if (arg === 'update') {
+      const info = await checkUpdate($, true).catch(() => null)
+      if (info?.error && !info.latest) return { text: `無法檢查最新版（${info.error}）；仍可在終端機執行 claude plugin update console-status。` }
+      if (info?.current && !hasUpdate(info)) return { text: `console-status ${versionLine(info)}，不需要更新。` }
+      return { text: await runUpdate($) }
+    }
     if (arg === 'plain') {
       const plain = await update($, isPlain, v => !v)
       return { text: plain ? '表格改用純文字列（/console plain 切回互動列）。' : '表格改用互動列。' }
@@ -1019,6 +1104,7 @@ export const register: Register = (on, options) => {
     ctx: '上下文：本主控台 session 還剩多少上下文。用掉一半以上建議換新主控台。',
     five_hour: '5 小時：Claude 帳號 5 小時滾動額度的剩餘量，到重置時間回滿。',
     seven_day: '本週：Claude 帳號每週額度的剩餘量。',
+    version: '版本：目前安裝的 console-status 與 GitHub main 上的最新版，每 6 小時與每次載入時檢查。「⬆ 更新」執行 claude plugin update console-status，完成後自動 /reload-plugins；也可輸入 /console update。',
     codex_quota: 'Codex：Codex 帳號額度的剩餘量，取自最近一次 Codex 工作紀錄（每 5 分鐘讀一次）；很久沒用 Codex 時數字可能是舊的。',
   }
   const C = {
@@ -1157,6 +1243,7 @@ export const register: Register = (on, options) => {
     const trusted = await read($, trustedVerify)
     await read($, actionPulse) // redraws running action labels once a second
     const offers = demo ? {} : await read($, fallbackOffers)
+    const version = await read($, updateInfo)
     const renderedAt = Object.keys(pending).length ? await $.clock.now() : s.at
     const revision = await read($, dispatchRevision)
     // Drawing never touches the disk on its own: settings are re-read after a write (revision) or a refresh (s.at).
@@ -1680,6 +1767,17 @@ export const register: Register = (on, options) => {
             await $.ui.close({ id: PANE }).catch(() => {})
             await update($, isPaneOpen, () => false)
           }} />
+        </Box>
+        <Box key="version" gap={2} hover={{ scope: 'help-version' }}>
+          <Box flexShrink={1}>
+            <Text color={version?.phase === 'failed' ? C.red : hasUpdate(version) ? C.amber : C.dim} wrap="truncate-end">{versionLine(version)}</Text>
+          </Box>
+          {hasUpdate(version) && (version?.phase === 'idle' || version?.phase === 'failed') && (
+            <Box flexShrink={0}><Button key="update" plain label={`⬆ 更新到 v${version!.latest}`} onPress={() => void runUpdate($)} /></Box>
+          )}
+          {(!version || ((version.phase === 'idle' || version.phase === 'failed') && !hasUpdate(version))) && (
+            <Box flexShrink={0}><Button key="update-check" plain dimColor label="↻ 檢查更新" onPress={() => void checkUpdate($, true).catch(() => {})} /></Box>
+          )}
         </Box>
         </Box>
       </Box>
