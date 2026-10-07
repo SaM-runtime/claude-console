@@ -27,7 +27,7 @@ import type { CacheTtl } from './cache'
 import { commandPreview, dangerReason, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
-import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
+import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction } from '../types'
 import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, events, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
@@ -698,12 +698,23 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
   }
 }
 
-/** Forgets a pending action and, unless told to keep it, its review request. A review's lock goes too, so the row can act again. */
-async function dropPending($: any, path: string, { request = true, keepToken }: { request?: boolean; keepToken?: number } = {}) {
-  await update($, pendingActions, values => { if (!values[path]) return values; const next = { ...values }; delete next[path]; return next })
-  if (request) await update($, reviewRequests, values => { if (!values[path]) return values; const next = { ...values }; delete next[path]; return next })
+/**
+ * Forgets one pending action, the one given (same kind and time), and, unless told to keep it, its review request.
+ * Anything pressed on the row since then is left alone. Returns whether the pending action was still there to drop;
+ * only then does a review's lock go too, so the row can act again.
+ */
+async function dropPending($: any, path: string, entry: PendingAction, { request = true, keepToken }: { request?: boolean; keepToken?: number } = {}): Promise<boolean> {
+  let dropped = false
+  await update($, pendingActions, values => {
+    const held = values[path]
+    if (!held || held.kind !== entry.kind || held.at !== entry.at) return values
+    dropped = true
+    const next = { ...values }; delete next[path]; return next
+  })
+  if (request) await update($, reviewRequests, values => { if (!values[path] || (entry.kind === 'gate' && values[path].at !== entry.at)) return values; const next = { ...values }; delete next[path]; return next })
   const lock = actionLocks.get(path)
-  if (lock?.kind === 'gate' && lock.token !== keepToken) actionLocks.delete(path)
+  if (dropped && lock?.kind === 'gate' && lock.token !== keepToken) actionLocks.delete(path)
+  return dropped
 }
 
 /**
@@ -720,7 +731,7 @@ async function sweepPending($: any, scope: { only?: string; ownToken?: number; o
   const s = await read($, snapshot)
   const now = await $.clock.now()
   const turnRunning = await read($, isTurnRunning)
-  const dropped: { path: string; name: string; reason: string; keepRequest: boolean }[] = []
+  const dropped: { path: string; entry: PendingAction; name: string; reason: string; keepRequest: boolean }[] = []
   for (const path of paths) {
     const entry = pending[path]
     const request = requests[path]
@@ -731,17 +742,19 @@ async function sweepPending($: any, scope: { only?: string; ownToken?: number; o
     if (!reason && scope.offConsole && entry.kind === 'gate' && !(request?.turnId && turnRunning)) reason = '主控台已關閉，審核狀態已清除'
     if (!reason) continue
     const name = (project?.name ?? request?.projectName ?? path).replace(/\s.*$/, '')
-    // A review turn already bound still reports its answer when it ends; only the row is let go now.
-    dropped.push({ path, name, reason, keepRequest: reason === '關卡已變更' && !!request?.turnId })
+    // Only the row is let go: a review turn already bound, or one still queued behind a long turn when the wait
+    // ran out, still reports its answer when it ends.
+    dropped.push({ path, entry, name, reason, keepRequest: (reason === '關卡已變更' && !!request?.turnId) || reason === '審核狀態已逾時' })
   }
-  for (const item of dropped) await dropPending($, item.path, { request: !item.keepRequest, keepToken: scope.ownToken })
-  for (const item of dropped) {
+  const done: typeof dropped = []
+  for (const item of dropped) if (await dropPending($, item.path, item.entry, { request: !item.keepRequest, keepToken: scope.ownToken })) done.push(item)
+  for (const item of done) {
     const text = `${item.name}：${item.reason}，按鈕已解鎖`
     // The pane is closing on /console off, and the display generation moves on: say it directly.
     if (scope.offConsole) $.ui.toast(text, { timeoutMs: 8000 })
     else await actionNotice($, text, false)
   }
-  return dropped.map(item => item.path)
+  return done.map(item => item.path)
 }
 
 async function setSync($: any, statusPath: string, track: SyncProgress) {
@@ -1189,7 +1202,8 @@ export const register: Register = (on, options) => {
         // Bound when it started, or recognised now by the prompt it carried (the host may have wrapped it).
         if (request.turnId ? request.turnId !== e.turnId : !(started && reviewTurnMatches(request, started))) continue
         earlyReviewStarts.delete(e.turnId)
-        await dropPending($, path)
+        // Only this review's own pending entry: a verify pressed while it ran keeps its own.
+        await dropPending($, path, { kind: 'gate', at: request.at })
         const answer = e.answer.trim().split(/\r?\n/).find(line => line.trim())?.slice(0, 120) ?? '請查看主控台回覆'
         await actionNotice($, `${request.projectName}：${e.reason === 'answer' ? `審核已回覆：${answer}` : `審核未完成（${e.reason}）`}`, e.reason === 'answer')
       }

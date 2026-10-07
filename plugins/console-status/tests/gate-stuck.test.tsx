@@ -130,7 +130,8 @@ test('a review no turn ever answers unlocks the row after GATE_PENDING_MS, at th
   await clock.advance(GATE_PENDING_MS)
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   expect(data.state.pendingActions[ALPHA]).toBeUndefined()
-  expect(data.state.reviewRequests[ALPHA]).toBeUndefined()
+  // Only the row is let go: the request stays, so a turn that starts late still reports its answer.
+  expect(data.state.reviewRequests[ALPHA]).toBeDefined()
   expect(data.toasts.some(text => text.endsWith('：審核狀態已逾時，按鈕已解鎖'))).toBe(true)
   const again = await $.ui.mount(PANE())
   await pressVerify(again, 'Project Alpha')
@@ -230,6 +231,64 @@ test('the host\'s own slash commands and selecting a project leave no pending ac
   await ui.press({ key: 'detail' })
   expect(await ui.find({ key: 'detail-Project Alpha-gate' })).toBeDefined()
   await pressVerify(ui, 'Project Alpha')
+  expect(verifyRuns(data)).toBe(1)
+  await ui.unmount()
+})
+
+const SLOW = { options: { ...OPTIONS.options, cacheHint: 'off', gitProbe: 'off' } }
+const answered = (data: { state: Record<string, any> }, answer: string) => data.state.feed.filter((event: any) => event.text.includes(`審核已回覆：${answer}`)).length
+
+test('a review whose turn starts only after GATE_PENDING_MS still reports its answer once; the row is free meanwhile', SLOW, async ($, on) => {
+  const { data, clock } = fixture(on)
+  let submitted = ''
+  data.submit = async e => { submitted = e.text; return { text: e.text } }
+  const ui = await open($)
+  await ui.press({ key: 'detail-Project Alpha-gate' })
+  await ui.unmount()
+
+  // The console's own turn ran past the timeout, so the queued review has not started yet.
+  await clock.advance(GATE_PENDING_MS + 60_000)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  expect(data.state.pendingActions[ALPHA]).toBeUndefined()
+  const again = await $.ui.mount(PANE())
+  await pressVerify(again, 'Project Alpha')
+  expect(verifyRuns(data)).toBe(1)
+
+  await $.turn.start({ text: wrapped(submitted), turnId: 'late-review' })
+  await $.turn.complete(done('late-review', '可上線：晚到的答案'))
+  expect(answered(data, '可上線：晚到的答案')).toBe(1)
+  expect(data.state.reviewRequests[ALPHA]).toBeUndefined()
+  await again.unmount()
+})
+
+test('the end of a review turn leaves a verify pressed meanwhile alone', OPTIONS, async ($, on) => {
+  const { data, clock } = fixture(on)
+  let submitted = ''
+  data.submit = async e => { submitted = e.text; return { text: e.text } }
+  data.verifyDelay = 5000
+  on('turn.step', async function* (_: any, e: any) { return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' } })
+  const ui = await open($)
+  await ui.press({ key: 'detail-Project Alpha-gate' })
+  await $.turn.start({ text: wrapped(submitted), turnId: 'running-review' })
+  const step = $.turn.step({ turnId: 'running-review', index: 0, model: 'claude-opus-5-5', messageCount: 3 } as any)
+  for await (const _ of step) { /* the review turn is now running */ }
+  // The review moves the CARD past its gate while it runs: the row is free again.
+  data.cards[ALPHA] = '- 驗證：`node test.mjs`\n- 關卡：無'
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  expect(data.state.pendingActions[ALPHA]).toBeUndefined()
+
+  await ui.press({ key: 'detail-Project Alpha-verify' })
+  const verifying = ui.press({ key: 'detail-Project Alpha-verify' })
+  await clock.settle()
+  expect(data.state.pendingActions[ALPHA]?.kind).toBe('verify')
+  await $.turn.complete(done('running-review', '可上線'))
+  expect(answered(data, '可上線')).toBe(1)
+  expect(data.state.pendingActions[ALPHA]?.kind).toBe('verify')
+  expect(data.toasts.some(text => text.includes('失去追蹤'))).toBe(false)
+
+  await clock.advance(5000)
+  await verifying
+  expect(data.state.pendingActions[ALPHA]).toBeUndefined()
   expect(verifyRuns(data)).toBe(1)
   await ui.unmount()
 })
