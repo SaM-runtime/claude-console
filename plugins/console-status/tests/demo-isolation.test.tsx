@@ -67,7 +67,7 @@ function fixture(on: any) {
   on('ui.toast', (_: any, e: any) => { data.toasts.push(e.text); return { value: undefined } })
   on('ui.open', () => ({ value: {} }))
   on('ui.close', () => ({ value: undefined }))
-  on('command.register', (_: any, e: any) => ({ command: e.command }))
+  on('command.register', () => ({ value: undefined }))
   on('prompt.fill', () => { data.promptFills += 1; return { isFilled: true } })
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
   on('turn.complete', (_: any, e: any) => ({ text: e.answer }))

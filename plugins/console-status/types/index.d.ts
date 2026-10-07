@@ -36,6 +36,9 @@ export type PrInfo = {
   checks: { pass: number; fail: number; pending: number; failing: string[] }
 }
 
+/** The console session's last main-thread request: when it started, its context size and model, the cache TTL in force. */
+export type CacheClock = { at: number; tokens: number; model: string; ttl: '5m' | '1h' }
+
 export type FallbackOffer = { kind: 'sync' | 'continue'; reason: string; at: number }
 
 export type FeedEvent = { at: number; text: string; tone: 'amber' | 'teal' | 'blue' | 'red' | 'green' }
@@ -56,6 +59,8 @@ export type Snapshot = {
   blocked: Blocked[]
   codex: string
   contextPercent: number | null
+  /** What this console session has cost so far (USD at API prices), when the host keeps a ledger. */
+  costUsd?: number
   limits?: { kind: string; percent: number; resetsAt?: string }[]
   /** Codex quota from its newest session log: windows, credit balance, when it was read. */
   codexQuota?: { at: string; limits: { label: string; percent: number; resetsAt?: string }[]; credits?: string } | null
@@ -90,6 +95,9 @@ declare module 'claude-code' {
       actionPulse: number
       reviewRequests: Record<string, ReviewRequest>
       fallbackOffers: Record<string, FallbackOffer>
+      cacheClock: CacheClock | null
+      cacheTick: number
+      isTurnRunning: boolean
     }
   }
 }

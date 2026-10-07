@@ -71,6 +71,10 @@ Marketplace management is covered by the official [plugin marketplace documentat
 | `codexFallback` | What to do when Codex is unusable: `ask`, `claude`, or `off` | `ask` |
 | `codexMinQuotaPercent` | Codex quota (percent remaining) below which the fallback applies | `10` |
 | `gitProbe` | `on`: each project's Git state (branch, uncommitted, unpushed) plus its pull request and CI checks through `gh`; `git`: local Git only; `off`: neither (see [Git, PR and CI](#git-pr-and-ci)) | `on` |
+| `commandGuard` | `ask`: an irreversible shell command asks you first (see [Command guard](#command-guard)); `deny`: refuse them; `off`: no guard | `ask` |
+| `cacheHint` | `on`: show the console's prompt-cache countdown and re-write cost (see [Prompt cache and cost](#prompt-cache-and-cost)); `off`: hide | `on` |
+| `cacheTtl` | `auto` (5 minutes until an idle gap proves one hour), `5m` or `1h` | `auto` |
+| `cacheWritePrice` | USD per million cache-write tokens for the estimate; empty uses the model's list price | Empty |
 | `projectMode` | `auto`: a session opened inside a registered project switches to project mode (see [Pipeline and project mode](#pipeline-and-project-mode)); `off`: always the multi-project console | `auto` |
 
 Paths beginning with `~` expand on Windows, macOS, and Linux. Run `/reload-plugins` or start another Claude Code session after plugin configuration changes. See [the registry example](workflow/projects-scope.example.md).
@@ -261,6 +265,20 @@ The project table has a six-mark `流程` column (from 64 columns wide); project
 - a prompt carries a short progress note (stages, current step, next step, decision, gate) only when that progress changed since the last one.
 
 `/console mode console` turns it off for the session, `/console mode project` forces it, `/console mode auto` follows `projectMode`.
+
+## Command guard
+
+A Bash or PowerShell command that cannot be taken back asks first in Claude Code's own question dialog, with the reason and the command, even when the permission mode or an allow rule would run it unseen: `執行一次` runs it once, anything else (or no one to ask, as in `claude -p`) refuses it and tells the model not to retry the same effect another way. The activity feed records each decision.
+
+It covers recursive deletes (`rm -r`, `Remove-Item -Recurse`, `rd /s`) except build output and caches (`node_modules`, `dist`, `build`, `.next`, `target`, `coverage`, `__pycache__` and similar), force or mirror pushes and remote deletes, `git reset --hard`, `git clean -f`, discarding all working-tree changes, `git branch -D`, `git stash drop|clear`, history rewrites, `DROP TABLE`/`TRUNCATE TABLE`, disk formatting and raw device writes, `terraform destroy`, bulk `kubectl delete`, `helm uninstall`, `docker system prune -a`, `gh repo|release delete`, and publishing (`npm|pnpm|yarn|cargo publish`, `gh release create`). `--force-with-lease`, single-file deletes and ordinary pushes pass.
+
+The guard runs in every session where the plugin is enabled, background executors included: a background agent that hits it waits for an answer like any other question (attach to it), and one with no one to ask is refused. Set `commandGuard` to `deny` to refuse without asking, or `off` to turn it off.
+
+## Prompt cache and cost
+
+The console session's prompt cache lasts five minutes (or an hour) from the start of its last request. After that, the next prompt re-writes the whole context at the cache-write price. The band shows `快取 4m` while the cache is warm (amber in the last minute) and `快取已冷 $0.90` once it is cold; a toast warns a minute before it expires and again when a prompt goes out on a cold cache. The pane's Claude frame shows the same line with the context size, and `本次花費`, this session's cost at API list prices. Nothing shows while a turn runs or when the context is under 20k tokens.
+
+The estimate is the context tokens of the last request times the model's input list price times 1.25 (five-minute TTL) or 2 (one hour); set `cacheWritePrice` for other rates (a gateway, negotiated pricing). With `cacheTtl: auto` the TTL starts at five minutes and becomes one hour, remembered across sessions, once a request after a 5–60 minute gap still reads most of the context from the cache. On a subscription plan these are API-price equivalents, not charges.
 
 ## Workflow
 

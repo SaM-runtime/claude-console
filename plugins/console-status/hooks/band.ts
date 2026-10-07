@@ -25,7 +25,7 @@ function clipColumns(value: string, max: number): string {
  * One-line band content in strict priority order. The caller renders the returned items with a
  * one-column gap, then a spacer and the reserved right-hand button.
  */
-export function layoutBand(snapshot: Snapshot, options: { columns: number; demo: boolean; paneOpen: boolean }): BandLayout {
+export function layoutBand(snapshot: Snapshot, options: { columns: number; demo: boolean; paneOpen: boolean; cache?: string }): BandLayout {
   const columns = Math.max(0, Math.floor(Number.isFinite(options.columns) ? options.columns : 0))
   const compact = columns < 40
   const fullButton = compact ? '⌗' : '⌗ 面板'
@@ -69,6 +69,7 @@ export function layoutBand(snapshot: Snapshot, options: { columns: number; demo:
   const ciFail = snapshot.projects.filter(p => p.pr?.state === 'OPEN' && p.pr.checks.fail > 0).length
   if (ciFail) candidates.push({ id: 'ci', text: compact ? `CI✕${ciFail}` : `CI 失敗 ${ciFail}` })
   if (context) candidates.push({ id: 'context', text: compact ? `${snapshot.contextPercent}%` : `上下文 ${snapshot.contextPercent}%` })
+  if (options.cache) candidates.push({ id: 'cache', text: options.cache })
   state('IDLE', '○', '閒置')
 
   for (const candidate of candidates) {
