@@ -39,6 +39,10 @@ import { layoutBand } from './band'
 const dispatchRevision = atom({ plugin: 'console-status', key: 'dispatchRevision' } as const, 0)
 
 const PANE = 'console-status'
+// What the plugins beneath answered for the band draws nothing: no tree, or Boxes and Texts holding none.
+const isEmptyTree = (node: any): boolean =>
+  node === null || node === undefined || node === false || node === '' ||
+  ((node.type === 'Box' || node.type === 'Text') && (node.children ?? []).every(isEmptyTree))
 type GlobalField = 'executor' | 'model' | 'effort'
 const SOURCE_LABEL: Record<string, string> = { pane: '面板覆寫', registry: '登錄表', global: '全域' }
 const TICK_MS = 60_000
@@ -1121,6 +1125,8 @@ export const register: Register = (on, options) => {
   const SHOWN: State[] = ['ACTION', 'GATE', 'RUNNING', 'SYNC', 'IDLE']
   const TONE: Record<string, string> = { amber: C.amber, teal: C.teal, blue: C.blue, red: C.red, green: C.green }
 
+  // The band shares its row with other plugins' bands (paste-preview's thumbnails, say):
+  // what the plugins beneath draw stacks under ours instead of being hidden by it.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, nextHook) => {
     const generation = dataGeneration
     const demo = await demoEnabled($)
@@ -1131,11 +1137,12 @@ export const register: Register = (on, options) => {
     const paneOpen = await read($, isPaneOpen)
     const columns = Math.max(0, Math.floor(e.props.bodyColumns ?? 80))
     const here = await focused($, options, s)
+    let mine: any
     if (here && generation === dataGeneration) {
       const button = paneOpen ? '主控台 ▾' : '主控台 ▸'
       const buttonWidth = button.length + 1
       const others = s.projects.filter(p => p !== here.project && (hasAsk(p) || parseGate(p.gate))).length
-      return (
+      mine = (
         <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
           <Box flexShrink={0} height={1}><Text bold color={C.strong}>{here.project.name} </Text></Box>
           <Box flexGrow={1} flexShrink={1} height={1} overflow="hidden">
@@ -1150,27 +1157,30 @@ export const register: Register = (on, options) => {
           </Box>
         </Box>
       )
+    } else {
+      await read($, cacheTick)
+      const cv = demo || cacheMode(options) === 'off' ? null : cacheView(await read($, cacheClock), await $.clock.now(), await read($, isTurnRunning), priceOverride((options as any).cacheWritePrice))
+      const chip = cv ? cacheChip(cv, columns < 40) : null
+      const band = layoutBand(s, { columns, demo, paneOpen, ...(chip ? { cache: chip.text } : {}) })
+      if (generation !== dataGeneration) mine = <Box height={1} width={columns} overflow="hidden"><Text color={C.dim} wrap="truncate-end">{demoActive ? ' 示範資料 ' : '讀取中…'}</Text></Box>
+      else mine = (
+        <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
+          <Box gap={1} flexShrink={0} height={1}>
+            {band.items.map(item => <Box key={'band-' + item.id} width={item.width} flexShrink={0} height={1} overflow="hidden">
+              <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' || item.id === 'ci' ? C.red : item.id === 'cache' ? (chip?.tone === 'red' ? C.red : chip?.tone === 'amber' ? C.amber : C.green) : FG[item.id as State] ?? C.text}
+                bold={item.id === 'cache' && chip?.tone === 'amber'}
+                backgroundColor={item.id === 'demo' ? C.bar : item.id === 'cache' && chip?.tone === 'amber' ? C.amberBg : undefined}>{item.text}</Text>
+            </Box>)}
+          </Box>
+          <Box flexGrow={1} minWidth={band.items.length ? 1 : 0} />
+          <Box width={band.buttonWidth} flexShrink={0} height={1} overflow="hidden">
+            <Button key="pane" plain dimColor label={band.button} onPress={() => void openPane($)} />
+          </Box>
+        </Box>
+      )
     }
-    await read($, cacheTick)
-    const cv = demo || cacheMode(options) === 'off' ? null : cacheView(await read($, cacheClock), await $.clock.now(), await read($, isTurnRunning), priceOverride((options as any).cacheWritePrice))
-    const chip = cv ? cacheChip(cv, columns < 40) : null
-    const band = layoutBand(s, { columns, demo, paneOpen, ...(chip ? { cache: chip.text } : {}) })
-    if (generation !== dataGeneration) return <Box height={1} width={columns} overflow="hidden"><Text color={C.dim} wrap="truncate-end">{demoActive ? ' 示範資料 ' : '讀取中…'}</Text></Box>
-    return (
-      <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
-        <Box gap={1} flexShrink={0} height={1}>
-          {band.items.map(item => <Box key={'band-' + item.id} width={item.width} flexShrink={0} height={1} overflow="hidden">
-            <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' || item.id === 'ci' ? C.red : item.id === 'cache' ? (chip?.tone === 'red' ? C.red : chip?.tone === 'amber' ? C.amber : C.green) : FG[item.id as State] ?? C.text}
-              bold={item.id === 'cache' && chip?.tone === 'amber'}
-              backgroundColor={item.id === 'demo' ? C.bar : item.id === 'cache' && chip?.tone === 'amber' ? C.amberBg : undefined}>{item.text}</Text>
-          </Box>)}
-        </Box>
-        <Box flexGrow={1} minWidth={band.items.length ? 1 : 0} />
-        <Box width={band.buttonWidth} flexShrink={0} height={1} overflow="hidden">
-          <Button key="pane" plain dimColor label={band.button} onPress={() => void openPane($)} />
-        </Box>
-      </Box>
-    )
+    const below = await nextHook(e).catch(() => null)
+    return isEmptyTree(below) ? mine : <Box flexDirection="column" width={columns}>{mine}{below}</Box>
   })
 
   // Rows drawn by the Client module report presses, right-clicks and keys here.
