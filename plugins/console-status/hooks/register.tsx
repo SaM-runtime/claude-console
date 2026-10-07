@@ -46,6 +46,7 @@ const isEmptyTree = (node: any): boolean =>
   node === null || node === undefined || node === false || node === '' ||
   ((node.type === 'Box' || node.type === 'Text') && (node.children ?? []).every(isEmptyTree))
 type GlobalField = 'executor' | 'model' | 'effort'
+const PICKER_LABEL: Record<GlobalField, string> = { executor: '派工', model: '模型', effort: '強度' }
 const SOURCE_LABEL: Record<string, string> = { pane: '面板覆寫', registry: '登錄表', global: '全域' }
 const TICK_MS = 60_000
 const SLOW_MS = 5 * 60_000
@@ -61,6 +62,8 @@ const feedAtom = atom({ plugin: 'console-status', key: 'feed' } as const, [])
 const isRefreshing = atom({ plugin: 'console-status', key: 'isRefreshing' } as const, false)
 const hovered = atom({ plugin: 'console-status', key: 'hovered' } as const, null)
 const menuFor = atom({ plugin: 'console-status', key: 'menuFor' } as const, null)
+/** Which dispatch setting has its choices spread out under the pane header, if any. */
+const dispatchPicker = atom({ plugin: 'console-status', key: 'dispatchPicker' } as const, null)
 const pendingActions = atom({ plugin: 'console-status', key: 'pendingActions' } as const, {})
 const continueConfirmations = atom({ plugin: 'console-status', key: 'continueConfirmations' } as const, {})
 const verificationResults = atom({ plugin: 'console-status', key: 'verificationResults' } as const, {})
@@ -1281,11 +1284,11 @@ export const register: Register = (on, options) => {
   // Palette: quiet ground, colour only where it carries state (amber decide, teal running, blue sync).
   // What each label means, revealed under it while the pointer is over it.
   const HELP: Record<string, string> = {
-    dispatch_executor: '執行者：claude 使用原生背景 session；codex 使用 Companion。切換時清空模型與 effort，已派出的工作繼續使用原執行者。',
-    dispatch_model: '派工模型：點一下輪換並存入 dispatch.json；影響後續觸發的派工。也可用 /console model <name> 自由輸入。',
-    project_executor: '專案執行者：點一下輪換此專案的覆寫（沿用 → claude → codex → manual），存入 dispatch.json 的 projects。優先序：面板覆寫 > 登錄表 Executor 欄 > 全域。manual 代表面板不派工，只做 CARD、驗證與關卡。',
+    dispatch_executor: '執行者：點一下展開 claude、codex 再選定。claude 使用原生背景 session；codex 使用 Companion。切換時清空模型與 effort，已派出的工作繼續使用原執行者。',
+    dispatch_model: '派工模型：點一下展開可選模型，再點一個選定並存入 dispatch.json；影響後續觸發的派工。「預設」交給執行器決定；也可用 /console model <name> 自由輸入。',
+    project_executor: '專案執行者：點一下選定此專案的覆寫（沿用、claude、codex、manual），存入 dispatch.json 的 projects。優先序：面板覆寫 > 登錄表 Executor 欄 > 全域。manual 代表面板不派工，只做 CARD、驗證與關卡。',
     fallback: 'Codex 不可用（額度低於門檻、broker 過期或找不到 companion）時，codexFallback=ask 不會派工；按此改由 Claude 執行同一個提示，任務會標記 codex→claude。',
-    dispatch_effort: '派工 effort：點一下輪換模型支援的推理強度並儲存；也可用 /console effort <level>。切換模型時不支援的 effort 會清空。',
+    dispatch_effort: '派工 effort：點一下展開模型支援的推理強度，再點一個選定並儲存；也可用 /console effort <level>。切換模型時不支援的 effort 會清空。',
     ACTION: '需決策：專案 STATUS 卡片的「等使用者」欄有內容，代表該專案有業務決策需由使用者拍板。',
     GATE: '待審核：STATUS 的 spec／review 關卡送交主控台判斷；release 只整理可否上線與理由，最後由你決定，不會自動上線。',
     action_verify: '執行 CARD 驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。新的或被修改過的指令會先完整顯示，10 秒內再按一次才執行。只應填入本機驗證，不可填正式環境操作。',
@@ -1471,9 +1474,12 @@ export const register: Register = (on, options) => {
     const { config, dispatch } = demo
       ? { config: demoContext?.config ?? resolveConfig(options, '', '', '/tmp'), dispatch: demoContext?.dispatch ?? { settings: { executor: s.executor ?? 'claude', model: '', effort: '' }, models: [] } }
       : await renderDispatch($, options, `${revision}|${s.at}`)
-    const cycle = async (field: GlobalField) => {
+    const picker = await read($, dispatchPicker)
+    const togglePicker = (field: GlobalField) => void update($, dispatchPicker, v => (v === field ? null : field))
+    const choose = async (field: GlobalField, value: string) => {
       try {
-        const saved = await changeDispatch($, config, field)
+        const saved = await changeDispatch($, config, field, value)
+        await update($, dispatchPicker, () => null)
         if (await demoEnabled($)) demoContext = { config, dispatch: await readDispatch($, config) }
         await update($, dispatchRevision, v => v + 1)
         if (field === 'executor') await refresh($, options, true)
@@ -1499,6 +1505,14 @@ export const register: Register = (on, options) => {
         $.ui.toast(`${p.name} 執行者：${eff.executor}（${SOURCE_LABEL[eff.source]}）`)
         void refresh($, options, true)
       } catch (error) { $.ui.toast(`設定未儲存：${error instanceof Error ? error.message : String(error)}`) }
+    }
+    // '' is the executor's own default; a model set by /console model stays listed while it is chosen.
+    const pickerChoices = (field: GlobalField): string[] => {
+      const current = dispatch.settings[field] ?? ''
+      const values = field === 'executor' ? ['claude', 'codex']
+        : field === 'model' ? ['', ...dispatch.models.map(m => m.model)]
+        : ['', ...effortOptions(dispatch.settings.executor, dispatch.models, dispatch.settings.model)]
+      return values.includes(current) ? values : [...values, current]
     }
     const codexShown = dispatch.settings.executor === 'codex' || !!s.codexInUse
     const n = next(s)
@@ -1776,19 +1790,30 @@ export const register: Register = (on, options) => {
           <Box gap={1} flexWrap="wrap">
             <Text color={C.dim}>派工</Text>
             <Box hover={{ scope: 'help-dispatch_executor' }}>
-              <Button key="dispatch-executor" plain label={dispatch.settings.executor} onPress={() => cycle('executor')} />
+              <Button key="dispatch-executor" plain label={dispatch.settings.executor} onPress={() => togglePicker('executor')} />
             </Box>
             <Text color={C.faint}>·</Text>
             <Text color={C.dim}>模型</Text>
             <Box hover={{ scope: 'help-dispatch_model' }}>
-              <Button key="dispatch-model" plain label={dispatch.settings.model || '預設'} onPress={() => cycle('model')} />
+              <Button key="dispatch-model" plain label={dispatch.settings.model || '預設'} onPress={() => togglePicker('model')} />
             </Box>
             <Text color={C.faint}>·</Text>
             <Text color={C.dim}>強度</Text>
             <Box hover={{ scope: 'help-dispatch_effort' }}>
-              <Button key="dispatch-effort" plain label={dispatch.settings.effort || '預設'} onPress={() => cycle('effort')} />
+              <Button key="dispatch-effort" plain label={dispatch.settings.effort || '預設'} onPress={() => togglePicker('effort')} />
             </Box>
           </Box>
+          {picker && <Box key="dispatch-picker" gap={1} flexWrap="wrap">
+            <Text color={C.dim}>{PICKER_LABEL[picker]}</Text>
+            {pickerChoices(picker).map(value => {
+              const chosen = (dispatch.settings[picker] ?? '') === value
+              const label = value || '預設'
+              return <Button key={`dispatch-${picker}-${value || 'default'}`} plain dimColor={!chosen}
+                label={chosen ? `[${label}]` : label} onPress={() => { if (chosen) togglePicker(picker); else void choose(picker, value) }} />
+            })}
+            {picker === 'model' && !dispatch.models.length && <Text color={C.dim}>模型快取讀不到；用 /console model &lt;name&gt; 輸入</Text>}
+            <Button key="dispatch-picker-close" plain dimColor label="✕" onPress={() => togglePicker(picker)} />
+          </Box>}
         </Box>
 
         {here && (

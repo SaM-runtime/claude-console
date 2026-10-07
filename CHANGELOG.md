@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.0
+
+- **Executor, model and effort are picked from a list.** Each press on a control under the pane title used to move to the next value, so reaching `max` from `low` meant pressing through every level and writing each one to `dispatch.json` on the way, and the model never came back to `預設`. A press now spreads the choices out on the next line (`模型  [預設]  fable  opus  sonnet  ✕`), with the current value in brackets. Pressing one saves it and closes the line; the current value, `✕` or the label again closes it without writing. `預設` hands the choice back to the executor. Efforts follow the chosen model. A model typed with `/console model <name>` is listed while it is chosen. Without a readable Codex model cache, the line says to use `/console model <name>` instead of showing a toast.
+- **Hover help** for the project executor row says a press picks the value; it described cycling, which the row no longer does.
+
 ## 0.8.3
 
 - **`下一步：無（…）` is nothing to continue.** A none word followed by a note in brackets (`無（等使用者決定）`, `無(等決策)`) was read as a real next step: the pipeline showed `待繼續：無（等使用者決定）` and `⇢ 繼續下一步` offered to dispatch it. The next step and `等使用者` now share one check, which already accepted brackets for the ask.

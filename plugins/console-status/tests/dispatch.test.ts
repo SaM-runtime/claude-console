@@ -60,7 +60,7 @@ test('fictional cache preserves model and effort order, ignores malformed and du
   expect(nextOption('custom', [])).toBe('custom')
 })
 
-test('terminal and mobile buttons cycle persisted settings, including model-specific efforts', {
+test('terminal and mobile labels spread out their choices and persist the one picked, including model-specific efforts', {
   options: { executor: 'codex' },
 }, async ($, on) => {
   mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
@@ -80,21 +80,48 @@ test('terminal and mobile buttons cycle persisted settings, including model-spec
     settings = '{"executor":"codex","model":"fiction-alpha","effort":"high"}'
     const ui = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface,
       props: { title: 'Console', isFocused: true, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any)
+    // Demo data shows default settings until a write reads the real file.
+    await $.command.run({ command: 'console', args: 'effort high' } as any)
+    // A label spreads its choices out; the current one is bracketed, 預設 is the executor's own default.
     await ui.press({ key: 'dispatch-model' })
+    expect((await ui.find({ key: 'dispatch-model-fiction-alpha' }))?.text).toBe('[fiction-alpha]')
+    expect((await ui.find({ key: 'dispatch-model-default' }))?.text).toBe('預設')
+    await ui.press({ key: 'dispatch-model-fiction-beta' })
     expect(JSON.parse(settings)).toEqual({ executor: 'codex', model: 'fiction-beta', effort: '' })
+    expect(await ui.find({ key: 'dispatch-picker' })).toBeUndefined()
     expect(await ui.find({ type: 'Button', key: 'dispatch-model' } as any)).toBeDefined()
+    // Efforts follow the chosen model.
     await ui.press({ key: 'dispatch-effort' })
-    expect(JSON.parse(settings).effort).toBe('medium')
-    await ui.press({ key: 'dispatch-effort' })
+    expect(await ui.find({ key: 'dispatch-picker' })).toBeDefined()
+    expect(await ui.find({ key: 'dispatch-effort-high' })).toBeUndefined()
+    await ui.press({ key: 'dispatch-effort-max' })
     expect(JSON.parse(settings).effort).toBe('max')
+    // The chosen value, ✕ or the label again close the choices without writing.
+    const before = settings
     await ui.press({ key: 'dispatch-effort' })
-    expect(JSON.parse(settings).effort).toBe('medium')
+    await ui.press({ key: 'dispatch-effort-max' })
+    expect(await ui.find({ key: 'dispatch-picker' })).toBeUndefined()
+    await ui.press({ key: 'dispatch-effort' })
+    await ui.press({ key: 'dispatch-picker-close' })
+    expect(await ui.find({ key: 'dispatch-picker' })).toBeUndefined()
+    await ui.press({ key: 'dispatch-effort' })
+    await ui.press({ key: 'dispatch-effort' })
+    expect(await ui.find({ key: 'dispatch-picker' })).toBeUndefined()
+    expect(settings).toBe(before)
+    await ui.press({ key: 'dispatch-effort' })
+    await ui.press({ key: 'dispatch-effort-default' })
+    expect(JSON.parse(settings).effort).toBe('')
     await ui.press({ key: 'dispatch-model' })
-    expect(JSON.parse(settings)).toEqual({ executor: 'codex', model: 'fiction-alpha', effort: '' })
+    await ui.press({ key: 'dispatch-model-default' })
+    expect(JSON.parse(settings)).toEqual({ executor: 'codex', model: '', effort: '' })
+    // Without a readable model cache: the default, a model typed with /console model, and how to type one.
     cache = '{'
+    await $.command.run({ command: 'console', args: 'model custom-x' } as any)
     await ui.press({ key: 'dispatch-model' })
-    expect(JSON.parse(settings).model).toBe('fiction-alpha')
-    expect(toasts.some(t => t.includes('/console model'))).toBe(true)
+    expect((await ui.find({ key: 'dispatch-model-custom-x' }))?.text).toBe('[custom-x]')
+    expect(await ui.find({ key: 'dispatch-model-fiction-alpha' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /\/console model/ })).toBeDefined()
+    await ui.press({ key: 'dispatch-picker-close' })
     cache = JSON.stringify({ models: [{ slug: 'fiction-alpha', supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }] }, { slug: 'fiction-beta', supported_reasoning_levels: [{ effort: 'medium' }, { effort: 'max' }] }] })
     await ui.unmount()
   }
