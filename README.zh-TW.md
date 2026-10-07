@@ -204,7 +204,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | ⇢ 繼續下一步 | IDLE、有下一步、無待決或關卡，且執行者不是 `manual` | 六秒內再按一次後派該專案的執行器（面板會顯示將派出的下一步） |
 | ⇢ 改用 Claude 派工 | `codexFallback: ask` 擋下的 Codex 派工 | 把同一動作交給 Claude，並記錄為備援 |
 | ✎ 做決定 | `等使用者` 非空 | 預填草稿並附一次性專案 context；送出時才使用 Claude |
-| ⚑ 審核關卡／最終審核 | 可辨識的 spec、review、release | 交主控台 Claude 審核；release 審核不會執行 release |
+| ⚑ 審核關卡／最終審核 | 可辨識的 spec、review、release | 交主控台 Claude 審核；release 審核不會執行 release。該輪結束、CARD 關卡變更，或十分鐘內沒有審核輪在跑，這一列就會解鎖 |
 | ↗ 開啟 STATUS.md | 一律 | 請編輯器開啟檔案 |
 
 **什麼時候算待同步。** 只要 CARD 的「更新」時間落在工作開始的那一分鐘或之後，就算這個工作已經寫回：離開前更新過 CARD 的工作不會被判成待同步。只有結束時沒動到 CARD（或失敗）的工作，才會讓專案停在待同步。

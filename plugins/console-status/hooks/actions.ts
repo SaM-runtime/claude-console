@@ -1,4 +1,4 @@
-import type { Project, ActionKind, ContinueConfirmation, VerificationResult } from '../types'
+import type { Project, ActionKind, ContinueConfirmation, VerificationResult, PendingAction, ReviewRequest } from '../types'
 import type { State } from './logic'
 import { hasAsk, parseGate, saysNone } from './logic'
 
@@ -30,6 +30,41 @@ export function actionKinds(project: Project, state: State): ActionKind[] {
   if (hasAsk(project)) kinds.push('decide')
   if (gate && gate.kind !== 'unknown') kinds.push('gate')
   return [...kinds, 'open']
+}
+
+/** A submitted review may wait this long for a turn to finish it before the row unlocks by itself. */
+export const GATE_PENDING_MS = 10 * 60_000
+
+/**
+ * Whether a turn's text is the review a request submitted. The host may wrap a plugin's prompt
+ * (`The console-status plugin sent a message:` above it, a note below it), so the prompt's first
+ * line found inside the turn's text counts as much as the exact text.
+ */
+export function reviewTurnMatches(request: { text: string }, turnText: string): boolean {
+  if (turnText === request.text) return true
+  const marker = request.text.split(/\r?\n/).map(line => line.trim()).find(line => line) ?? ''
+  return marker.length >= 12 && turnText.includes(marker)
+}
+
+/** A pending review whose CARD no longer carries a gate: over, as far as the row is concerned. */
+export function staleGate(pending: PendingAction | undefined, project: Project): boolean {
+  return !!pending && pending.kind === 'gate' && !parseGate(project.gate)
+}
+
+const sameGate = (current: string | undefined, submitted: string | undefined) => submitted === undefined || (current ?? '').trim() === submitted.trim()
+
+/**
+ * Why a pending action should be dropped, or null while someone still owns it: a review whose gate the CARD
+ * moved past, or that waited GATE_PENDING_MS with no turn running for it; any other action nobody in this
+ * plugin lifetime holds the lock for, which only an earlier lifetime (before a reload) can have left behind.
+ */
+export function stalePendingReason(pending: PendingAction, request: ReviewRequest | undefined, project: Project | undefined, now: number, locked: boolean, turnRunning: boolean): string | null {
+  if (pending.kind !== 'gate') return locked ? null : '動作已失去追蹤'
+  if (!request) return locked ? null : '審核已失去追蹤'
+  if (project && !sameGate(project.gate, request.gate)) return '關卡已變更'
+  if (request.turnId && turnRunning) return null
+  if (now - pending.at >= GATE_PENDING_MS) return '審核狀態已逾時'
+  return null
 }
 
 const SYNC_INSTRUCTION = '把最近完成的工作結果寫回 STATUS CARD，只改 CARD 與歷程，不做其他變更'

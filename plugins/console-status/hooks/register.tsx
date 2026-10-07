@@ -10,7 +10,7 @@ import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted } from './actions'
+import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -109,7 +109,9 @@ let updateCheck: Promise<UpdateInfo | null> | null = null
 const UPDATE_NOTIFIED_KEY = 'updateNotified'
 const RELOAD_DELAY_MS = 1500
 const RELOAD_WATCHDOG_MS = 20_000
-const actionLocks = new Set<string>()
+/** statusPath → the action holding its row, with a token so a lock let go of early is not released again later by its owner. */
+const actionLocks = new Map<string, { kind: ActionKind; token: number }>()
+let lockSeq = 0
 const earlyReviewStarts = new Map<string, string>()
 let selectionClaim: string | null = null
 
@@ -429,6 +431,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
       }
     })
     if (current()) {
+      await sweepPending($)
       await advanceSyncs($, options)
       await autoSync($, options)
     }
@@ -511,13 +514,16 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     return
   }
   if (actionLocks.has(statusPath)) return
-  actionLocks.add(statusPath)
+  const token = ++lockSeq
+  actionLocks.set(statusPath, { kind, token })
   let timer: { cancel(): void } | undefined
   let project: Project | undefined
   let ownsPending = false
   let keepPending = false
   try {
-    if ((await read($, pendingActions))[statusPath]) return
+    // A pending action the row still shows but nothing will finish (a review the CARD moved past or that
+    // timed out, an action left by an earlier plugin lifetime) is dropped here, so the press goes ahead.
+    if ((await read($, pendingActions))[statusPath] && !(await sweepPending($, { only: statusPath, ownToken: token })).length) return
     const current = await read($, snapshot)
     project = current?.projects.find(p => p.statusPath === statusPath)
     if (project && (kind === 'sync' || kind === 'continue') && dispatchBlockReason(project)) throw new Error(dispatchBlockReason(project))
@@ -647,13 +653,13 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       // PromptSubmitArgs has no context field, and calls from this plugin skip its own hook.
       // Carry the same selection block in the submitted text without consuming a user's draft selection.
       const text = `${gatePrompt(p)}\n\n${context ?? ''}`
-      await update($, reviewRequests, values => ({ ...values, [statusPath]: { text, projectName: p.name, at: now } }))
+      await update($, reviewRequests, values => ({ ...values, [statusPath]: { text, projectName: p.name, at: now, gate: p.gate ?? '' } }))
       try {
         const result = await $.prompt.submit({ text })
         if (result.drop) throw new Error(result.drop)
         let turnId: string | undefined
         for (const [id, startedText] of earlyReviewStarts) {
-          if (startedText === result.text) { turnId = id; break }
+          if (reviewTurnMatches({ text: result.text }, startedText)) { turnId = id; break }
         }
         await update($, reviewRequests, values => {
           const request = values[statusPath]
@@ -688,8 +694,54 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     if (!keepPending) timer?.cancel()
     try {
       if (ownsPending && !keepPending) await update($, pendingActions, values => { const next = { ...values }; delete next[statusPath]; return next })
-    } finally { actionLocks.delete(statusPath) }
+    } finally { if (actionLocks.get(statusPath)?.token === token) actionLocks.delete(statusPath) }
   }
+}
+
+/** Forgets a pending action and, unless told to keep it, its review request. A review's lock goes too, so the row can act again. */
+async function dropPending($: any, path: string, { request = true, keepToken }: { request?: boolean; keepToken?: number } = {}) {
+  await update($, pendingActions, values => { if (!values[path]) return values; const next = { ...values }; delete next[path]; return next })
+  if (request) await update($, reviewRequests, values => { if (!values[path]) return values; const next = { ...values }; delete next[path]; return next })
+  const lock = actionLocks.get(path)
+  if (lock?.kind === 'gate' && lock.token !== keepToken) actionLocks.delete(path)
+}
+
+/**
+ * Drops pending actions nothing will finish, so a row never stays locked: a review whose gate the CARD moved
+ * past, one that waited GATE_PENDING_MS with no turn running for it, and any action without a lock in this
+ * plugin lifetime. Runs after each refresh, at every main-thread turn end, on `/console off` (which also lets go
+ * of every review not running) and before a press on a row that still shows one. Returns the paths it dropped.
+ */
+async function sweepPending($: any, scope: { only?: string; ownToken?: number; offConsole?: boolean } = {}): Promise<string[]> {
+  const pending = await read($, pendingActions)
+  const paths = Object.keys(pending).filter(path => !scope.only || path === scope.only)
+  if (!paths.length) return []
+  const requests = await read($, reviewRequests)
+  const s = await read($, snapshot)
+  const now = await $.clock.now()
+  const turnRunning = await read($, isTurnRunning)
+  const dropped: { path: string; name: string; reason: string; keepRequest: boolean }[] = []
+  for (const path of paths) {
+    const entry = pending[path]
+    const request = requests[path]
+    const project = s?.projects.find(p => p.statusPath === path)
+    const lock = actionLocks.get(path)
+    const locked = !!lock && lock.token !== scope.ownToken
+    let reason = stalePendingReason(entry, request, project, now, locked, turnRunning)
+    if (!reason && scope.offConsole && entry.kind === 'gate' && !(request?.turnId && turnRunning)) reason = '主控台已關閉，審核狀態已清除'
+    if (!reason) continue
+    const name = (project?.name ?? request?.projectName ?? path).replace(/\s.*$/, '')
+    // A review turn already bound still reports its answer when it ends; only the row is let go now.
+    dropped.push({ path, name, reason, keepRequest: reason === '關卡已變更' && !!request?.turnId })
+  }
+  for (const item of dropped) await dropPending($, item.path, { request: !item.keepRequest, keepToken: scope.ownToken })
+  for (const item of dropped) {
+    const text = `${item.name}：${item.reason}，按鈕已解鎖`
+    // The pane is closing on /console off, and the display generation moves on: say it directly.
+    if (scope.offConsole) $.ui.toast(text, { timeoutMs: 8000 })
+    else await actionNotice($, text, false)
+  }
+  return dropped.map(item => item.path)
 }
 
 async function setSync($: any, statusPath: string, track: SyncProgress) {
@@ -977,6 +1029,8 @@ async function startConsole($: any, options: PluginOptions, remember: boolean, r
 
 /** `/console off`: back to a light session; the guard stays. */
 async function stopConsole($: any) {
+  // A review nobody is running for must not survive into the next /console; running work keeps its lock.
+  await sweepPending($, { offConsole: true })
   consoleActive = false
   dataGeneration++
   refreshTimer?.cancel(); refreshTimer = undefined
@@ -1067,7 +1121,7 @@ export const register: Register = (on, options) => {
     let hadUnbound = false
     await update($, reviewRequests, requests => Object.fromEntries(Object.entries(requests).map(([path, request]) => {
       if (!request.turnId) hadUnbound = true
-      if (!matched && !request.turnId && request.text === e.text) {
+      if (!matched && !request.turnId && reviewTurnMatches(request, e.text)) {
         matched = true
         return [path, { ...request, turnId: e.turnId }]
       }
@@ -1130,14 +1184,16 @@ export const register: Register = (on, options) => {
     if (!e.agentId) await update($, isTurnRunning, () => false)
     if (!e.agentId) {
       const requests = await read($, reviewRequests)
+      const started = earlyReviewStarts.get(e.turnId)
       for (const [path, request] of Object.entries(requests)) {
-        if (request.turnId !== e.turnId) continue
+        // Bound when it started, or recognised now by the prompt it carried (the host may have wrapped it).
+        if (request.turnId ? request.turnId !== e.turnId : !(started && reviewTurnMatches(request, started))) continue
         earlyReviewStarts.delete(e.turnId)
-        await update($, reviewRequests, values => { const rest = { ...values }; delete rest[path]; return rest })
-        await update($, pendingActions, values => { const rest = { ...values }; delete rest[path]; return rest })
+        await dropPending($, path)
         const answer = e.answer.trim().split(/\r?\n/).find(line => line.trim())?.slice(0, 120) ?? '請查看主控台回覆'
         await actionNotice($, `${request.projectName}：${e.reason === 'answer' ? `審核已回覆：${answer}` : `審核未完成（${e.reason}）`}`, e.reason === 'answer')
       }
+      await sweepPending($)
     }
     earlyReviewStarts.delete(e.turnId)
     if (consoleActive) void refresh($, options)
@@ -1428,7 +1484,8 @@ export const register: Register = (on, options) => {
       if (menuProject && !(await demoEnabled($))) {
         const kind = HOTKEYS[k]
         const state = list.find(r => r.full === menuProject.name)?.state
-        if (kind && state && actionKinds(menuProject, state).includes(kind) && !(await read($, pendingActions))[menuProject.statusPath]) {
+        const held = (await read($, pendingActions))[menuProject.statusPath]
+        if (kind && state && actionKinds(menuProject, state).includes(kind) && (!held || staleGate(held, menuProject))) {
           void triggerAction($, options, menuProject.statusPath, kind)
           return {}
         }
@@ -1624,8 +1681,10 @@ export const register: Register = (on, options) => {
     const primaryAction: ActionKind | null = targetState === 'ACTION' ? 'decide' : targetState === 'GATE' && parseGate(targetProject?.gate)?.kind !== 'unknown' ? 'gate' : targetState === 'SYNC' && targetProject && !isManual(targetProject) ? 'sync' : null
     const focus = sel ?? list[Math.max(0, cur)]?.full ?? null
     const menuProject = menu === null ? null : s.projects.find(x => x.name === menu) ?? null
+    // A review the CARD has moved past no longer holds its row; the next sweep forgets it.
+    const livePending = (p: Project) => staleGate(pending[p.statusPath], p) ? undefined : pending[p.statusPath]
     const actionButton = (p: Project, kind: ActionKind, key: string) => {
-      const active = pending[p.statusPath]
+      const active = livePending(p)
       const blocked = kind === 'continue' || kind === 'sync' ? dispatchBlockReason(p) : ''
       const confirming = confirmations[p.statusPath]?.signature === (kind === 'continue' ? workSignature(p) : kind === 'verify' ? verifySignature(p.verify) : null)
       const running = active?.kind === kind
@@ -1643,7 +1702,7 @@ export const register: Register = (on, options) => {
       const state = list.find(r => r.full === p.name)?.state ?? 'NOCARD'
       const kinds = actionKinds(p, state)
       const blockedReason = !isManual(p) ? dispatchBlockReason(p) : ''
-      const active = pending[p.statusPath]?.kind
+      const active = livePending(p)?.kind
       if (active && !kinds.includes(active)) kinds.unshift(active)
       const offer = p.executor === 'codex' ? offers[p.statusPath] : undefined
       // While a second press is armed, say exactly what it will do: the toast alone disappears.
@@ -1654,8 +1713,8 @@ export const register: Register = (on, options) => {
           {kinds.map(kind => actionButton(p, kind, prefix + kind))}
           {blockedReason && <Text key={prefix + 'blocked'} color={C.dim}>派工鎖定：{blockedReason}</Text>}
           {offer && <Box key={'help-' + prefix + 'fallback'} hover={{ scope: 'help-fallback' }}>
-            <Button key={prefix + 'fallback'} plain dimColor={!!pending[p.statusPath]} label={`⇢ 改用 Claude 派工（${actionLabel(offer.kind, p).replace(/^⇢\s*/, '')}）`} onPress={async () => {
-              if (!pending[p.statusPath]) await triggerAction($, options, p.statusPath, offer.kind, { useClaude: true })
+            <Button key={prefix + 'fallback'} plain dimColor={!!livePending(p)} label={`⇢ 改用 Claude 派工（${actionLabel(offer.kind, p).replace(/^⇢\s*/, '')}）`} onPress={async () => {
+              if (!livePending(p)) await triggerAction($, options, p.statusPath, offer.kind, { useClaude: true })
             }} />
           </Box>}
         </Box>

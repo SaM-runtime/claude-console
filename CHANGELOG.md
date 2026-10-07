@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1
+
+- **A row no longer stays locked after `⚑ 審核關卡`.** When the console was busy, the host queued the plugin's review prompt and handed it to the model wrapped (`The console-status plugin sent a message:` above it, a note below), so the turn's text never equalled the submitted one, the review was never tied to its turn, and the project's buttons stayed grey until a reload (twice on 2026-10-07; the second time a reload did not help either). A turn now counts as the review when it carries the prompt's first line, bound at its start or, for a submit that returns late, recognised at its end.
+- **Nothing pending is left forever.** After each refresh, at the end of every turn and before a press on a row that still shows a pending action, the console drops what nothing will finish: a review whose CARD gate was cleared or replaced (`關卡已變更`), one that waited ten minutes (`GATE_PENDING_MS`) with no turn running for it (`審核狀態已逾時`), and any action no lock in this plugin lifetime backs (`動作已失去追蹤`), each with a toast saying the buttons are unlocked. `/console off` lets go of every review not actually running, a submit that never returned included, while a verify or a dispatch in flight keeps its lock. A review turn already bound still reports its answer when it ends.
+- **A stale `⚑ 審核關卡` is not shown.** When the CARD no longer carries a gate, a pending review neither puts the button back nor greys the rest of the row: `▶ 執行驗證` and the other buttons work.
+
 ## 0.9.0
 
 - **Executor, model and effort are picked from a list.** Each press on a control under the pane title used to move to the next value, so reaching `max` from `low` meant pressing through every level and writing each one to `dispatch.json` on the way, and the model never came back to `預設`. A press now spreads the choices out on the next line (`模型  [預設]  fable  opus  sonnet  ✕`), with the current value in brackets. Pressing one saves it and closes the line; the current value, `✕` or the label again closes it without writing. `預設` hands the choice back to the executor. Efforts follow the chosen model. A model typed with `/console model <name>` is listed while it is chosen. Without a readable Codex model cache, the line says to use `/console model <name>` instead of showing a toast.
