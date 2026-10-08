@@ -112,6 +112,20 @@ export function dispatchPrompt(project: Project, kind: 'sync' | 'continue'): str
   return `${instruction}\nSTATUS：${project.statusPath}\n只在此專案授權的本機範圍作業。不得執行正式環境變更或 release；需要上線時填入 release 關卡，交主控台整理後由使用者決定。${rules}`
 }
 
+/**
+ * A sync in a new small session (`sync.session: fresh`, the default once a sync model is set) has no memory of
+ * the work: it learns what finished from the files, git and the executor digest that follows, and writes only what they show.
+ */
+const FRESH_SYNC_RULES = [
+  '這是新的 session，沒有先前的對話：先讀 STATUS.md、git log 與 git status，再看下面的執行者摘要，判斷最近完成了什麼。',
+  '只寫檔案、git 與摘要看得到的事實；看不出結果的項目寫「待確認」，不要推測或補做工作。',
+]
+
+/** A sync dispatched to a new session: the usual sync prompt, how to find the work without memory, and the digest. */
+export function freshSyncPrompt(project: Project, digest: string): string {
+  return `${dispatchPrompt(project, 'sync')}\n${FRESH_SYNC_RULES.join('\n')}\n${digest}`
+}
+
 /** A reply to an executor that stopped to ask: the person's words first, then the same rules a continue carries. */
 export function replyPrompt(project: Project, text: string): string {
   return `使用者在主控台回覆你上一輪的提問：\n${text.trim()}\n\n依這個回覆繼續；遵守任務骨架；結束時更新 STATUS CARD（含關卡欄）。\nSTATUS：${project.statusPath}\n只在此專案授權的本機範圍作業。不得執行正式環境變更或 release；需要上線時填入 release 關卡，交主控台整理後由使用者決定。\n${CONTINUE_RULES.join('\n')}`

@@ -98,6 +98,12 @@ export type SyncProgress = {
   endedAt?: number
   auto?: boolean
   detail?: string
+  /** The sync's own model (dispatch.json `sync`), shown beside the executor. */
+  model?: string
+  /** `executor:model|effort` of a sync model; a sync on it that fails or writes nothing stops using it. */
+  modelKey?: string
+  /** Ran in a new small session instead of the project's. */
+  fresh?: boolean
 }
 
 export type Snapshot = {
