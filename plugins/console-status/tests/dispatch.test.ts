@@ -132,6 +132,7 @@ test('row sync trigger reads latest file and omits each empty dispatch flag inde
 }, async ($, on) => {
   let settings = '{"executor":"codex","model":"fiction-current","effort":"high"}'
   let dispatched: string[] = []
+  let launched = 0
   let completedJobs = '{"jobs":[{"id":"fixture-result","jobClass":"task","status":"completed","completedAt":"2030-01-05T11:00:00Z"}]}'
   mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
   on('env.get', () => ({ value: 'C:/Users/example' }))
@@ -146,8 +147,10 @@ test('row sync trigger reads latest file and omits each empty dispatch flag inde
   on('process.run', (_, e) => {
     if (e.argv[0] !== 'node') return { value: { exitCode: 0, stdout: e.argv[0] === 'claude' ? '[]' : 'OK codex=0.0.0-test', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     dispatched = [...e.argv]
-    completedJobs = '{"jobs":[{"id":"new-job","jobClass":"task","status":"completed","completedAt":"2030-01-05T11:00:00Z"}]}'
-    return { value: { exitCode: 0, stdout: '{"jobId":"new-job"}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    // The sync itself never needs syncing; leave other finished work behind so the next round offers sync again.
+    launched++
+    completedJobs = `{"jobs":[{"id":"sync-${launched}","jobClass":"task","status":"completed","completedAt":"2030-01-05T11:00:00Z"},{"id":"other-${launched}","jobClass":"task","status":"completed","completedAt":"2030-01-05T11:00:00Z"}]}`
+    return { value: { exitCode: 0, stdout: `{"jobId":"sync-${launched}"}`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   const ui = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'terminal',

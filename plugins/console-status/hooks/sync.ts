@@ -3,6 +3,12 @@
 import type { Project, SyncProgress, SyncStage } from '../types'
 import { dispatchBlockReason, isManual } from './actions'
 
+/**
+ * What the CARD looked like to the console: its 更新 and the STATUS file's time. A sync is done when this
+ * moves, even if the executor left 更新 alone or wrote a time it guessed.
+ */
+export const cardStamp = (project: Pick<Project, 'updated' | 'statusMtime'>) => `${project.updated}|${project.statusMtime ?? ''}`
+
 /** A finished sync stays on screen this long, so its outcome is seen after the fact. */
 export const SYNC_KEEP_MS = 5 * 60_000
 /** A dispatch that never reached the executor (the session reloaded mid-dispatch) is dropped after this. */
@@ -26,7 +32,8 @@ export function advanceSync(track: SyncProgress, project: Project | undefined, n
   if (!project) return null
   if (isSyncEnded(track.stage)) return now - (track.endedAt ?? track.at) > SYNC_KEEP_MS ? null : track
   if (track.stage === 'dispatch') return now - track.at > DISPATCH_STALE_MS ? null : track
-  const cardChanged = project.updated !== track.cardAt
+  // A track from before the file time was kept holds 更新 alone.
+  const cardChanged = track.cardAt.includes('|') ? cardStamp(project) !== track.cardAt : project.updated !== track.cardAt
   const running = project.jobs.find(job => job.kind === 'running' && job.id === track.jobId)
   if (running) return { ...track, phase: running.phase || running.status }
   const task = (project.tasks ?? []).find(item => item.id === track.jobId)

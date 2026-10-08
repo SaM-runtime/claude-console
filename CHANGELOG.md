@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.5
+
+- **A sync that finished no longer leaves the project in 待同步.** Three causes, each reproduced in a test that failed before this change:
+  - The sync resumed the project's session, which remembered an older CARD `rev`. The rev rule read that as a conflict, so the sync stopped without writing. The continue prompt already said which rev counts (0.9.4); the sync prompt now does too, and with nothing new to record a sync still writes the time, the rev and one history line.
+  - `更新` is written by the executor, which may guess the time, write UTC, use `2030/1/5 9:05`, or leave the old value. Any of these could read as older than the job, so it stayed 待同步. Now the STATUS file's own modification time counts too (the later of the two is the CARD's write time), `更新` is read in more formats and honours a zone, and a CARD whose `更新` names the job (`· job <id>`) counts as written by it. Sync and continue prompts ask for the time from `date`/`Get-Date`; project mode's system prompt says the same.
+  - A Codex sync was known as a sync only from the prompt kept in Codex's state file. Without it, a finished sync could itself be taken for work needing a sync. The console now remembers which jobs it dispatched as syncs (kept across sessions).
+- **Sync progress uses the file time too.** A sync shows `● 寫回 STATUS` once STATUS.md is saved after the dispatch, even if `更新` did not change.
+
 ## 0.9.4
 
 - **Waiting sessions are listed as what they wait for.** Every `claude agents` entry with `state: blocked` was shown as `等待批准`, though none of them was at a permission prompt: on 2026-10-07 the pane listed nine, five retired by the daemon and four executors that had finished a turn on a question. Now `status: waiting` is `等待批准`, `status: idle` with `state: blocked` is `停在提問`, and any other blocked session stays `等待輸入`.
