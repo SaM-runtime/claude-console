@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {

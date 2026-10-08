@@ -28,7 +28,7 @@ import { commandPreview, dangerReason, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction } from '../types'
-import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
+import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody, METER } from './battery'
@@ -366,7 +366,6 @@ async function refresh($: any, options: PluginOptions, force = false) {
       return pr
     }
     const bases = registryRows.map(({ root }) => root.replace(/\/+$/, '').split('/').pop() ?? '')
-    const roots = registryRows.map(({ root }) => root)
     // Projects are independent: read them a few at a time instead of one after another.
     const loaded = await mapLimit(registryRows, REFRESH_CONCURRENCY, async ({ row, root }, index) => {
       const eff = effective[index]!
@@ -400,7 +399,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
     const formatWarning = stateFormatWarning()
     const companionWarning = [companion?.warning, formatWarning].filter(Boolean).join('；')
     const cur: Snapshot = {
-      at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, await io.session.id().catch(() => null) as string | null, roots, home), codex: codexInUse ? relevantCodex(codex, bases) : '',
+      at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, await io.session.id().catch(() => null) as string | null, registryRows.map(({ row, root }) => ({ root, name: row.name })), home), codex: codexInUse ? relevantCodex(codex, bases) : '',
       ...(codexInUse ? { codexInUse: true } : {}),
       ...(codexInUse && (companion || formatWarning) ? { companion: { path: companion?.path ?? '', source: companion?.source ?? 'none', ...(companionWarning ? { warning: companionWarning } : {}) } } : {}),
       contextPercent: usage?.context?.percent ?? null, error,
@@ -1382,7 +1381,7 @@ export const register: Register = (on, options) => {
     sync_progress: '同步進度：派工（送給執行者）→ 執行（執行者寫回中）→ 寫回 STATUS（CARD 的「更新」有變才算完成）。● 完成　◉ 進行中　○ 未到　✕ 停在這一步。',
     IDLE: '閒置：沒有任務、也沒有待決事項。',
     codex: 'Codex：companion broker 與已安裝的 Codex app 版本一致才算正常；過期時派工會失敗。',
-    sessions: '其他工作階段：屬於主控台或已登記專案的其他 Claude Code session，正停在等批准或等輸入，要切到該 session 處理。與「需決策」不同：這是操作層面的卡住，不是專案決策。',
+    sessions: '其他工作階段：屬於主控台或已登記專案的其他 Claude Code session，正在等待批准（權限提示）、停在提問（做完一輪停下來問問題）或等待輸入，要切到該 session 處理。已退休的不列；同一專案只列最新一條，最多 3 條。與「需決策」不同：這是操作層面的卡住，不是專案決策。',
     ctx: '上下文：本主控台 session 還剩多少上下文。用掉一半以上建議換新主控台。',
     // Rate-limit rows (`limit_<kind>`) are added as the host reports them, so a per-model window explains itself by name.
     version: '版本：目前安裝的 console-status 與 GitHub main 上的最新版，每 30 分鐘與每次載入時檢查。「⬆ 更新」從 marketplace 安裝新版（從本機 git 資料夾載入時改在該資料夾 git pull），完成後自動 /reload-plugins；也可輸入 /console update。',
@@ -2093,7 +2092,7 @@ export const register: Register = (on, options) => {
               })()}
             </Box>
           )}
-          {s.blocked.map((b, i) => <Text key={'b' + i + '-' + b.name} color={C.amber} wrap="truncate-end">{`  ・${b.name}：${b.why}`}</Text>)}
+          {blockedLines(s.blocked).map((line, i) => <Text key={'b' + i} color={C.amber} wrap="truncate-end">{`  ・${line}`}</Text>)}
           {codexShown && health !== 'ok' && s.codex.trim() && <Text color={health === 'stale' ? C.red : C.dim} wrap="truncate-end">{`  ・${s.codex}`}</Text>}
           {codexShown && s.companion && (s.companion.source !== 'configured' || s.companion.warning) && (
             <Text key="companion" color={s.companion.warning ? C.amber : C.dim} wrap="truncate-end">{`  ・companion：${s.companion.path || '（無）'}${s.companion.source === 'installed' || s.companion.source === 'cache' ? '（自動選用）' : ''}${s.companion.warning ? `　⚠ ${s.companion.warning}` : ''}`}</Text>

@@ -110,7 +110,9 @@ test('sessions: only this console or registered projects, never itself', () => {
   ]
   const b = relevantBlocked(agents as any, 'S1', ['C:/Users/me/.codex/worktrees/k/Project Alpha-App'], 'C:/Users/me')
   expect(b.map(x => x.name)).toEqual(['old-console', 'project alpha'])
-  expect(b[0].why).toBe('等待批准')
+  // Blocked without a status is not a permission prompt (0.9.4); `waiting` is.
+  expect(b.map(x => x.why)).toEqual(['等待輸入', '等待批准'])
+  expect(b[0].project).toBe('主控台')
 })
 
 test('selection context names the project, its STATUS and what it needs', () => {
