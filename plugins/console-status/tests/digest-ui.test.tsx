@@ -1,5 +1,6 @@
 import { expect, test, mock } from 'claude-code/testing'
 import { fixturePath } from './fixture-path'
+import { PROMPT_DIGEST_MS } from '../hooks/digest'
 
 const NOW = Date.parse('2030-01-05T12:00:00Z')
 const CLAUDE = 'C:/Users/example/.claude'
@@ -56,7 +57,7 @@ function fixture(on: any) {
   on('ui.open', () => ({ value: {} }))
   on('ui.close', () => ({ value: undefined }))
   on('prompt.submit', (_: any, e: any) => { data.submitted.push(e); return { text: e.text, context: e.context } })
-  return { data, clock }
+  return { data, clock, files }
 }
 const logReads = (data: { reads: string[] }, path: string) => data.reads.filter(p => p === path).length
 
@@ -153,5 +154,62 @@ test('a project with no executor record says 執行者摘要：無紀錄, and a 
   const context = (data.submitted.at(-1)?.context ?? []).join('\n')
   expect(context.includes('專案「Project Beta」')).toBe(true)
   expect(/執行者摘要：(無紀錄|無法讀取（.+）)/.test(context)).toBe(true)
+  await ui.unmount()
+})
+
+const contextOf = (data: { submitted: any[] }) => (data.submitted.at(-1)?.context ?? []).join('\n')
+
+test('(i) a slow digest read lets the prompt go after PROMPT_DIGEST_MS, carrying the project\'s last digest', OPTIONS, async ($, on) => {
+  const { data, clock, files } = fixture(on)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE())
+  await ui.press({ key: 'sel-Project Alpha' })
+  await ui.press({ key: 'detail' })
+  await clock.settle()
+  expect(logReads(data, ALPHA_LOG)).toBe(1)
+  // The executor moved on; reading its transcript now takes five seconds.
+  files[ALPHA_LOG] = transcript('npm run build', 'Alpha 第二輪。')
+  data.mtime = 2000
+  data.slow = 5000
+  const sending = $.prompt.submit({ text: '進度？' } as any)
+  await clock.advance(PROMPT_DIGEST_MS)
+  expect(data.submitted.length).toBe(1)
+  expect(contextOf(data).includes('執行者摘要：\n執行者：console-alpha')).toBe(true)
+  expect(contextOf(data).includes('最後一句：Alpha 完成。')).toBe(true)
+  await clock.advance(5000)
+  await sending
+  await ui.unmount()
+})
+
+test('(j) a slow digest read with nothing cached says 無法讀取（逾時）', OPTIONS, async ($, on) => {
+  const { data, clock } = fixture(on)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE())
+  await ui.press({ key: 'sel-Project Alpha' })
+  data.slow = 5000
+  const sending = $.prompt.submit({ text: '進度？' } as any)
+  await clock.advance(PROMPT_DIGEST_MS)
+  expect(data.submitted.length).toBe(1)
+  expect(contextOf(data).includes('執行者摘要：無法讀取（逾時）')).toBe(true)
+  await clock.advance(5000)
+  await sending
+  await ui.unmount()
+})
+
+test('(k) the read a prompt stopped waiting for goes on, and the next prompt carries what it found without reading again', OPTIONS, async ($, on) => {
+  const { data, clock } = fixture(on)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE())
+  await ui.press({ key: 'sel-Project Alpha' })
+  data.slow = 5000
+  const first = $.prompt.submit({ text: '進度？' } as any)
+  await clock.advance(PROMPT_DIGEST_MS)
+  await clock.advance(5000)
+  await first
+  expect(logReads(data, ALPHA_LOG)).toBe(1)
+  await ui.press({ key: 'sel-Project Alpha' })
+  await $.prompt.submit({ text: '再一次' } as any)
+  expect(contextOf(data).includes('最後一句：Alpha 完成。')).toBe(true)
+  expect(logReads(data, ALPHA_LOG)).toBe(1)
   await ui.unmount()
 })

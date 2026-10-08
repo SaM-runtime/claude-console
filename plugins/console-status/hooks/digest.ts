@@ -9,6 +9,9 @@ export const TAIL_CHARS = 65_536
 /** `$.fs.read` refuses files past 4 MiB; a larger transcript's tail is read by a small process instead. */
 export const READ_LIMIT = 4 * 1024 * 1024
 export const DIGEST_NONE = '執行者摘要：無紀錄'
+/** How long a prompt waits for a digest; past it, the project's last digest goes with it, or this note. */
+export const PROMPT_DIGEST_MS = 2000
+export const DIGEST_TIMEOUT = '執行者摘要：無法讀取（逾時）'
 
 export type DigestJob = { id?: string; launchName?: string; kind?: string; status?: string; phase?: string; sessionId?: string; nativeId?: string }
 export type DaemonRecord = { sessionId?: string; linkScanPath?: string; state?: string; detail?: string }

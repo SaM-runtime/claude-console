@@ -39,7 +39,7 @@ import { trackRowChanges } from './presentation'
 import { layoutBand } from './band'
 import { advanceSync, cardStamp, autoSyncJobs, autoSyncMode, bandSync, isSyncEnded, syncChip, syncStatus, syncStepsText } from './sync'
 import type { SyncProgress, ExecutorDigest } from '../types'
-import { DIGEST_NONE, digestContext, loadDigest } from './digest'
+import { DIGEST_NONE, DIGEST_TIMEOUT, PROMPT_DIGEST_MS, digestContext, loadDigest } from './digest'
 import type { DigestCache, DigestIo, DigestResult } from './digest'
 
 const dispatchRevision = atom({ plugin: 'console-status', key: 'dispatchRevision' } as const, 0)
@@ -95,6 +95,8 @@ const executorDigests = atom({ plugin: 'console-status', key: 'executorDigests' 
 const digestCache: DigestCache = new Map()
 const transcriptPaths = new Map<string, string>()
 const digestLoads = new Set<string>()
+/** statusPath → the last digest read for it, which a prompt carries when a fresh read takes too long. */
+const lastDigests = new Map<string, string[]>()
 /** When this plugin lifetime began (its first refresh); a reload starts a new one. */
 let lifetimeStart = 0
 /** Finished jobs auto-sync already dispatched a sync for (in `$.store`, so once per job across sessions). */
@@ -255,7 +257,9 @@ async function projectDigest($: any, options: PluginOptions, p: Project): Promis
       read: path => $.fs.read(path), exists: path => $.fs.exists(path), stat: path => $.fs.stat(path),
       list: path => $.fs.list(path), run: (argv, init) => $.process.run(argv, init),
     }
-    return await loadDigest(io, { root, claudeDir, sessionsPath: config.claudeSessionsPath }, digestCache, transcriptPaths, await $.clock.now())
+    const result = await loadDigest(io, { root, claudeDir, sessionsPath: config.claudeSessionsPath }, digestCache, transcriptPaths, await $.clock.now())
+    if (result.kind === 'ready') lastDigests.set(p.statusPath, result.lines)
+    return result
   } catch (error) {
     return { kind: 'error', error: error instanceof Error ? error.message : String(error) }
   }
@@ -263,7 +267,17 @@ async function projectDigest($: any, options: PluginOptions, p: Project): Promis
 
 /** The block a prompt about `p` carries; a digest that cannot be read never holds the prompt back. */
 async function digestBlock($: any, options: PluginOptions, p: Project): Promise<string> {
-  const result = await projectDigest($, options, p)
+  // The read goes on past the wait and fills the cache for the next prompt; the prompt does not wait for it.
+  const reading = projectDigest($, options, p).then(result => ({ result }))
+  let timer: { cancel(): void } | undefined
+  const waited = new Promise<null>(resolve => { timer = $.clock.after(PROMPT_DIGEST_MS, () => resolve(null)) })
+  const outcome = await Promise.race([reading, waited])
+  timer?.cancel()
+  if (!outcome) {
+    const last = lastDigests.get(p.statusPath)
+    return last ? digestContext(last) : DIGEST_TIMEOUT
+  }
+  const { result } = outcome
   return result.kind === 'ready' ? digestContext(result.lines) : result.kind === 'none' ? DIGEST_NONE : `執行者摘要：無法讀取（${result.error}）`
 }
 
