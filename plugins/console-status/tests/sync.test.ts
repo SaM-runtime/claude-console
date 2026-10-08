@@ -1,9 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Project, SyncProgress } from '../types'
-import { buildProject, cardWrittenSince, jobFlags } from '../hooks/logic'
+import { buildProject, cardJob, cardTime, cardWrittenSince, jobFlags } from '../hooks/logic'
 import { dispatchKind, dispatchPrompt } from '../hooks/actions'
-import { advanceSync, autoSyncJobs, autoSyncMode, bandSync, syncChip, syncStatus, syncStepsText, SYNC_KEEP_MS } from '../hooks/sync'
+import { advanceSync, cardStamp, autoSyncJobs, autoSyncMode, bandSync, syncChip, syncStatus, syncStepsText, SYNC_KEEP_MS } from '../hooks/sync'
 
 const NOW = Date.parse('2030-01-05T12:00:00Z')
 const local = (iso: string) => {
@@ -89,4 +89,49 @@ test('auto-sync takes completed work only, and nothing from a manual or busy pro
   expect(autoSyncJobs(project(before, [done, { id: 'r', jobClass: 'task', executor: 'codex', status: 'running', startedAt: '2030-01-05T11:50:00Z' }]))).toEqual([])
   expect(autoSyncMode(undefined)).toBe('on')
   expect(autoSyncMode(' OFF ')).toBe('off')
+})
+
+test('更新 is read however the executor wrote it, and a zone is honoured', () => {
+  expect(cardTime('2030-01-05 09:05')).toBe(new Date(2030, 0, 5, 9, 5).getTime())
+  expect(cardTime('2030/1/5 9:05 · rev 3')).toBe(new Date(2030, 0, 5, 9, 5).getTime())
+  expect(cardTime('2030-01-05 09:05:30')).toBe(new Date(2030, 0, 5, 9, 5, 30).getTime())
+  expect(cardTime('2030-01-05T04:00:00Z')).toBe(Date.parse('2030-01-05T04:00:00Z'))
+  expect(cardTime('2030-01-05T12:00+08:00')).toBe(Date.parse('2030-01-05T04:00:00Z'))
+  expect(cardTime('2030-01-05')).toBe(null)
+  expect(cardJob('2030-01-05 09:05 · rev 4 · job task-abc123 · codex gpt/high')).toBe('task-abc123')
+  expect(cardJob('2030-01-05 09:05 · rev 4')).toBe('')
+})
+
+test('a finished job is synced when the STATUS file was written after it started, or the CARD names it', () => {
+  const job = { id: 'task-abc123', jobClass: 'task', executor: 'codex', status: 'completed', startedAt: '2030-01-05T11:00:00Z', completedAt: '2030-01-05T11:30:00Z' }
+  // 更新 guessed an hour too early: on its own, still 待同步.
+  const guessed = local('2030-01-05T10:00:00Z')
+  expect(project(guessed, [job]).jobs[0]!.kind).toBe('newer')
+  const written = buildProject({ name: 'Project Alpha', statusPath: 'D:/a/STATUS.md' }, cardText(guessed), [job], NOW, Date.parse('2030-01-05T11:29:00Z'))
+  expect(written.jobs).toEqual([])
+  expect(written.statusMtime).toBe(Date.parse('2030-01-05T11:29:00Z'))
+  // A file untouched since before the job leaves it 待同步.
+  expect(buildProject({ name: 'Project Alpha', statusPath: 'D:/a/STATUS.md' }, cardText(guessed), [job], NOW, Date.parse('2030-01-05T09:00:00Z')).jobs[0]!.kind).toBe('newer')
+  expect(project(`${guessed} · rev 5 · job task-abc123`, [job]).jobs).toEqual([])
+  expect(project(`${guessed} · rev 5 · job abc123`, [{ ...job, id: 'console-x:abc123' }]).jobs).toEqual([])
+})
+
+test('a sync prompt keeps the rev and time rules and is still recognised as a sync', () => {
+  const p = project(local('2030-01-05T10:00:00Z'), [])
+  const prompt = dispatchPrompt(p, 'sync')
+  expect(prompt.includes('不要跟記憶裡更早的 rev 比')).toBe(true)
+  expect(prompt.includes('不要猜')).toBe(true)
+  expect(prompt.includes('沒有新結果也要寫回')).toBe(true)
+  expect(dispatchKind(prompt)).toBe('sync')
+})
+
+test('a sync is done when the STATUS file moves, even with 更新 unchanged', () => {
+  const cardAt = local('2030-01-05T10:00:00Z')
+  const before = { ...project(cardAt, []), statusMtime: 1 }
+  const track: SyncProgress = { stage: 'running', at: NOW - 60_000, cardAt: cardStamp(before), jobId: 's' }
+  const finished = [{ id: 's', jobClass: 'task', executor: 'codex', status: 'completed', startedAt: '2030-01-05T11:59:00Z', completedAt: '2030-01-05T12:00:30Z' }]
+  expect(advanceSync(track, { ...project(cardAt, finished), statusMtime: 1 }, NOW)!.stage).toBe('unchanged')
+  expect(advanceSync(track, { ...project(cardAt, finished), statusMtime: 2 }, NOW)!.stage).toBe('done')
+  // A track saved before the stamp held the file time still compares 更新 alone.
+  expect(advanceSync({ ...track, cardAt }, { ...project(cardAt, finished), statusMtime: 2 }, NOW)!.stage).toBe('unchanged')
 })

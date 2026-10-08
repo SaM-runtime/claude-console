@@ -35,7 +35,7 @@ import { batteryBody, METER } from './battery'
 import { feedBody } from './feed'
 import { trackRowChanges } from './presentation'
 import { layoutBand } from './band'
-import { advanceSync, autoSyncJobs, autoSyncMode, bandSync, isSyncEnded, syncChip, syncStatus, syncStepsText } from './sync'
+import { advanceSync, cardStamp, autoSyncJobs, autoSyncMode, bandSync, isSyncEnded, syncChip, syncStatus, syncStepsText } from './sync'
 import type { SyncProgress } from '../types'
 
 const dispatchRevision = atom({ plugin: 'console-status', key: 'dispatchRevision' } as const, 0)
@@ -88,6 +88,27 @@ const AUTO_SYNCED_MAX = 200
 const autoSynced = new Set<string>()
 /** While a job or a sync is under way the console looks every 20 s instead of every minute. */
 const FAST_TICK_MS = 20_000
+/**
+ * `executor:id` → what the console dispatched it for. Codex's state file may not keep the prompt the
+ * kind is read from, and a sync must never be taken for work that still needs a sync.
+ */
+const DISPATCH_KINDS_KEY = 'dispatchKinds'
+const DISPATCH_KINDS_MAX = 200
+let dispatchKinds: Map<string, 'sync' | 'continue'> | null = null
+async function loadDispatchKinds($: any): Promise<Map<string, 'sync' | 'continue'>> {
+  if (dispatchKinds) return dispatchKinds
+  const stored: unknown = await Promise.resolve().then(() => $.store.get(DISPATCH_KINDS_KEY)).catch(() => null)
+  const entries = Array.isArray(stored) ? stored.filter((item): item is [string, 'sync' | 'continue'] =>
+    Array.isArray(item) && typeof item[0] === 'string' && (item[1] === 'sync' || item[1] === 'continue')) : []
+  return dispatchKinds ??= new Map(entries)
+}
+async function rememberDispatchKind($: any, key: string, kind: 'sync' | 'continue') {
+  const kinds = await loadDispatchKinds($)
+  kinds.delete(key)
+  kinds.set(key, kind)
+  while (kinds.size > DISPATCH_KINDS_MAX) kinds.delete(kinds.keys().next().value as string)
+  await Promise.resolve().then(() => $.store.set(DISPATCH_KINDS_KEY, [...kinds])).catch(() => {})
+}
 let fastTimer: { cancel(): void } | undefined
 const cacheClock = atom({ plugin: 'console-status', key: 'cacheClock' } as const, null)
 /** Bumped every 15 s while a cache clock runs, so the countdown redraws without a full refresh. */
@@ -366,21 +387,27 @@ async function refresh($: any, options: PluginOptions, force = false) {
       return pr
     }
     const bases = registryRows.map(({ root }) => root.replace(/\/+$/, '').split('/').pop() ?? '')
+    const kinds = await guarded(() => loadDispatchKinds($))
     // Projects are independent: read them a few at a time instead of one after another.
     const loaded = await mapLimit(registryRows, REFRESH_CONCURRENCY, async ({ row, root }, index) => {
       const eff = effective[index]!
       const listing: ExecutorKind = eff.executor === 'manual' ? settings.executor : eff.executor
-      const [card, jobs, git] = await Promise.all([
+      const [card, listed, git, stat] = await Promise.all([
         io.fs.read(row.statusPath).catch(() => null) as Promise<string | null>,
         guarded(() => workspaceJobs(listing, deps, withCompanion(config), root)),
         gitMode === 'off' ? null : io.process.run(gitStatusArgs(root), { timeoutMs: 10_000 })
           .then((r: any) => r.exitCode === 0 ? parseGitStatus(String(r.stdout ?? '')) : null)
           .catch((error: unknown) => { if (error === DISCARDED_REFRESH) throw error; return null }),
+        guarded(() => Promise.resolve().then(() => $.fs.stat(row.statusPath))).catch((error: unknown) => { if (error === DISCARDED_REFRESH) throw error; return null }) as Promise<{ mtimeMs?: number } | null>,
       ])
+      const jobs = listed.map(job => {
+        const kind = job.kind ?? kinds.get(jobKey(job))
+        return kind && kind !== job.kind ? { ...job, kind } : job
+      })
       const pr = git && gitMode === 'on' && git.branch ? await pullRequest(root, git.branch, now, force) : null
       const warnings = jobs.filter(job => job.warning).map(job => `${row.name}：${job.warning}`)
       const project: Project = {
-        ...buildProject(row, card, jobs, now), executor: eff.executor, executorSource: eff.source,
+        ...buildProject(row, card, jobs, now, typeof stat?.mtimeMs === 'number' ? stat.mtimeMs : undefined), executor: eff.executor, executorSource: eff.source,
         ...(row.executor ? { registryExecutor: row.executor } : {}),
         ...(git ? { git } : {}), ...(pr ? { pr } : {}),
       }
@@ -558,7 +585,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     $.ui.toast(`${name}：${actionLabel(kind, p)}…`, { timeoutMs: 3000 })
     await update($, pendingActions, values => ({ ...values, [statusPath]: { kind, at: now } }))
     ownsPending = true
-    if (kind === 'sync') await setSync($, statusPath, { stage: 'dispatch', at: now, cardAt: p.updated, ...(request.auto ? { auto: true } : {}) })
+    if (kind === 'sync') await setSync($, statusPath, { stage: 'dispatch', at: now, cardAt: cardStamp(p), ...(request.auto ? { auto: true } : {}) })
     // Once a second: the label shows elapsed seconds; terminal/desktop animate a client spinner beside it,
     // so the whole pane is not redrawn several times a second (or sent to a phone that often).
     timer = $.clock.every(1000, async () => {
@@ -633,6 +660,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       const id = job.id
       const startedAt = new Date(acceptedAt).toISOString()
       acceptedLaunches.add(id)
+      await rememberDispatchKind($, jobKey({ executor: chosen, id }), kind)
       launchGeneration++
       await update($, snapshot, value => value ? trackRowChanges(value, { ...value, projects: value.projects.map(item => item.statusPath === statusPath ? {
         ...item,
