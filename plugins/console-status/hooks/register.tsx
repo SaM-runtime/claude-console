@@ -1467,7 +1467,8 @@ export const register: Register = (on, options) => {
       )
     }
     const below = await nextHook(e).catch(() => null)
-    return isEmptyTree(below) ? mine : <Box flexDirection="column" width={columns}>{mine}{below}</Box>
+    // The engine refuses its own node under a Box that sets a width; the rows above set their own.
+    return isEmptyTree(below) ? mine : <Box flexDirection="column">{mine}{below}</Box>
   })
 
   // Rows drawn by the Client module report presses, right-clicks and keys here.
@@ -1908,7 +1909,7 @@ export const register: Register = (on, options) => {
             <Box flexShrink={0}><Text color={C.faint}>{`更新於 ${time}`}</Text></Box>
           </Box>
           <Box gap={1} flexWrap="wrap">
-            <Text color={C.dim}>派工</Text>
+            <Text color={C.dim}>全域派工</Text>
             <Box hover={{ scope: 'help-dispatch_executor' }}>
               <Button key="dispatch-executor" plain label={dispatch.settings.executor} onPress={() => togglePicker('executor')} />
             </Box>
@@ -1922,6 +1923,14 @@ export const register: Register = (on, options) => {
             <Box hover={{ scope: 'help-dispatch_effort' }}>
               <Button key="dispatch-effort" plain label={dispatch.settings.effort || '預設'} onPress={() => togglePicker('effort')} />
             </Box>
+            {(() => {
+              // These controls set the global default; a selected project may dispatch elsewhere (registry or pane override).
+              const p = sel === null ? null : s.projects.find(x => x.name === sel)
+              if (!p) return null
+              const eff = effectiveDispatch(dispatch.settings, projectRoot(p.statusPath), p.registryExecutor)
+              if (eff.executor === dispatch.settings.executor) return null
+              return <Text key="dispatch-selected" color={C.amber} wrap="truncate-end">{`　${p.name} 實際派工：${eff.executor}（${SOURCE_LABEL[eff.source]}）`}</Text>
+            })()}
           </Box>
           {picker && <Box key="dispatch-picker" gap={1} flexWrap="wrap">
             <Text color={C.dim}>{PICKER_LABEL[picker]}</Text>
