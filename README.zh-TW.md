@@ -72,6 +72,7 @@ Marketplace 管理請參考官方 [plugin marketplace 文件](https://code.claud
 | `codexMinQuotaPercent` | Codex 額度剩餘百分比低於此值時啟用備援 | `10` |
 | `gitProbe` | `on`：每個專案的 Git 狀態（分支、未提交、未推送）以及透過 `gh` 讀取的 PR 與 CI 檢查；`git`：只讀本機 Git；`off`：都不讀（見 [Git、PR 與 CI](#gitpr-與-ci)） | `on` |
 | `commandGuard` | `ask`：無法復原的 shell 指令先問你（見[指令護欄](#指令護欄)）；`deny`：一律拒絕；`off`：關閉 | `ask` |
+| `loopGuard` | `on`：工具呼叫以相同參數、相同錯誤連續失敗兩次時，提醒模型不要第三次照原樣重試（見[重複失敗護欄](#重複失敗護欄)）；`off`：關閉 | `on` |
 | `cacheHint` | `on`：顯示主控台 prompt 快取倒數與重寫費用（見[快取與費用](#快取與費用)）；`off`：隱藏 | `on` |
 | `cacheTtl` | `auto`（讀 session 記錄裡 API 回報的實際 TTL，讀到前先當 5 分鐘）、`5m` 或 `1h` | `auto` |
 | `cacheWritePrice` | 估算用的快取寫入單價（每百萬 tokens 美元）；空白使用模型牌價 | 空白 |
@@ -290,9 +291,17 @@ Bash 或 PowerShell 要執行無法復原的指令時，會先用 Claude Code �
 
 只要啟用此外掛，每個 session 都有護欄，背景執行者也包含在內：背景 agent 碰到時會像其他提問一樣等待回答（attach 進去處理），沒有人可問的情況則直接拒絕。`commandGuard` 設為 `deny` 不詢問直接拒絕，設為 `off` 關閉。
 
+## 重複失敗護欄
+
+同一個工具在同一個迴圈（主執行緒或某個 subagent）裡，以相同參數（不計 `description`）連續兩次失敗、而且錯誤訊息一樣時，第二次的錯誤會附上一段只有模型看得到的提醒：不要第三次照原樣重試，重讀錯誤、換個做法或請使用者協助。同時跳一個 toast 告訴你已提醒。每對失敗只提醒一次；呼叫成功就清掉記錄，之後再連續失敗兩次會再提醒。錯誤訊息含時間、日期或隨機 id 的不比對；只記最後一次錯誤，所以 A、B、A 不會提醒。新 session 會清空記錄。`loopGuard: off` 關閉。
+
+## 用量配速
+
+面板上每個 Claude 額度電池（5 小時、本週、模型專用視窗）都會算這個視窗開始以來的平均使用速度：照這個速度撐不到重置時，重置時間後面會接 `照目前速度約 2 小時 13 分後用完`，琥珀色，剩不到一小時轉紅。視窗開始不到十分鐘、還沒用或已用完時不顯示。
+
 ## 快取與費用
 
-主控台 session 的 prompt 快取從最後一次請求開始算，維持 5 分鐘（或 1 小時）；過期後下一則提示要以快取寫入價把整段 context 重寫一次。橫帶在快取有效時顯示 `快取 4m`（最後一分鐘改用秒數倒數並高亮，如 `快取 45s`），過期後顯示 `快取已冷 $0.90`；過期前一分鐘會 toast 提醒，在冷快取上送出提示時也會提醒。面板的 Claude 區塊顯示同一行（含 context 大小），以及 `本次花費`（本 session 依 API 牌價估算的費用）。剛安裝或 `/reload-plugins` 後，倒數會從 session 記錄裡最後一則回應接著算；讀不到記錄時，面板會先顯示 `下一則回應後開始倒數`，等下一則回應後才開始。回合進行中（面板顯示 `回應中，結束後重新倒數`）或 context 少於 20k tokens 時，橫帶不顯示。
+主控台 session 的 prompt 快取從最後一次請求開始算，維持 5 分鐘（或 1 小時）；過期後下一則提示要以快取寫入價把整段 context 重寫一次。橫帶在快取有效時顯示 `快取 4m`（最後一分鐘改用秒數倒數並高亮，如 `快取 45s`），過期後顯示 `快取已冷 $0.90`；過期前一分鐘會 toast 提醒，在冷快取上送出提示時也會提醒。面板的 Claude 區塊顯示同一行（含 context 大小與 `上次命中 92%`，即上一個請求的 input 有多少比例由快取供應；低於 70% 轉琥珀色、低於 30% 轉紅色，代表快取失效或剛重建），以及 `本次花費`（本 session 依 API 牌價估算的費用）。剛安裝或 `/reload-plugins` 後，倒數會從 session 記錄裡最後一則回應接著算；讀不到記錄時，面板會先顯示 `下一則回應後開始倒數`，等下一則回應後才開始。回合進行中（面板顯示 `回應中，結束後重新倒數`）或 context 少於 20k tokens 時，橫帶不顯示。
 
 估算方式：最後一次請求的 context tokens × 模型 input 牌價 × 1.25（5 分鐘 TTL）或 × 2（1 小時）；使用 gateway 或議價時可設定 `cacheWritePrice`。`cacheTtl: auto` 用的是 API 實際採用的 TTL：每則回應的 `usage.cache_creation` 會把快取寫入分成 `ephemeral_5m_input_tokens` 與 `ephemeral_1h_input_tokens`，Claude Code 把它記在 session 記錄裡，主控台每回合結束後讀取（面板標示 `1h・實際`）。還沒看到有寫入快取的回應前先當 5 分鐘（`5m・預設`）；若閒置 5–60 分鐘後的請求仍讀到大部分 context，則推測為 1 小時（`推測`）。結果會跨 session 記住。訂閱方案下這些是依 API 價格換算的參考值，不是實際扣款。
 
@@ -310,6 +319,13 @@ claude plugin install paste-preview@paste-preview
 ```
 
 感謝 alan890104 製作 paste-preview。
+
+0.10.0 起有三項功能的想法來自別人 repo 裡的 mod。console-status 沒有包含它們的任何程式碼，都是自己的實作：
+
+- 用量電池旁的配速（`照目前速度約 2 小時 13 分後用完`）參考 session-meter 的「目前速度撐不撐得到重置」；重複失敗護欄參考 loop-guard 的「同一個失敗呼叫不試第三次」。兩者都出自 [arasovic](https://github.com/arasovic) 的 [claude-code-mods](https://github.com/arasovic/claude-code-mods)（MIT 授權）。
+- 快取倒數旁的命中率參考 [hamzafer](https://github.com/hamzafer) 的 [claude-code-mods](https://github.com/hamzafer/claude-code-mods) 裡的 cache-clock（MIT 授權）。
+
+感謝 arasovic 與 hamzafer。
 
 ## 限制
 

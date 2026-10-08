@@ -24,11 +24,11 @@ test('limitModel names the model a per-model kind is scoped to', () => {
 })
 
 test('limitHelp explains each row in its own words, naming the model for a per-model window', () => {
-  expect(limitHelp('five_hour')).toBe('5 小時：Claude 帳號 5 小時滾動額度的剩餘量，到重置時間回滿。')
-  expect(limitHelp('seven_day')).toBe('本週：Claude 帳號每週額度的剩餘量。')
-  expect(limitHelp('seven_day_fable')).toBe('Fable 週：Claude 帳號本週 Fable 專用額度的剩餘量，與整體「本週」分開計算，到重置時間回滿。')
-  expect(limitHelp('seven_day_opus')).toBe('Opus 週：Claude 帳號本週 Opus 專用額度的剩餘量，與整體「本週」分開計算，到重置時間回滿。')
-  expect(limitHelp('five_hour_sonnet')).toBe('Sonnet 5 小時：Claude 帳號 5 小時滾動額度中 Sonnet 專用的剩餘量，與整體「5 小時」分開計算，到重置時間回滿。')
+  expect(limitHelp('five_hour')).toBe('5 小時：Claude 帳號 5 小時滾動額度的剩餘量，到重置時間回滿。照這個視窗開始以來的平均速度會撐不到重置時，後面會標出約多久後用完。')
+  expect(limitHelp('seven_day')).toBe('本週：Claude 帳號每週額度的剩餘量。照這個視窗開始以來的平均速度會撐不到重置時，後面會標出約多久後用完。')
+  expect(limitHelp('seven_day_fable')).toBe('Fable 週：Claude 帳號本週 Fable 專用額度的剩餘量，與整體「本週」分開計算，到重置時間回滿。照這個視窗開始以來的平均速度會撐不到重置時，後面會標出約多久後用完。')
+  expect(limitHelp('seven_day_opus')).toBe('Opus 週：Claude 帳號本週 Opus 專用額度的剩餘量，與整體「本週」分開計算，到重置時間回滿。照這個視窗開始以來的平均速度會撐不到重置時，後面會標出約多久後用完。')
+  expect(limitHelp('five_hour_sonnet')).toBe('Sonnet 5 小時：Claude 帳號 5 小時滾動額度中 Sonnet 專用的剩餘量，與整體「5 小時」分開計算，到重置時間回滿。照這個視窗開始以來的平均速度會撐不到重置時，後面會標出約多久後用完。')
   expect(limitHelp('spend_limit')).toBe('花費上限：Claude gateway 為這個帳號設定的花費上限還剩多少，超額後電池見底，到週期重置時回滿。')
   expect(limitHelp('mystery')).toBe('mystery：host 回報的額度視窗，名稱照原字串顯示。')
 })

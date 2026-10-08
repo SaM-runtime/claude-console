@@ -71,3 +71,16 @@ test('demo mode shows the per-model weekly row', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: '本週' })).toBeDefined()
   await ui.unmount()
 })
+
+test('a window used faster than it refills says when it runs out; one that lasts says nothing more', OPTIONS, async ($, on) => {
+  fixture(on, [
+    { kind: 'five_hour', percentUsed: 31, resetsAt: new Date(NOW + 4 * 3_600_000).toISOString() },
+    { kind: 'seven_day_fable', percentUsed: 48, resetsAt: new Date(NOW + 2 * 86_400_000).toISOString() },
+  ])
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(pane('terminal'))
+  // One hour into the five-hour window at 31%: the rest lasts about 2 h 14 min, the reset is 4 h away.
+  expect(await ui.find({ type: 'Text', text: '・照目前速度約 2 小時 14 分後用完' })).toBeDefined()
+  expect(JSON.stringify(await ui.drawn()).match(/照目前速度/g)?.length).toBe(1)
+  await ui.unmount()
+})

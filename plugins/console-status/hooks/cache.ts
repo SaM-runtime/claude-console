@@ -100,7 +100,7 @@ export function cacheWarning(clock: CacheClock, view: CacheView): string {
 export type TtlSource = 'usage' | 'learned' | 'option' | 'default'
 
 /** The last main-thread response a Claude Code transcript (JSONL) records, with the TTL its cache writes used. */
-export type TranscriptCache = { at: number; tokens: number; model: string; ttl: CacheTtl | null }
+export type TranscriptCache = { at: number; tokens: number; model: string; ttl: CacheTtl | null; hit?: number }
 
 /**
  * Reads a transcript's tail: the newest main-thread response with usage, timed from the entry before it
@@ -137,6 +137,7 @@ export function transcriptCache(text: string): TranscriptCache | null {
   return {
     at,
     tokens: num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens) + num(u.output_tokens),
+    ...(() => { const hit = hitRate({ input_tokens: num(u.input_tokens), cache_read_input_tokens: num(u.cache_read_input_tokens), cache_creation_input_tokens: num(u.cache_creation_input_tokens) }); return hit === null ? {} : { hit } })(),
     model: String(msg.model ?? ''),
     ttl,
   }
@@ -150,4 +151,20 @@ export function transcriptPathFor(configDir: string, cwd: string, sessionId: str
 /** The TTL label in the pane: `1h・實際` when read from usage, `5m・預設` before anything is known. */
 export function ttlLabel(ttl: CacheTtl, source: TtlSource | undefined): string {
   return `${ttl}・${source === 'usage' ? '實際' : source === 'option' ? '設定' : source === 'learned' ? '推測' : '預設'}`
+}
+
+/**
+ * How much of a request's prompt the cache served: cache reads over all input (uncached + written + read),
+ * 0 to 1; null for a request with no input. The idea of showing it beside the cache clock comes from
+ * cache-clock in hamzafer/claude-code-mods (MIT); this is console-status's own implementation.
+ */
+export function hitRate(u: { input_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }): number | null {
+  const total = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
+  return total > 0 ? u.cache_read_input_tokens / total : null
+}
+
+/** `命中 92%`, amber under 70%, red under 30% (a cold start reads almost nothing). */
+export function hitText(hit: number): { text: string; tone: 'dim' | 'amber' | 'red' } {
+  const pct = Math.round(hit * 100)
+  return { text: `命中 ${pct}%`, tone: pct < 30 ? 'red' : pct < 70 ? 'amber' : 'dim' }
 }

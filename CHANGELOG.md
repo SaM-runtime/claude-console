@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+
+- **Usage pace.** Each Claude rate-limit meter in the pane checks the average rate since its window opened; when that rate runs the window out before it resets, the reset time is followed by `照目前速度約 2 小時 13 分後用完` (amber, red inside the last hour). Idea from session-meter in arasovic/claude-code-mods (MIT).
+- **Cache hit rate.** The pane's cache line adds `上次命中 92%`, the share of the last request's input the cache served (amber under 70%, red under 30%). Idea from cache-clock in hamzafer/claude-code-mods (MIT).
+- **Loop guard.** A tool call that fails twice in a row with the same arguments and the same error gets a note only the model reads, telling it not to try a third time, and a toast. `loopGuard`: `on` / `off`. Idea from loop-guard in arasovic/claude-code-mods (MIT).
+- The README credits the three sources under “Works with other plugins”; none of their code is included.
 ## 0.9.5
 
 - **A sync that finished no longer leaves the project in 待同步.** Three causes, each reproduced in a test that failed before this change:

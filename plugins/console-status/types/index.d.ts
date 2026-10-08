@@ -39,7 +39,7 @@ export type PrInfo = {
 }
 
 /** The console session's last main-thread request: when it started, its context size and model, the cache TTL in force. */
-export type CacheClock = { at: number; tokens: number; model: string; ttl: '5m' | '1h'; source?: 'usage' | 'learned' | 'option' | 'default' }
+export type CacheClock = { at: number; tokens: number; model: string; ttl: '5m' | '1h'; source?: 'usage' | 'learned' | 'option' | 'default'; hit?: number }
 
 export type FallbackOffer = { kind: 'sync' | 'continue'; reason: string; at: number }
 
