@@ -1,7 +1,35 @@
 # claude-console
 
-<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" alt="claude-console demo: console pane with project table, actions, quota batteries" width="900"></a></p>
-<p align="center"><a href="docs/demo.mp4">▶ Watch the 30-second demo (MP4, demo data)</a> · <a href="README.zh-TW.md">繁體中文</a></p>
+**A console for keeping several projects moving from inside Claude Code.** One pane shows where every project stands and who it is waiting on; decisions are pressed, dispatch is one button, and Git, PR, CI and quota sit beside them, so you don't switch windows.
+
+<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" alt="claude-console demo: /console demo opens the console, then the right-click action menu, decisions answered with number keys, the filled decision, and the per-project detail cards" width="900"></a></p>
+<p align="center"><a href="docs/demo.mp4">▶ Watch the 45-second demo (MP4)</a> · <a href="README.zh-TW.md">繁體中文</a></p>
+<p align="center"><sub>The real screen of Claude Code 2.1.294 with console-status 0.15.0 in a terminal (captured frame by frame with tmux, then encoded), showing <code>/console demo</code> data; the captions and mouse pointer were added afterwards.</sub></p>
+
+## Try the demo
+
+```powershell
+claude plugin marketplace add SaM-runtime/claude-console
+claude plugin install console-status@claude-console
+```
+
+Run `/console demo` in any Claude Code session to see the whole pane without a registry; `/console refresh` goes back to real state. To connect your own projects, see [Configure](#configure).
+
+## Features
+
+- **Every project in one table.** One row per project: its state (`●` decision needed, `◆` awaiting review, `▶` running, `↻` needs sync, `○` idle), a six-step pipeline (spec → build → sync → verify → review → release), when it was updated, and a Git summary. The next-step card on top names the one thing to handle now; with the pane closed, the band above the prompt still counts each state. See [Project actions](#project-actions) and [Pipeline and project mode](#pipeline-and-project-mode).
+- **Decisions are pressed, not typed.** Every option in a card can be pressed; with the action menu open, number keys answer the decisions in order (`2` then `1` reads `1B 2-1`) and Backspace takes the last pick back. `✎ 填入決策` or `✎ 做決定` puts the answer in the prompt; Enter sends it.
+- **One-button actions.** Verify, sync STATUS, continue to the next step, review a gate, open STATUS.md: right-click or `m` opens the action menu, and every action has a single-key shortcut. When an executor finished without writing the CARD back, the console dispatches one sync by itself (`autoSync`) and shows its progress step by step.
+- **Your choice of executor.** Claude Code background agents by default; Codex for everything or per project, with a fallback to Claude when Codex is unusable or low on quota. A prompt sent with a project selected carries an executor digest (what it was last doing, its last three tool calls, its last words), and the project card's 執行者 section shows the same. See [Dispatch settings](#dispatch-settings).
+- **Git, PR and CI without switching windows.** Branch and ahead/behind, uncommitted line counts, stash, recent commits, a warning when the last fetch is old; `▸ 檔案` opens the files grouped like `git status`; the PR's review state and failing CI checks, with the band turning red on a CI failure. See [Git, PR and CI](#git-pr-and-ci).
+- **Usage and cache.** Claude's 5-hour, weekly and per-model limits and Codex's quota share one 用量 table, with an estimate of when the current pace runs out; the prompt cache's countdown, the cost of re-writing it once cold, and the last hit rate. See [Usage pace](#usage-pace) and [Prompt cache and cost](#prompt-cache-and-cost).
+- **Guards.** Commands that cannot be taken back (`rm -r`, force pushes, `git reset --hard`, `DROP TABLE` and more) ask first; a tool call that failed twice with the same error is not tried a third time. See [Command guard](#command-guard) and [Loop guard](#loop-guard).
+- **Only where you want it.** By default only a session where you ran `/console` runs the console (and again when it resumes); other sessions get the guards only, and a session inside a registered project switches to project mode. See [Light sessions](#light-sessions).
+- **Updates from the pane.** The footer shows the installed version; when a new one is out, press `⬆ 更新` or run `/console update`. See [Upgrade](#upgrade).
+
+Every change, version by version, is in [CHANGELOG.md](CHANGELOG.md).
+
+## How it works
 
 `claude-console` is a local, multi-project Claude Code mod. One console session owns specification, supervision, and review gates across registered projects; the operator supplies decisions and performs the final release approval.
 
