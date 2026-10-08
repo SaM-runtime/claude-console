@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { askSummary, parseAsk } from '../hooks/logic'
+import { askSummary, parseAsk, splitClauses } from '../hooks/logic'
 
 test('asks split into decisions on top-level semicolons, keeping bracketed commands whole', () => {
   expect(parseAsk('套用 patch（cd ~/p && patch -p1 < a.patch; echo ok）；決定是否處理窄螢幕')).toEqual([
@@ -39,10 +39,46 @@ test('a selected project with a decision lists every option on its own line', as
   const ui = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
     props: { bodyColumns: 60, scroll: { offset: 0, total: 0, visible: 0 } } } as any)
   await ui.press({ key: 'sel-Project-Alpha' })
-  for (const text of ['選擇示範介面配色', '深色主題', '淺色主題', '示範資料是否保留', '保留', '清除']) {
-    expect((await ui.find({ type: 'Text', text: new RegExp(`^${text}$`) }))?.text).toBe(text)
-  }
-  expect(await ui.find({ type: 'Text', text: /^A\)$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^2\)$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^決策 1　選擇示範介面配色$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^決策 2　示範資料是否保留$/ })).toBeDefined()
+  const labels = await Promise.all(['0-A', '0-B', '1-1', '1-2'].map(async id => (await ui.find({ key: 'sel-opt-' + id }))?.props.label))
+  expect(labels).toEqual(['○ A) 深色主題', '○ B) 淺色主題', '○ 1) 保留', '○ 2) 清除'])
+  await ui.unmount()
+})
+
+test('a long next step is listed one clause per line in the project detail', async ($, on) => {
+  expect(splitClauses('改下拉（選項來自 BQ；顯示 id · name）；新增端點；不 commit')).toEqual(['改下拉（選項來自 BQ；顯示 id · name）', '新增端點', '不 commit'])
+  on('clock.now', () => ({ value: Date.parse('2030-01-05T12:00:00Z') }))
+  on('env.get', () => ({ value: '/home/example' }))
+  on('fs.read', () => ({ value: JSON.stringify({ executor: 'claude' }) }))
+  on('ui.open', () => ({ value: {} }))
+  await $.command.run({ command: 'console', args: 'demo' } as any)
+  const ui = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
+    props: { bodyColumns: 60, scroll: { offset: 0, total: 0, visible: 0 } } } as any)
+  await ui.press({ key: 'detail' })
+  expect((await ui.find({ type: 'Text', text: /^示範測試通過$/ }))?.text).toBe('示範測試通過')
+  expect((await ui.find({ type: 'Text', text: /^等待配色選擇$/ }))?.text).toBe('等待配色選擇')
+  await ui.unmount()
+})
+
+test('decision options are pressable rows and the primary button fills the composer with the answer', async ($, on) => {
+  const fills: string[] = []
+  on('clock.now', () => ({ value: Date.parse('2030-01-05T12:00:00Z') }))
+  on('env.get', () => ({ value: '/home/example' }))
+  on('fs.read', () => ({ value: JSON.stringify({ executor: 'claude' }) }))
+  on('ui.open', () => ({ value: {} }))
+  on('ui.close', () => ({ value: undefined } as any))
+  on('prompt.fill', (_: any, e: any) => { fills.push(e.text); return { isFilled: true } })
+  await $.command.run({ command: 'console', args: 'demo' } as any)
+  const ui = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
+    props: { bodyColumns: 60, scroll: { offset: 0, total: 0, visible: 0 } } } as any)
+  await ui.press({ key: 'sel-Project-Alpha' })
+  expect((await ui.find({ key: 'sel-opt-0-A' }))?.props.label).toBe('○ A) 深色主題')
+  await ui.press({ key: 'sel-opt-0-B' })
+  await ui.press({ key: 'sel-opt-1-1' })
+  expect((await ui.find({ key: 'sel-opt-0-B' }))?.props.label).toBe('● B) 淺色主題')
+  expect((await ui.find({ key: 'sel-ask-submit' }))?.props.label).toBe('✎ 填入決策：1B 2-1')
+  await ui.press({ key: 'sel-ask-submit' })
+  expect(fills).toEqual(['「Project-Alpha」決策：1B 2-1'])
   await ui.unmount()
 })

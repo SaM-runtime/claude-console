@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.5
+
+- **Decision options are pressed, not typed.** Each option under 待決 is its own row (`○ A) 深色主題`); a press lights it (`●`) and dims the others of that decision, a second press clears it. The primary button reads the answer as it stands (`✎ 填入決策：1B 2-1`) and fills the composer with `「專案」決策：1B 2-1`; a lettered key follows its number (`1B`), a numbered one is set apart (`2-1`), and a decision without options is left as `3：` to finish by hand. `清除選擇` drops the picks. Picks are kept per project until the answer is filled. When the composer cannot be prefilled, the pane says what to type instead.
+- **Long CARD fields list one clause per line.** 狀態, 關卡 and 下一步 in the project card, and 下一步 in project mode, are split on top-level `；` like decisions (bracketed commands stay whole), so a dense paragraph reads as a list.
+
 ## 0.9.4
 
 - **Waiting sessions are listed as what they wait for.** Every `claude agents` entry with `state: blocked` was shown as `等待批准`, though none of them was at a permission prompt: on 2026-10-07 the pane listed nine, five retired by the daemon and four executors that had finished a turn on a question. Now `status: waiting` is `等待批准`, `status: idle` with `state: blocked` is `停在提問`, and any other blocked session stays `等待輸入`.

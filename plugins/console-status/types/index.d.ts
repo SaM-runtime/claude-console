@@ -30,6 +30,9 @@ export type Project = {
   pr?: PrInfo
 }
 
+/** Decision index → the option key picked for one project. */
+export type DecisionPicks = Record<string, string>
+
 export type GitInfo = { branch: string; detached?: boolean; oid?: string; upstream?: string; ahead: number; behind: number; changed: number; untracked: number; conflicts: number }
 export type PrInfo = {
   number: number; title: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; draft: boolean; url: string; review?: string
@@ -104,6 +107,8 @@ declare module 'claude-code' {
       isRefreshing: boolean
       hovered: string | null
       menuFor: string | null
+      /** statusPath → decision index → the option key picked in the pane, before it is sent. */
+      decisionPicks: Record<string, DecisionPicks>
       dispatchPicker: 'executor' | 'model' | 'effort' | null
       selected: string | null
       cursor: number

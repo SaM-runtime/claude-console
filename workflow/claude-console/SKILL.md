@@ -102,7 +102,7 @@ A gate approval never substitutes for user authorization. Only the console clear
 
 Use `等使用者` only for a decision the user must make. The panel's decide action prefills a draft and attaches the project to the next prompt.
 
-Write one decision per `；` segment and its choices inline as `<question>：A) … B) …` (or `1) 2)`). The panel lists each decision and option on its own line, and the user answers with the keys (`1A 2B`). Record the answer under `## Decisions` and reset `等使用者` to `無`.
+Write one decision per `；` segment and its choices inline as `<question>：A) … B) …` (or `1) 2)`). The panel lists each decision and option on its own line as pressable rows; the user picks options there and fills the composer with the keys (`1A 2B`), or types them. Record the answer under `## Decisions` and reset `等使用者` to `無`.
 
 ## Add a project
 

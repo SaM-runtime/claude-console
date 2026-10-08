@@ -204,7 +204,7 @@ The right-click menu (or `m` on the keyboard for the row under the cursor; Esc c
 | ⇢ Sync STATUS | SYNC, executor not `manual` | Dispatches the project's executor to update only CARD and history; `autoSync: on` does this by itself once per finished job |
 | ⇢ Continue | IDLE, with a next step and no decision or gate; executor not `manual` | Requires a second press within six seconds (the pane shows the next step it will dispatch), then dispatches the project's executor |
 | ⇢ 改用 Claude 派工 | A Codex dispatch held by `codexFallback: ask` | Sends the same action to Claude, recorded as a fallback |
-| ✎ Decide | `等使用者` is nonempty | Prefills a draft and one-shot project context; Claude runs only when submitted |
+| ✎ Decide | `等使用者` is nonempty | Prefills a draft and one-shot project context; Claude runs only when submitted. In the expanded card each option is a pressable row, and `✎ 填入決策：1A 2B` fills the picked answer |
 | ⚑ Review gate / final review | Recognized spec, review, or release gate | Sends evidence to the console Claude; release review cannot execute release. The row unlocks when that turn ends, when the CARD moves past the gate, or after ten minutes with no review turn running |
 | ↗ Open STATUS.md | Always | Requests the editor to open the file |
 
