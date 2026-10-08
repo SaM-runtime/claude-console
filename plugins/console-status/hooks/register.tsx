@@ -30,7 +30,7 @@ import { commandPreview, dangerReason, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction } from '../types'
-import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
+import { jobWarnings, waitingNames, parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody, METER } from './battery'
@@ -38,7 +38,9 @@ import { feedBody } from './feed'
 import { trackRowChanges } from './presentation'
 import { layoutBand } from './band'
 import { advanceSync, cardStamp, autoSyncJobs, autoSyncMode, bandSync, isSyncEnded, syncChip, syncStatus, syncStepsText } from './sync'
-import type { SyncProgress } from '../types'
+import type { SyncProgress, ExecutorDigest } from '../types'
+import { DIGEST_NONE, DIGEST_TIMEOUT, PROMPT_DIGEST_MS, digestContext, loadDigest } from './digest'
+import type { DigestCache, DigestIo, DigestResult } from './digest'
 
 const dispatchRevision = atom({ plugin: 'console-status', key: 'dispatchRevision' } as const, 0)
 
@@ -87,6 +89,16 @@ const reviewRequests = atom({ plugin: 'console-status', key: 'reviewRequests' } 
 const fallbackOffers = atom({ plugin: 'console-status', key: 'fallbackOffers' } as const, {})
 /** statusPath → where its 同步 STATUS dispatch is (派工 → 執行 → 寫回), advanced on each refresh. */
 const syncProgress = atom({ plugin: 'console-status', key: 'syncProgress' } as const, {})
+/** statusPath → the 執行者 section of an open project card. */
+const executorDigests = atom({ plugin: 'console-status', key: 'executorDigests' } as const, {})
+/** Parsed transcript tails, kept per path while mtime and size stay; and where each session's transcript was found. */
+const digestCache: DigestCache = new Map()
+const transcriptPaths = new Map<string, string>()
+const digestLoads = new Set<string>()
+/** statusPath → the last digest read for it, which a prompt carries when a fresh read takes too long. */
+const lastDigests = new Map<string, string[]>()
+/** When this plugin lifetime began (its first refresh); a reload starts a new one. */
+let lifetimeStart = 0
 /** Finished jobs auto-sync already dispatched a sync for (in `$.store`, so once per job across sessions). */
 const AUTO_SYNCED_KEY = 'autoSynced'
 const AUTO_SYNCED_MAX = 200
@@ -233,6 +245,71 @@ async function paths($: any, options: PluginOptions) {
   return { home, config: resolveConfig(options, home, local, temp) }
 }
 
+/** One project's executor digest: from the cache while its transcript is unchanged; never throws. */
+async function projectDigest($: any, options: PluginOptions, p: Project): Promise<DigestResult> {
+  try {
+    const { home, config } = await paths($, options)
+    const claudeDir = ((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || `${home}/.claude`).replace(/\\/g, '/')
+    const root = projectRoot(p.statusPath)
+    const windows = /^[a-z]:\//i.test(root) || isWindowsOs(await $.env.get('OS').catch(() => ''))
+    const io: DigestIo = {
+      windows,
+      read: path => $.fs.read(path), exists: path => $.fs.exists(path), stat: path => $.fs.stat(path),
+      list: path => $.fs.list(path), run: (argv, init) => $.process.run(argv, init),
+    }
+    const result = await loadDigest(io, { root, claudeDir, sessionsPath: config.claudeSessionsPath }, digestCache, transcriptPaths, await $.clock.now())
+    if (result.kind === 'ready') lastDigests.set(p.statusPath, result.lines)
+    return result
+  } catch (error) {
+    return { kind: 'error', error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/** The block a prompt about `p` carries; a digest that cannot be read never holds the prompt back. */
+async function digestBlock($: any, options: PluginOptions, p: Project): Promise<string> {
+  // The read goes on past the wait and fills the cache for the next prompt; the prompt does not wait for it.
+  const reading = projectDigest($, options, p).then(result => ({ result }))
+  let timer: { cancel(): void } | undefined
+  const waited = new Promise<null>(resolve => { timer = $.clock.after(PROMPT_DIGEST_MS, () => resolve(null)) })
+  const outcome = await Promise.race([reading, waited])
+  timer?.cancel()
+  if (!outcome) {
+    const last = lastDigests.get(p.statusPath)
+    return last ? digestContext(last) : DIGEST_TIMEOUT
+  }
+  const { result } = outcome
+  return result.kind === 'ready' ? digestContext(result.lines) : result.kind === 'none' ? DIGEST_NONE : `執行者摘要：無法讀取（${result.error}）`
+}
+
+/** The projects whose card is open: the menu's, and the focused one of the detail view. */
+async function openCards($: any): Promise<Project[]> {
+  if (await demoEnabled($)) return []
+  const s = await read($, snapshot)
+  if (!s) return []
+  const names = new Set<string>()
+  const menu = await read($, menuFor)
+  if (menu) names.add(menu)
+  if (await read($, isDetail)) {
+    const focus = (await read($, selected)) ?? rows(s)[Math.max(0, await read($, cursor))]?.full
+    if (focus) names.add(focus)
+  }
+  return s.projects.filter(p => names.has(p.name))
+}
+
+/** Reads the digest of each open card (and no other), showing 讀取中… the first time. */
+async function syncDigests($: any, options: PluginOptions) {
+  for (const p of await openCards($).catch(() => [] as Project[])) {
+    if (digestLoads.has(p.statusPath)) continue
+    digestLoads.add(p.statusPath)
+    try {
+      if (!(await read($, executorDigests))[p.statusPath]) await update($, executorDigests, values => ({ ...values, [p.statusPath]: { phase: 'loading' } }))
+      const result = await projectDigest($, options, p)
+      const shown: ExecutorDigest = result.kind === 'ready' ? { phase: 'ready', lines: result.lines } : result.kind === 'none' ? { phase: 'none' } : { phase: 'error', error: result.error }
+      await update($, executorDigests, values => JSON.stringify(values[p.statusPath]) === JSON.stringify(shown) ? values : { ...values, [p.statusPath]: shown })
+    } catch { /* the card keeps what it showed */ } finally { digestLoads.delete(p.statusPath) }
+  }
+}
+
 async function readDispatch($: any, config: ConsoleConfig) {
   const text = await $.fs.read(config.dispatchSettingsPath).catch(() => null)
   // Legacy codex-dispatch.json is read-only compatibility, consulted only when dispatch.json is missing.
@@ -355,6 +432,8 @@ async function refresh($: any, options: PluginOptions, force = false) {
   let refreshConfig: ConsoleConfig | undefined
   try {
     const now = await io.clock.now() as number
+    // Jobs that finished before this plugin lifetime (a reload starts a new one) do not replay their warnings.
+    if (!lifetimeStart) lifetimeStart = now
     const { home, config } = await paths(io, options)
     const { settings } = await readDispatch(io, config)
     refreshingExecutor = executorSignature(settings)
@@ -439,7 +518,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
       })
       const git = status ? await gitDetails(root, status) : null
       const pr = git && gitMode === 'on' && git.branch ? await pullRequest(root, git.branch, now, force) : null
-      const warnings = jobs.filter(job => job.warning).map(job => `${row.name}：${job.warning}`)
+      const warnings = jobWarnings(row.name, jobs, lifetimeStart)
       const project: Project = {
         ...buildProject(row, card, jobs, now, typeof stat?.mtimeMs === 'number' ? stat.mtimeMs : undefined), executor: eff.executor, executorSource: eff.source,
         ...(row.executor ? { registryExecutor: row.executor } : {}),
@@ -459,8 +538,11 @@ async function refresh($: any, options: PluginOptions, force = false) {
     const usage: any = await io.session.usage().catch(() => null)
     const formatWarning = stateFormatWarning()
     const companionWarning = [companion?.warning, formatWarning].filter(Boolean).join('；')
+    const selfId = await io.session.id().catch(() => null) as string | null
+    const projectRoots = registryRows.map(({ row, root }) => ({ root, name: row.name }))
     const cur: Snapshot = {
-      at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, await io.session.id().catch(() => null) as string | null, registryRows.map(({ row, root }) => ({ root, name: row.name })), home), codex: codexInUse ? relevantCodex(codex, bases) : '',
+      at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, selfId, projectRoots, home),
+      waiting: waitingNames(agents, selfId, projectRoots, home), codex: codexInUse ? relevantCodex(codex, bases) : '',
       ...(codexInUse ? { codexInUse: true } : {}),
       ...(codexInUse && (companion || formatWarning) ? { companion: { path: companion?.path ?? '', source: companion?.source ?? 'none', ...(companionWarning ? { warning: companionWarning } : {}) } } : {}),
       contextPercent: usage?.context?.percent ?? null, error,
@@ -498,6 +580,8 @@ async function refresh($: any, options: PluginOptions, force = false) {
       await advanceSyncs($, options)
       await autoSync($, options)
       await followGitDetail($).catch(() => {})
+      // Only the open cards of an open pane: a transcript that has not changed is not read again.
+      if (await read($, isPaneOpen)) void syncDigests($, options)
     }
   } catch (error) {
     if (!current() || error === DISCARDED_REFRESH) return
@@ -688,7 +772,9 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       const asked = kind === 'sync' && chosen === 'claude' ? askingSession(p) : undefined
       if (asked) dispatchOpts = { ...dispatchOpts, resumeSession: asked }
       const executor = createExecutor(chosen, deps, execConfig)
-      const job = await executor.dispatch(root, dispatchPrompt(p, kind), dispatchOpts)
+      // A continue carries what the executor was last doing, so a fresh session knows where it stopped.
+      const prompt = kind === 'continue' ? `${dispatchPrompt(p, kind)}\n${await digestBlock($, options, p)}` : dispatchPrompt(p, kind)
+      const job = await executor.dispatch(root, prompt, dispatchOpts)
       await update($, fallbackOffers, values => { if (!values[statusPath]) return values; const next = { ...values }; delete next[statusPath]; return next })
       if (isActiveJob(job)) unpublishedLaunches.set(`${workspaceKey(root)}:${jobKey(job)}`, { root: workspaceKey(root), job })
       const acceptedAt = await $.clock.now()
@@ -721,7 +807,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       const context = selectionContext(current, p.name)
       // PromptSubmitArgs has no context field, and calls from this plugin skip its own hook.
       // Carry the same selection block in the submitted text without consuming a user's draft selection.
-      const text = `${gatePrompt(p)}\n\n${context ?? ''}`
+      const text = `${gatePrompt(p)}\n\n${context ?? ''}\n${await digestBlock($, options, p)}`
       await update($, reviewRequests, values => ({ ...values, [statusPath]: { text, projectName: p.name, at: now, gate: p.gate ?? '' } }))
       try {
         const result = await $.prompt.submit({ text })
@@ -1248,10 +1334,14 @@ export const register: Register = (on, options) => {
     }
     const selectedProject = await read($, selected)
     if (!selectedProject || selectionClaim !== null) return next(e)
-    const ctx = selectionContext(await read($, snapshot), selectedProject)
-    if (!ctx) return next(e)
+    const selection = await read($, snapshot)
+    const base = selectionContext(selection, selectedProject)
+    if (!base) return next(e)
     selectionClaim = selectedProject
     try {
+      // What the project's executor was last doing, so the console need not read its transcript itself.
+      const project = selection?.projects.find(p => p.name === selectedProject)
+      const ctx = project ? `${base}\n${await digestBlock($, options, project)}` : base
       const result = await next({ ...e, context: [...(e.context ?? []), ctx] })
       if (!result.drop) await update($, selected, value => value === selectedProject ? null : value)
       return result
@@ -1632,6 +1722,8 @@ export const register: Register = (on, options) => {
         else await update($, selected, () => null)
       }
     }
+    // A menu opened or the focus moved: read the executor digest of the card now open.
+    void syncDigests($, options)
     return {}
   })
 
@@ -1657,6 +1749,7 @@ export const register: Register = (on, options) => {
     const picks = await read($, decisionPicks)
     const refreshing = await read($, isRefreshing)
     const pending = await read($, pendingActions)
+    const digests = demo ? {} : await read($, executorDigests)
     const confirmations = await read($, continueConfirmations)
     const verified = await read($, verificationResults)
     const trusted = await read($, trustedVerify)
@@ -2060,6 +2153,16 @@ export const register: Register = (on, options) => {
         )}
       </Box>
     }
+    // The card's 執行者 section: what the project's latest executor session was last doing.
+    const digestView = (p: Project, prefix: string) => {
+      if (demo) return null
+      const d = digests[p.statusPath]
+      const lines = !d || d.phase === 'loading' ? ['執行者：讀取中…'] : d.phase === 'none' ? ['執行者：無紀錄']
+        : d.phase === 'error' ? [`執行者：無法讀取（${d.error ?? '原因不明'}）`] : d.lines ?? []
+      return <Box key={prefix + 'digest'} flexDirection="column" marginTop={1}>
+        {lines.map((line, i) => <Text key={prefix + 'digest-' + i} color={C.dim} wrap="wrap">{line}</Text>)}
+      </Box>
+    }
     const verificationView = (p: Project) => {
       const result = verified[p.statusPath]
       const command = p.verify.trim() ? <Text color={verifyTrusted(trusted, p.statusPath, p.verify) ? C.dim : C.amber} wrap="wrap">
@@ -2205,6 +2308,7 @@ export const register: Register = (on, options) => {
               </Box>
               {pipes.get(menuProject.name) && <Box marginTop={1}>{pipelineLine(pipes.get(menuProject.name)!, PIPE, ui, 'm-pipeline', { noteless: menuProject.jobs.some(j => j.kind === 'running') || hasAsk(menuProject) })}</Box>}
               {projectInfo(menuProject, 'm-info-')}
+              {digestView(menuProject, 'm-')}
               <Box marginTop={1}>{projectActions(menuProject, 'm-')}</Box>
               {verificationView(menuProject)}
               {rich && (() => {
@@ -2245,7 +2349,7 @@ export const register: Register = (on, options) => {
                 return (
                   <Box key={'d-' + p.name} gap={1}>
                     <Box width={W.state}><Text color={FG[row.state]}>{chipText(row.state)}</Text></Box>
-                    <Button key={'df-' + p.name} plain dimColor label={'▸ ' + row.project} onPress={() => void update($, cursor, () => idx)} />
+                    <Button key={'df-' + p.name} plain dimColor label={'▸ ' + row.project} onPress={() => void update($, cursor, () => idx).then(() => syncDigests($, options))} />
                   </Box>
                 )
               }
@@ -2260,6 +2364,7 @@ export const register: Register = (on, options) => {
                   </Box>
                   {pipes.get(p.name) && <Box marginTop={1}>{pipelineLine(pipes.get(p.name)!, PIPE, ui, 'd-pipeline-' + p.name, { noteless: true })}</Box>}
                   {projectInfo(p, 'd-info-' + p.name + '-', { state: true })}
+                  {digestView(p, 'detail-' + p.name + '-')}
                   <Box marginTop={1}>{projectActions(p, 'detail-' + p.name + '-')}</Box>
                   {verificationView(p)}
                   {(p.tasks ?? []).length > 0 && (
@@ -2357,7 +2462,7 @@ export const register: Register = (on, options) => {
           {helpStrip}
           <Box justifyContent="space-between" columnGap={2} flexWrap="wrap">
             <Box gap={2} flexShrink={0}>
-              <Button key="detail" plain dimColor label={detail ? '↥ 精簡' : '↧ 各專案詳細'} onPress={() => void update($, isDetail, v => !v)} />
+              <Button key="detail" plain dimColor label={detail ? '↥ 精簡' : '↧ 各專案詳細'} onPress={() => void update($, isDetail, v => !v).then(() => syncDigests($, options))} />
               <Box gap={1}>
                 {refreshing && rich && <ui.Client key="refresh-spin" module="./spinner.tsx" width={1} height={1} props={{ color: C.dim }} />}
                 <Button key="refresh" plain dimColor label={refreshing ? '⟳ 更新中…' : '↻ 重新整理'} onPress={async () => {

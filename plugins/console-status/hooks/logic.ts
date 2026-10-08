@@ -260,6 +260,9 @@ export function bandText(s: Snapshot): string {
   return `主控台｜${parts.join('｜')}`
 }
 
+/** Sessions already waiting in `prev`: all of them, not only the one per project it listed (snapshots before 0.9.5 have only those). */
+const waitingBefore = (prev: Snapshot) => new Set(prev.waiting ?? prev.blocked.map(b => b.name))
+
 /** Toasts for changes since `prev`; the first snapshot (prev null) is only the baseline. */
 export function diffToasts(prev: Snapshot | null, cur: Snapshot): string[] {
   if (prev === null) return []
@@ -283,8 +286,8 @@ export function diffToasts(prev: Snapshot | null, cur: Snapshot): string[] {
   for (const p of cur.projects) {
     for (const t of prTransitions(p.name, prev.projects.find(x => x.name === p.name)?.pr, p.pr)) if (t.toast) out.push(t.text.replace('　', '：'))
   }
-  const prevBlocked = new Set(prev.blocked.map(b => b.name))
-  for (const b of cur.blocked) if (!prevBlocked.has(b.name)) out.push(`session「${b.name}」${b.why}`)
+  const prevWaiting = waitingBefore(prev)
+  for (const b of cur.blocked) if (!prevWaiting.has(b.name)) out.push(`session「${b.name}」${b.why}`)
   if (cur.codex.startsWith('STALE') && !prev.codex.startsWith('STALE')) out.push('Codex app 已更新，broker 過期：派工前請先處理')
   if (
     cur.contextPercent !== null && cur.contextPercent >= ROTATE_PERCENT &&
@@ -599,12 +602,8 @@ function blockedWhy(a: Agent): string {
 
 const startedMs = (a: Agent) => typeof a.startedAt === 'number' ? a.startedAt : Date.parse(a.startedAt ?? '') || 0
 
-/**
- * Sessions that belong to this console (its folder or a registered project), not this one, waiting on a person:
- * retired ones left out, the newest per project only, newest first, each named with its project.
- * `roots` may be bare paths (no project name) or `{ root, name }`.
- */
-export function relevantBlocked(agents: Agent[], selfId: string | null, roots: (string | { root: string; name: string })[], home: string): Blocked[] {
+/** Every session of this console or a registered project, not this one and not retired, that waits on a person, with its project. */
+function waitingAgents(agents: Agent[], selfId: string | null, roots: (string | { root: string; name: string })[], home: string): { agent: Agent; project: { key: string; name: string } }[] {
   const allowed = roots.map(r => typeof r === 'string' ? { root: normPath(r), name: '' } : { root: normPath(r.root), name: r.name })
   const consoleDir = normPath(home)
   const projectOf = (a: Agent): { key: string; name: string } | null => {
@@ -614,14 +613,34 @@ export function relevantBlocked(agents: Agent[], selfId: string | null, roots: (
     return cwd === consoleDir ? { key: consoleDir, name: '主控台' } : null
   }
   // The same sessions blockedSessions lists: with some identity, blocked or waiting.
-  const listed = agents.filter(a => !(a.sessionId && a.sessionId === selfId) && !retiredAgent(a) && projectOf(a) !== null
-    && Boolean(a.name?.trim() || a.sessionId?.trim() || a.cwd?.trim() || a.waitingFor?.trim())
-    && (a.state === 'blocked' || a.status === 'waiting'))
+  return agents.flatMap(a => {
+    const project = projectOf(a)
+    const listed = project && !(a.sessionId && a.sessionId === selfId) && !retiredAgent(a)
+      && Boolean(a.name?.trim() || a.sessionId?.trim() || a.cwd?.trim() || a.waitingFor?.trim())
+      && (a.state === 'blocked' || a.status === 'waiting')
+    return listed ? [{ agent: a, project }] : []
+  })
+}
+
+/**
+ * The names of every waiting session before the list is cut to one per project. The toasts and the feed
+ * compare these, so an older session of a project that shows up once the newer one is answered is not new.
+ */
+export function waitingNames(agents: Agent[], selfId: string | null, roots: (string | { root: string; name: string })[], home: string): string[] {
+  return waitingAgents(agents, selfId, roots, home).map(({ agent }) => agent.name?.trim() || '(未命名 session)')
+}
+
+/**
+ * Sessions that belong to this console (its folder or a registered project), not this one, waiting on a person:
+ * retired ones left out, the newest per project only, newest first, each named with its project.
+ * `roots` may be bare paths (no project name) or `{ root, name }`.
+ */
+export function relevantBlocked(agents: Agent[], selfId: string | null, roots: (string | { root: string; name: string })[], home: string): Blocked[] {
+  const listed = waitingAgents(agents, selfId, roots, home)
   // Per project the most pressing wording wins (a permission prompt must not hide behind a newer question); then the newest.
   const rank = (a: Agent) => BLOCKED_RANK.indexOf(blockedWhy(a))
   const newest = new Map<string, { agent: Agent; name: string }>()
-  for (const a of listed) {
-    const project = projectOf(a)!
+  for (const { agent: a, project } of listed) {
     const seen = newest.get(project.key)
     const better = !seen || rank(a) < rank(seen.agent) || (rank(a) === rank(seen.agent) && startedMs(a) > startedMs(seen.agent))
     if (better) newest.set(project.key, { agent: a, name: project.name })
@@ -749,8 +768,8 @@ export function events(prev: Snapshot | null, cur: Snapshot): Event[] {
   for (const p of cur.projects) {
     for (const t of prTransitions(short(p.name), prev.projects.find(x => x.name === p.name)?.pr, p.pr)) out.push({ at: cur.at, text: t.text, tone: t.tone })
   }
-  const prevBlocked = new Set(prev.blocked.map(b => b.name))
-  for (const b of cur.blocked) if (!prevBlocked.has(b.name)) out.push({ at: cur.at, text: `工作階段「${b.name}」${b.why}`, tone: 'amber' })
+  const prevWaiting = waitingBefore(prev)
+  for (const b of cur.blocked) if (!prevWaiting.has(b.name)) out.push({ at: cur.at, text: `工作階段「${b.name}」${b.why}`, tone: 'amber' })
   if (cur.codex.startsWith('STALE') && !prev.codex.startsWith('STALE')) out.push({ at: cur.at, text: 'Codex broker 過期', tone: 'red' })
   return out
 }
@@ -874,4 +893,19 @@ export function parseCodexQuota(text: string, now: number): { at: string; limits
   }
   const bal = rl.credits && !rl.credits.unlimited && rl.credits.balance != null ? String(rl.credits.balance) : undefined
   return { at: String(d.at ?? d.timestamp ?? ''), limits, ...(bal ? { credits: Number(bal).toLocaleString('en-US') } : {}) }
+}
+
+/**
+ * Warnings a project's jobs carry, as feed lines. A job that had already finished, and was last
+ * updated, before this plugin lifetime began (`since`) is history: after a reload its warning is not
+ * said again. An unfinished job, or one updated since, still speaks.
+ */
+export function jobWarnings(projectName: string, jobs: { warning?: string; status?: string; completedAt?: string; updatedAt?: string }[], since: number): string[] {
+  return jobs.filter(job => {
+    if (!job.warning) return false
+    const done = !!job.completedAt || ['completed', 'failed', 'cancelled'].includes(job.status ?? '')
+    if (!done) return true
+    const updated = Date.parse(job.updatedAt ?? job.completedAt ?? '')
+    return Number.isFinite(updated) && updated >= since
+  }).map(job => `${projectName}：${job.warning}`)
 }

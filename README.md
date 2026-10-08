@@ -215,6 +215,8 @@ The right-click menu (or `m` on the keyboard for the row under the cursor; Esc c
 
 With the menu open, one key runs an action on offer: `v` verify, `s` sync, `c` continue (still asks for the second press), `d` decide, `g` gate, `o` open STATUS.md, `p` open the pull request. The menu lists the keys that apply to that project; a key for an action not on offer does nothing.
 
+**Executor section.** An expanded card (the action menu, or the focused project of `↧ 各專案詳細`) has a 執行者 section with the same four lines as the executor digest. It is read when the card opens (`執行者：讀取中…` until then) and again only when the transcript changed; a card that is not open reads nothing.
+
 **Other sessions.** Under 用量, `其他工作階段` lists Claude Code sessions in the console's folder or a registered project that wait on you: `等待批准` (a permission prompt), `停在提問` (it finished a turn on a question) or `等待輸入`. Sessions the daemon retired (no process, no status) are left out, each project shows one, named with the project (the most pressing wording first, then the newest), and past three lines the list ends with `…另 N 條`. A session stopped on a question is only pointed out here; its project row already offers the decision.
 
 ## Git, PR and CI
@@ -254,6 +256,15 @@ A dispatch shows RUNNING optimistically until managed state is refreshed. Accept
 | `/console update` | Update console-status and reload plugins when a newer version is on `main` |
 
 Selecting a project applies only to the next accepted prompt. A downstream rejection retains the selection for retry.
+
+What the selected project's prompt carries, so the console need not read files to know what "this" means:
+
+| Context | Content |
+| --- | --- |
+| Selection | The project, its STATUS path, state, decision, gate, next step, executor jobs, Git and PR lines |
+| Executor digest (`執行者摘要：`) | Four lines about the project's latest executor session: `執行者：<launch name> · <kind> · <status>/<phase>`, `最後活動：<time> （N 分鐘前）`, `最後動作：` the last three tool calls, `最後一句：` its last words (up to 400 characters); `執行者摘要：無紀錄` when there is no job or transcript |
+
+The panel's own gate review and continue prompts carry the executor digest too. The session is the one the daemon recorded for the job (`~/.claude/jobs/<id>/state.json`), the plugin's record only when the daemon has none; only the transcript's last 64 KB is parsed, and an unchanged transcript (same mtime and size) is not read again.
 
 ## Light sessions
 
