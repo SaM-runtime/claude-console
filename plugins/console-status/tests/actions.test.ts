@@ -32,4 +32,5 @@ test('continue confirmation expires at three seconds and binds to the displayed 
   expect(confirmationMatches(undefined, 'one', 1001)).toBe(false)
   expect(confirmationMatches({ at: 1000, signature: 'one' }, 'one', 999)).toBe(false)
   expect(outputTail('first\nsecond\nthird\nfourth\n', 'error\n')).toEqual(['third', 'fourth', 'error'])
+  expect(outputTail('a\rprogress 50%\rprogress 100%\n\x1b]8;;u\x07ok\x1b]8;;\x07\x1b7\x1b8\n', 'e\x07rr\n')).toEqual(['progress 100%', 'ok', 'err'])
 })

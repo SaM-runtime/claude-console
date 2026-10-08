@@ -398,6 +398,23 @@ export function parseAsk(ask: string): Decision[] {
   })
 }
 
+/** A long CARD value (下一步, 狀態) as its `；`-separated clauses, brackets kept whole. */
+export function splitClauses(text: string): string[] {
+  return splitDecisions(text.replace(/\\n/g, '\n'))
+}
+
+/**
+ * The reply the console expects for picked options: `1A 2B`, a numeric key set apart (`2-1`),
+ * and a decision without options left as `3：` for the person to finish.
+ */
+export function decisionAnswer(decisions: Decision[], picks: Record<string, string>): string {
+  return decisions.map((d, i) => {
+    const key = picks[String(i)]
+    if (!d.options.length || !key) return `${i + 1}：`
+    return /^[A-Z]$/.test(key) ? `${i + 1}${key}` : `${i + 1}-${key}`
+  }).join(' ')
+}
+
 /** One line for narrow places: every decision title, options folded away. */
 export function askSummary(ask: string): string {
   const decisions = parseAsk(ask)

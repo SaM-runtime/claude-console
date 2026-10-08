@@ -1,4 +1,5 @@
 import type { Project, ActionKind, ContinueConfirmation, VerificationResult, PendingAction, ReviewRequest } from '../types'
+import { terminalLines } from './terminal'
 import type { State } from './logic'
 import { hasAsk, parseGate, saysNone } from './logic'
 
@@ -159,7 +160,7 @@ export function verificationArgs(command: string, windows: boolean): string[] {
 
 /** The API returns separate streams; append stderr, then keep only the final three nonblank lines. */
 export function outputTail(stdout: string, stderr = ''): string[] {
-  return `${stdout}\n${stderr}`.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/).map(s => s.trimEnd()).filter(s => s.trim()).slice(-3).map(s => s.slice(0, 500))
+  return terminalLines(`${stdout}\n${stderr}`).map(s => s.trimEnd()).filter(s => s.trim()).slice(-3).map(s => s.slice(0, 500))
 }
 
 export function verificationResult(command: string, at: number, result: { exitCode: number; stdout: string; stderr: string; isStdoutTruncated?: boolean; isStderrTruncated?: boolean }): VerificationResult {

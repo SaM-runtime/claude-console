@@ -53,6 +53,9 @@ export type GitInfo = {
   /** When `git fetch` last wrote FETCH_HEAD. */
   fetchedAt?: number
 }
+/** Decision index → the option key picked for one project. */
+export type DecisionPicks = Record<string, string>
+
 export type PrInfo = {
   number: number; title: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; draft: boolean; url: string; review?: string
   checks: { pass: number; fail: number; pending: number; failing: string[] }
@@ -128,6 +131,8 @@ declare module 'claude-code' {
       menuFor: string | null
       gitOpen: string | null
       gitViews: Record<string, GitDetail | 'loading'>
+      /** `statusPath\nask` → decision index → the option key picked in the pane; kept after filling, dropped when the ask changes. */
+      decisionPicks: Record<string, DecisionPicks>
       dispatchPicker: 'executor' | 'model' | 'effort' | null
       selected: string | null
       cursor: number
