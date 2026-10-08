@@ -19,8 +19,8 @@ import { stateFormatIssues, stateFormatWarning } from './jobs'
 import { pipeline, projectForCwd, projectModeSection, progressContext, progressSignature } from './pipeline'
 import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
-import { FETCH_STALE_MS, agoText, commitLine, gitBadge, gitLine, gitLogArgs, gitNumstatArgs, gitProbeMode, gitStatusArgs, parseGitLog, parseGitStatus, parseNumstat, parsePrView, prLine, prViewArgs } from './git'
-import type { PrInfo, CacheClock, GitCommit, GitInfo, UpdateInfo } from '../types'
+import { FETCH_STALE_MS, agoText, commitLine, fileGroups, fileKind, gitBadge, gitFilesArgs, gitLine, gitLogArgs, gitNumstatArgs, gitProbeMode, gitShowArgs, gitSignature, gitStatusArgs, linesText, parseGitFiles, parseGitLog, parseGitShow, parseGitStatus, parseNumstat, parseNumstatFiles, parsePrView, prLine, prViewArgs } from './git'
+import type { PrInfo, CacheClock, GitCommit, GitDetail, GitInfo, UpdateInfo } from '../types'
 import { CACHE_WARN_MS, cacheChip, cacheTtlOption, cacheView, cacheWarning, hitRate, hitText, leftText, learnTtl, priceOverride, tokensText, transcriptCache, transcriptPathFor, ttlLabel, usd } from './cache'
 import { limitPace } from './pace'
 import { LOOP_NOTE, LoopMemory, loopKey, loopMode } from './loop'
@@ -64,6 +64,9 @@ const feedAtom = atom({ plugin: 'console-status', key: 'feed' } as const, [])
 const isRefreshing = atom({ plugin: 'console-status', key: 'isRefreshing' } as const, false)
 const hovered = atom({ plugin: 'console-status', key: 'hovered' } as const, null)
 const menuFor = atom({ plugin: 'console-status', key: 'menuFor' } as const, null)
+/** The project (statusPath) whose Git file view is open, and the views read so far. */
+const gitOpen = atom({ plugin: 'console-status', key: 'gitOpen' } as const, null)
+const gitViews = atom({ plugin: 'console-status', key: 'gitViews' } as const, {})
 /** Which dispatch setting has its choices spread out under the pane header, if any. */
 const dispatchPicker = atom({ plugin: 'console-status', key: 'dispatchPicker' } as const, null)
 const pendingActions = atom({ plugin: 'console-status', key: 'pendingActions' } as const, {})
@@ -493,6 +496,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
       await sweepPending($)
       await advanceSyncs($, options)
       await autoSync($, options)
+      await followGitDetail($).catch(() => {})
     }
   } catch (error) {
     if (!current() || error === DISCARDED_REFRESH) return
@@ -982,6 +986,37 @@ async function cacheTickOnce($: any, options: PluginOptions) {
 
 /** `cacheHint`: `on` (chip, pane line, toasts) or `off`. */
 const cacheMode = (options: PluginOptions) => String((options as any).cacheHint ?? 'on').trim().toLowerCase() === 'off' ? 'off' : 'on'
+
+/** Reads the Git file view for a project: changed, untracked and ignored paths, and what HEAD touched. */
+async function loadGitDetail($: any, p: Project) {
+  const root = projectRoot(p.statusPath)
+  await update($, gitViews, views => ({ ...views, [p.statusPath]: views[p.statusPath] && views[p.statusPath] !== 'loading' ? views[p.statusPath]! : 'loading' }))
+  const run = (argv: string[]) => $.process.run(argv, { timeoutMs: 15_000 }).catch(() => null)
+  const [status, numstat, show] = await Promise.all([run(gitFilesArgs(root)), p.git?.changed ? run(gitNumstatArgs(root)) : null, p.git?.head ? run(gitShowArgs(root)) : null])
+  const now = await $.clock.now()
+  const view: GitDetail = status?.exitCode === 0
+    ? { at: now, sig: gitSignature(p.git), ...parseGitFiles(String(status.stdout ?? ''), numstat?.exitCode === 0 ? parseNumstatFiles(String(numstat.stdout ?? '')) : undefined) }
+    : { at: now, sig: gitSignature(p.git), files: [], untracked: [], ignored: [], error: String(status?.stderr ?? '').trim().split(/\r?\n/)[0] || '無法執行 git status' }
+  const commit = show?.exitCode === 0 ? parseGitShow(String(show.stdout ?? '')) : null
+  if (commit) view.commit = commit
+  await update($, gitViews, views => ({ ...views, [p.statusPath]: view }))
+}
+
+/** Opens or closes a project's Git file view; opening always reads it fresh. */
+async function toggleGitDetail($: any, p: Project) {
+  const open = await read($, gitOpen)
+  await update($, gitOpen, () => (open === p.statusPath ? null : p.statusPath))
+  if (open !== p.statusPath) await loadGitDetail($, p)
+}
+
+/** After a refresh, an open file view whose project's Git state moved is read again. */
+async function followGitDetail($: any) {
+  const open = await read($, gitOpen)
+  if (!open) return
+  const p = (await read($, snapshot))?.projects.find(item => item.statusPath === open)
+  const view = (await read($, gitViews))[open]
+  if (p && view && view !== 'loading' && view.sig !== gitSignature(p.git)) await loadGitDetail($, p)
+}
 
 /** Opens a project's pull request in the browser: `gh pr view --web`, else the OS URL handler. */
 async function openPullRequest($: any, p: Project) {
@@ -1585,6 +1620,7 @@ export const register: Register = (on, options) => {
           return {}
         }
         if (k === 'p' && menuProject.pr) { void openPullRequest($, menuProject); return {} }
+        if (k === 'f' && menuProject.git) { void toggleGitDetail($, menuProject); return {} }
       }
       if (k === 'escape') {
         if (await read($, menuFor)) await update($, menuFor, () => null)
@@ -1611,6 +1647,8 @@ export const register: Register = (on, options) => {
     const feed = demo ? demoEvents(s.at) : await read($, feedAtom)
     const hov = await read($, hovered)
     const menu = await read($, menuFor)
+    const openGit = demo ? null : await read($, gitOpen)
+    const gitViewMap = demo ? {} : await read($, gitViews)
     const refreshing = await read($, isRefreshing)
     const pending = await read($, pendingActions)
     const confirmations = await read($, continueConfirmations)
@@ -1863,6 +1901,49 @@ export const register: Register = (on, options) => {
         </Box>
       )
     }
+    /**
+     * The Git file view under a project's Git row, grouped the way `git status` groups it: conflicts,
+     * what the next commit takes, what it leaves, new files; then what HEAD touched and what is ignored.
+     * Paths keep both ends when cut, so the file name always shows.
+     */
+    const gitView = (p: Project, prefix: string) => {
+      const view = gitViewMap[p.statusPath]
+      const LIMIT = 12
+      const more = (key: string, n: number) => n > LIMIT ? <Text key={key} color={C.faint}>{`       …還有 ${n - LIMIT} 個`}</Text> : null
+      const row = (key: string, mark: string, markColor: string, path: string, note = '', tone: string = C.text) => (
+        <Box key={key} gap={1}>
+          <Box width={6} flexShrink={0}><Text color={markColor}>{'  ' + mark}</Text></Box>
+          <Box flexGrow={1} flexShrink={1}><Text color={tone} wrap="truncate-middle">{path}</Text></Box>
+          {note ? <Box flexShrink={0}><Text color={C.dim}>{note}</Text></Box> : null}
+        </Box>
+      )
+      const group = (key: string, title: string, titleColor: string, items: any[], line: (item: any) => any) => items.length ? [
+        <Text key={prefix + key} color={titleColor}>{title}</Text>,
+        ...items.slice(0, LIMIT).map(line),
+        more(prefix + key + '-more', items.length),
+      ] : []
+      const ready = view && view !== 'loading' && !view.error ? view : null
+      const g = ready ? fileGroups(ready.files) : null
+      const tone = (f: any) => f.stage === 'conflict' ? C.red : C.text
+      const clean = ready && !ready.files.length && !ready.untracked.length
+      return <Box key={prefix + 'git-view'} flexDirection="column" borderStyle="round" borderColor={C.faint} paddingX={1} marginLeft={8}>
+        <Box justifyContent="space-between" gap={1}>
+          <Text color={view && view !== 'loading' && view.error ? C.red : C.dim} wrap="truncate-end">{!view || view === 'loading' ? '讀取中…' : view.error ? `讀取失敗：${view.error}` : clean ? '工作目錄乾淨，沒有未提交的檔案' : `檔案・${agoText(view.at, renderedAt)}讀取`}</Text>
+          <Box flexShrink={0}><Button key={prefix + 'git-reload'} plain dimColor label="↻ 重讀" onPress={() => void loadGitDetail($, p)} /></Box>
+        </Box>
+        {ready && g && [
+          ...group('conflicts', `衝突 ${g.conflicts.length}　解決後再提交`, C.red, g.conflicts, (f: any) => row(prefix + 'x-' + f.path, '衝突', C.red, f.path, '', C.red)),
+          ...group('staged', `已暫存 ${g.staged.length}　下次 commit 會帶走`, C.green, g.staged, (f: any) => row(prefix + 's-' + f.path, fileKind(f, 'staged'), C.green, f.from ? `${f.from} → ${f.path}` : f.path, f.stage === 'staged' ? linesText(f.lines) : '', tone(f))),
+          ...group('unstaged', `未暫存 ${g.unstaged.length}`, C.amber, g.unstaged, (f: any) => row(prefix + 'w-' + f.path, fileKind(f, 'unstaged'), C.amber, f.path, linesText(f.lines), tone(f))),
+          ...group('untracked', `未追蹤 ${ready.untracked.length}`, C.blue, ready.untracked, (path: string) => row(prefix + 'u-' + path, '新檔', C.blue, path)),
+          ...(ready.commit ? group('commit', `最新提交 ${ready.commit.hash}　${ready.commit.subject}（${agoText(ready.commit.at, renderedAt)}）`, C.dim, ready.commit.files, (f: any) => row(prefix + 'h-' + f.path, '', C.dim, f.path, linesText(f.lines) || '二進位', C.dim)) : []),
+          ...(ready.ignored.length ? [
+            <Text key={prefix + 'ignored'} color={C.dim}>{`忽略 ${ready.ignored.length}`}<Text color={C.faint}>{'　.gitignore 排除，不會進版控'}</Text></Text>,
+            <Text key={prefix + 'ignored-list'} color={C.faint} wrap="wrap">{'       ' + ready.ignored.slice(0, LIMIT).join('　') + (ready.ignored.length > LIMIT ? `　…還有 ${ready.ignored.length - LIMIT} 個` : '')}</Text>,
+          ] : []),
+        ].filter(Boolean)}
+      </Box>
+    }
     /** What a person needs to decide the next move: what is running (and its last output), then the CARD. */
     const projectInfo = (p: Project, prefix: string, opts: { state?: boolean } = {}) => {
       const field = (label: string, value: string, color: string) => value ? (
@@ -1906,7 +1987,14 @@ export const register: Register = (on, options) => {
             </Box>
           </Box>
         })() : field('同步', !running.length && p.jobs.some(j => j.kind === 'newer') ? '執行者已結束，結果未寫回 STATUS' : '', C.blue)}
-        {p.git && field('Git', gitLine(p.git), p.git.conflicts ? C.red : p.git.changed || p.git.untracked ? C.amber : p.git.ahead || p.git.behind ? C.blue : C.dim)}
+        {p.git && (
+          <Box key={prefix + 'git'} gap={2}>
+            <Box width={6} flexShrink={0}><Text color={C.dim}>Git</Text></Box>
+            <Box flexGrow={1} flexShrink={1}><Text color={p.git.conflicts ? C.red : p.git.changed || p.git.untracked ? C.amber : p.git.ahead || p.git.behind ? C.blue : C.dim} wrap="wrap">{gitLine(p.git)}</Text></Box>
+            {!demo && <Box flexShrink={0}><Button key={prefix + 'git-files'} plain dimColor label={openGit === p.statusPath ? '▾ 收起' : '▸ 檔案'} onPress={() => void toggleGitDetail($, p)} /></Box>}
+          </Box>
+        )}
+        {p.git && openGit === p.statusPath && gitView(p, prefix)}
         {p.git?.upstream && p.git.fetchedAt !== undefined && renderedAt - p.git.fetchedAt > FETCH_STALE_MS && field('Fetch', `上次 fetch ${agoText(p.git.fetchedAt, renderedAt)}，領先／落後可能不是最新`, C.amber)}
         {p.git?.commits?.length ? (
           <Box key={prefix + 'commits'} gap={2}>
@@ -2043,6 +2131,7 @@ export const register: Register = (on, options) => {
                 const st = list.find(r => r.full === menuProject.name)?.state ?? 'NOCARD'
                 const keys = actionKinds(menuProject, st).filter(kind => HOTKEY_OF[kind]).map(kind => `${HOTKEY_OF[kind]} ${actionLabel(kind, menuProject).replace(/^\S+\s*/, '')}`)
                 if (menuProject.pr) keys.push('p 開啟 PR')
+                if (menuProject.git) keys.push('f Git 檔案')
                 return <Text key="m-keys" color={C.faint} wrap="wrap">{`快捷鍵　${[...keys, 'Esc 關閉'].join('・')}`}</Text>
               })()}
             </Box>

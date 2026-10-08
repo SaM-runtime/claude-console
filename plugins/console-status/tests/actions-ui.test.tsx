@@ -19,7 +19,7 @@ function fixture(on: any) {
     agentsDelay: 0,
     files: {} as Record<string, string>,
     /** `git status --porcelain=v2 --branch` and `gh pr view --json` output; empty: not a repository / no PR. */
-    git: '', gh: '', gitLog: '', gitDiff: '', gitCalls: [] as any[],
+    git: '', gh: '', gitLog: '', gitDiff: '', gitFiles: '', gitShow: '', gitCalls: [] as any[],
   }
   on('fs.list', () => ({ value: [{ name: 'Project Alpha-hash', kind: 'dir' }] }))
   on('fs.read', (_: any, e: any) => {
@@ -43,7 +43,7 @@ function fixture(on: any) {
     if (e.argv[0] === 'git') {
       data.gitCalls.push(e)
       if (!data.git) return { value: result(128, '', 'not a git repository') }
-      return { value: result(0, e.argv.includes('log') ? data.gitLog ?? '' : e.argv.includes('diff') ? data.gitDiff ?? '' : data.git) }
+      return { value: result(0, e.argv.includes('log') ? data.gitLog ?? '' : e.argv.includes('diff') ? data.gitDiff ?? '' : e.argv.includes('show') ? data.gitShow ?? '' : e.argv.includes('--porcelain=v1') ? data.gitFiles ?? '' : data.git) }
     }
     if (e.argv[0] === 'gh') { data.gitCalls.push(e); return { value: data.gh ? result(0, data.gh) : result(1, '', 'no pull requests found') } }
     data.processCalls.push(e)
@@ -386,7 +386,50 @@ test('the action menu shows the branch, uncommitted work and the PR checks, and 
   expect(await ui.find({ type: 'Text', text: /^abc1234 Parse nested tables（\d+ 小時前）$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^def5678 Add parser tests（1 天前）$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /#17 Parser rewrite（開啟）　CI ✕ 1 失敗：build \(windows\)　1 進行中　待審查/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /快捷鍵　v 執行驗證・c 繼續下一步・o 開啟 STATUS\.md・p 開啟 PR・Esc 關閉/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /快捷鍵　v 執行驗證・c 繼續下一步・o 開啟 STATUS\.md・p 開啟 PR・f Git 檔案・Esc 關閉/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the Git row opens a file view grouped like git status, with what HEAD touched and what is ignored', OPTIONS, async ($, on) => {
+  const { data } = fixture(on)
+  data.git = GIT_STATUS
+  data.gitDiff = '10\t2\tsrc/a.ts\n2\t1\tsrc/b.ts\n'
+  data.gitFiles = [' M src/a.ts', 'M  src/b.ts', 'MM src/c.ts', 'R  src/new name.ts', 'src/old name.ts', 'UU src/merge.ts', '?? notes.txt', '!! node_modules/', '!! dist/', ''].join('\0')
+  data.gitShow = `abc1234\x1f${Math.floor(Date.parse('2030-01-05T09:00:00Z') / 1000)}\x1fParse nested tables\n\n7\t0\tsrc/parser.ts\n-\t-\tlogo.png\n`
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)
+  expect(await ui.find({ type: 'Text', text: '已暫存 4　下次 commit 會帶走' })).toBeUndefined()
+  // Read only on demand: nothing but the refresh's own git calls ran.
+  expect(data.gitCalls.some(call => call.argv.includes('--porcelain=v1'))).toBe(false)
+  await ui.press({ key: 'm-info-git-files' })
+  const files = data.gitCalls.find(call => call.argv.includes('--porcelain=v1')).argv
+  expect(files).toEqual(['git', '--no-optional-locks', '-C', 'D:/Project Alpha', 'status', '--porcelain=v1', '-z', '--untracked-files=normal', '--ignored=traditional'])
+  expect(await ui.find({ type: 'Text', text: '衝突 1　解決後再提交' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '已暫存 3　下次 commit 會帶走' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '未暫存 2' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'src/old name.ts → src/new name.ts' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '  改名' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '+10 −2' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '未追蹤 1' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^最新提交 abc1234　Parse nested tables（\d+ 小時前）$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '二進位' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '       node_modules/　dist/' })).toBeDefined()
+  expect(JSON.stringify(await ui.drawn()).includes('undefined')).toBe(false)
+  // f closes it again from the menu.
+  await ui.post({ key: 'f' }, { in: 'rows' } as any)
+  expect(await ui.find({ type: 'Text', text: '未暫存 2' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a clean work tree says so in the file view', OPTIONS, async ($, on) => {
+  const { data } = fixture(on)
+  data.git = '# branch.oid 0123456789abcdef\n# branch.head main\n'
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)
+  await ui.post({ key: 'f' }, { in: 'rows' } as any)
+  expect(await ui.find({ type: 'Text', text: '工作目錄乾淨，沒有未提交的檔案' })).toBeDefined()
   await ui.unmount()
 })
 
