@@ -19,7 +19,7 @@ claude plugin install console-status@claude-console
 
 - **一張表看全部專案。** 每個專案一列：狀態（`●` 需決策、`◆` 待審核、`▶` 執行中、`↻` 待同步、`○` 閒置）、六格流程管線（規格 → 實作 → 同步 → 驗證 → 審核 → 上線）、更新時間與 Git 摘要。最上方的「下一步」卡指出現在該處理哪一件；面板關起來時，輸入框上方的橫帶仍顯示各狀態數量。見[專案動作](#專案動作)與[流程管線與專案模式](#流程管線與專案模式)。
 - **決策用按的。** 卡片裡每個選項都能直接點；動作選單開著時，數字鍵依序作答（按 `2` 再按 `1` 就是 `1B 2-1`），Backspace 退回上一個。`✎ 填入決策` 或 `✎ 做決定` 把答案放進輸入框，按 Enter 送出。
-- **一鍵動作。** 驗證、同步 STATUS、繼續下一步、審核關卡、開啟 STATUS.md：右鍵或 `m` 開動作選單，每個動作都有單鍵快捷。執行者做完卻沒寫回 CARD 時，主控台會自動派一次同步（`autoSync`），同步進度一步一步顯示。
+- **一鍵動作。** 驗證、同步 STATUS、繼續下一步、審核關卡、開啟 STATUS.md：右鍵或 `m` 開動作選單，每個動作都有單鍵快捷。執行者做完卻沒寫回 CARD 時，主控台會自動派一次同步（`autoSync`），同步進度一步一步顯示。執行者停下來問你時，直接在主控台回覆（`↩ 回覆執行者`），不用切過去；下一步會以灰字建議放在輸入框，按 Tab 再 Enter 就好（`suggestNext`）。
 - **派工可選執行者。** 預設用 Claude Code 背景 agent，也可整體或單一專案改用 Codex；Codex 不能用或額度不足時可退回 Claude。選取專案後送出的提示會附上「執行者摘要」（最後在做什麼、最後三個工具呼叫、最後一句話），專案卡的「執行者」區塊也顯示同樣內容。見[派工設定](#dispatch-settings派工設定)。
 - **Git、PR 與 CI 不用切視窗。** 分支與領先／落後、未提交行數、stash、最近幾筆提交、fetch 太久沒更新的提醒；`▸ 檔案` 展開依 `git status` 分組的檔案清單；PR 審查狀態與失敗的 CI 檢查，CI 失敗時橫帶亮紅。見 [Git、PR 與 CI](#gitpr-與-ci)。
 - **用量與快取。** Claude 的 5 小時、本週、各模型額度與 Codex 額度在同一張「用量」表，並估算照目前速度何時用完；提示快取的倒數、冷掉後重寫的費用與上次命中率。見[用量配速](#用量配速)與[快取與費用](#快取與費用)。
@@ -105,6 +105,7 @@ Marketplace 管理請參考官方 [plugin marketplace 文件](https://code.claud
 | `cacheTtl` | `auto`（讀 session 記錄裡 API 回報的實際 TTL，讀到前先當 5 分鐘）、`5m` 或 `1h` | `auto` |
 | `cacheWritePrice` | 估算用的快取寫入單價（每百萬 tokens 美元）；空白使用模型牌價 | 空白 |
 | `autoSync` | `on`：執行者已結束、但結果沒寫回 CARD（待同步）時，主控台自動派一次同步，每個工作只派一次；失敗或沒寫回的同步不會重試。`off`：只有按「同步」才會同步 | `on` |
+| `suggestNext` | `on`：把下一步（決策、回覆停下來問你的執行者、審核關卡、同步、繼續）以灰字建議放在輸入框，按 Tab 採用（見 [Tab 接受下一步](#tab-接受下一步)）；`off`：輸入框只留 Claude Code 自己的建議 | `on` |
 | `activation` | `auto`：只有執行過 `/console` 的 session 會跑主控台，resume 同一個 session 會自動再啟動；其他 session 只有指令護欄（見[輕量 session](#輕量-session)）。`always`：每個 session 都跑 | `auto` |
 | `projectMode` | `auto`：在已登錄專案內開啟的 session 會切到專案模式（見[流程管線與專案模式](#流程管線與專案模式)）；`off`：一律是多專案主控台 | `auto` |
 
@@ -164,7 +165,7 @@ Mod 會在 `claudeSessionsPath` 保存專案與 session 的對應，以及每個
 
 `claude agents --json --all --cwd <專案根目錄>` 會列出執行中與已完成 agent。Mod 只接受 `cwd` 完全符合專案的 background agent，使用其短 `id`、完整 `sessionId`、`name`、`state`、`status`、`waitingFor`，並以 `claude logs <id>` 讀取輸出。派工必須透過唯一名稱對應到一個新產生的完整 session UUID 才會保存；無法唯一確認時保持未解狀態並阻止再次派工，後續刷新可恢復唯一具名的派工。Blocked 或 waiting 仍算執行中，查不到 agent 也不推定完成。本機樣本觀察到 `working`、`blocked` state 與 `busy`、`idle`、`waiting` status；文件定義的終止 state `done`、`failed`、`stopped` 會結束受管理工作。
 
-Session 檔是 mod 自有狀態。內容損壞時會 fail closed，不會丟棄已保存的 session 身分。同一 mod process 內的寫入會序列化，因此請只讓一個主控台 process 寫入；不同 process 同時寫入不保證 atomic。Claude 派工不加入略過權限的旗標，沿用一般 Claude Code 權限流程。背景 agent 被 blocked 時，請在 Claude Code attach 該 agent，處理批准或輸入。
+Session 檔是 mod 自有狀態。內容損壞時會 fail closed，不會丟棄已保存的 session 身分。同一 mod process 內的寫入會序列化，因此請只讓一個主控台 process 寫入；不同 process 同時寫入不保證 atomic。Claude 派工不加入略過權限的旗標，沿用一般 Claude Code 權限流程。背景 agent 做完一輪停在提問時，用 `↩ 回覆執行者` 在主控台回覆即可（見[專案動作](#專案動作)）；停在權限提示（等待批准）的仍要在 Claude Code attach 該 agent 處理。
 
 模型 Button 提供 CLI 已觀察到的 alias：`fable`、`opus`、`sonnet`；`/console model <name>` 也接受自由輸入。Effort 為 `low`、`medium`、`high`、`xhigh`、`max`。空值交給 Claude Code 決定。
 
@@ -231,6 +232,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | ▶ 執行驗證 | CARD 有 `驗證` | 在專案根目錄執行，最長五分鐘；不花模型額度 |
 | ⇢ 同步 STATUS | SYNC，且執行者不是 `manual` | 派該專案的執行器只更新 CARD 與歷程；`autoSync: on` 時每個結束的工作會自動派一次 |
 | ⇢ 繼續下一步 | IDLE、有下一步、無待決或關卡，且執行者不是 `manual` | 六秒內再按一次後派該專案的執行器（面板會顯示將派出的下一步） |
+| ↩ 回覆執行者 | Claude 執行者做完一輪停下來問你，且執行者不是 `manual` | 在輸入框填入 `/console reply <專案> `，寫下回覆按 Enter，主控台就用你的話接續問問題的那個 session（附上和「繼續」相同的 CARD 規則），不用 attach。權限提示（等待批准）仍要 attach 處理 |
 | ⇢ 改用 Claude 派工 | `codexFallback: ask` 擋下的 Codex 派工 | 把同一動作交給 Claude，並記錄為備援 |
 | ✎ 做決定 | `等使用者` 非空 | 預填草稿並附一次性專案 context；送出時才使用 Claude。展開卡片中每個選項都可按下，`✎ 填入決策：1A 2B` 會填入已選的答案 |
 | ⚑ 審核關卡／最終審核 | 可辨識的 spec、review、release | 交主控台 Claude 審核；release 審核不會執行 release。該輪結束、CARD 關卡變更，或十分鐘內沒有審核輪在跑，這一列就會解鎖 |
@@ -240,7 +242,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 **同步進度。** 同步時，專案的「同步」欄會顯示步驟 `● 派工 ─ ◉ 執行 ─ ○ 寫回 STATUS`（● 完成、◉ 進行中、○ 未到、✕ 停在這一步），下一行是執行者、目前階段與經過時間；橫帶顯示 `↻ 同步：執行中 1 分 20 秒`。CARD 的「更新」有變才算完成；同步結束卻沒改到 CARD 時會直接標出 `✕ 寫回 STATUS`，不會默默停在待同步。結果在畫面上保留五分鐘，也會跳一則提示。有工作或同步在跑時，主控台每 20 秒更新一次（平常每分鐘）。
 
-選單開著時，一個鍵就能執行目前可用的動作：`v` 驗證、`s` 同步、`c` 繼續（仍需第二次確認）、`d` 決策、`g` 審核關卡、`o` 開啟 STATUS.md、`p` 開啟 PR。選單底部只列出該專案可用的鍵；不可用的動作按了不會有反應。
+選單開著時，一個鍵就能執行目前可用的動作：`v` 驗證、`s` 同步、`c` 繼續（仍需第二次確認）、`r` 回覆執行者、`d` 決策、`g` 審核關卡、`o` 開啟 STATUS.md、`p` 開啟 PR。選單底部只列出該專案可用的鍵；不可用的動作按了不會有反應。
 
 **執行者區塊。** 展開的專案卡片（動作選單，或「↧ 各專案詳細」裡聚焦的專案）多一區「執行者」，內容與執行者摘要同樣四行。卡片展開時讀取（讀完前顯示 `執行者：讀取中…`），之後 transcript 有變才重讀；沒展開的卡片不讀檔。
 
@@ -269,6 +271,8 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | --- | --- |
 | `/console` | 開啟或關閉面板 |
 | `/console refresh` | 刷新檔案與慢速探測 |
+| `/console reply <專案> <回覆>` | 回覆停下來問你的執行者，送進它自己的 session |
+| `/console sync\|continue\|gate\|verify <專案>` | 執行該專案動作；送出 `continue` 指令本身就是確認，新的 `驗證` 指令仍要再送一次才執行 |
 | `/console band` | 顯示或隱藏輸入框上方橫條 |
 | `/console plain` | 切換互動列與純文字列 |
 | `/console demo` | 載入虛構資料；`refresh` 回到實際狀態 |
@@ -292,6 +296,20 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | 執行者摘要（`執行者摘要：`） | 該專案最新執行者 session 的四行：`執行者：<launch name> · <kind> · <status>/<phase>`、`最後活動：<時間> （N 分鐘前）`、`最後動作：` 最後三個工具呼叫、`最後一句：` 最後一段文字（最多 400 字）；沒有 job 或找不到 transcript 時為 `執行者摘要：無紀錄` |
 
 面板自己送出的審核關卡與繼續下一步提示也附執行者摘要。session 以 daemon 為該 job 記的為準（`~/.claude/jobs/<id>/state.json`），daemon 沒有才用外掛的紀錄；transcript 只解析最後 64 KB，未變更（mtime 與大小相同）就不重讀。
+
+## Tab 接受下一步
+
+`suggestNext: on`（預設）時，主控台會把下一步以灰字建議放在空的輸入框；按 Tab 採用，Enter 送出。建議的是「下一步」卡指著的那個專案：
+
+| 專案狀態 | 建議 |
+| --- | --- |
+| 有待決（`等使用者`） | `「<專案>」決策：`，接著寫答案 |
+| 執行者停下來問你 | `/console reply <專案> `，接著寫回覆 |
+| 等審核關卡 | `/console gate <專案>` |
+| 等同步 | `/console sync <專案>` |
+| 以上都沒有時，第一個有下一步的閒置專案 | `/console continue <專案>` |
+
+下一步改變時才提出新建議；輸入框當下顯示不了（正在跑一輪，或你在打字）時，下次刷新再提一次。該專案的動作執行中、示範資料或刷新失敗時不建議。不呼叫模型。其餘時間輸入框照常顯示 Claude Code 自己的建議；`suggestNext: off` 則完全交給它。
 
 ## 輕量 session
 
@@ -373,6 +391,8 @@ claude plugin install paste-preview@paste-preview
 0.11.0 起 Git 那一行的未提交行數，參考 arasovic 的 [claude-code-mods](https://github.com/arasovic/claude-code-mods) 裡的 change-ledger（MIT 授權），它在 session 改過的檔案旁顯示 `git diff --numstat`；stash 數量參考 [jarrodwatts](https://github.com/jarrodwatts) 的 [claude-hud](https://github.com/jarrodwatts/claude-hud) 的 git 檔案統計（MIT 授權）。同上，程式碼都是 console-status 自己寫的。感謝 jarrodwatts。
 
 0.13.0 起面板的區段標題（名稱、延伸到邊緣的細線、右側數字）參考 [jesseduffield](https://github.com/jesseduffield) 的 [lazygit](https://github.com/jesseduffield/lazygit) 的面板標題（MIT 授權），只借外觀，沒有用到它的程式碼。感謝 jesseduffield。
+
+0.17.0 起輸入框的「Tab 接受下一步」參考 [hamzafer](https://github.com/hamzafer) 的 [claude-code-mods](https://github.com/hamzafer/claude-code-mods) 裡的 next-steps（MIT 授權），它在每輪結束後建議可能的下一則提示。console-status 改從 STATUS 卡推出建議、不呼叫模型，沒有包含它的程式碼。
 
 ## 限制
 

@@ -19,7 +19,7 @@ Run `/console demo` in any Claude Code session to see the whole pane without a r
 
 - **Every project in one table.** One row per project: its state (`●` decision needed, `◆` awaiting review, `▶` running, `↻` needs sync, `○` idle), a six-step pipeline (spec → build → sync → verify → review → release), when it was updated, and a Git summary. The next-step card on top names the one thing to handle now; with the pane closed, the band above the prompt still counts each state. See [Project actions](#project-actions) and [Pipeline and project mode](#pipeline-and-project-mode).
 - **Decisions are pressed, not typed.** Every option in a card can be pressed; with the action menu open, number keys answer the decisions in order (`2` then `1` reads `1B 2-1`) and Backspace takes the last pick back. `✎ 填入決策` or `✎ 做決定` puts the answer in the prompt; Enter sends it.
-- **One-button actions.** Verify, sync STATUS, continue to the next step, review a gate, open STATUS.md: right-click or `m` opens the action menu, and every action has a single-key shortcut. When an executor finished without writing the CARD back, the console dispatches one sync by itself (`autoSync`) and shows its progress step by step.
+- **One-button actions.** Verify, sync STATUS, continue to the next step, review a gate, open STATUS.md: right-click or `m` opens the action menu, and every action has a single-key shortcut. When an executor finished without writing the CARD back, the console dispatches one sync by itself (`autoSync`) and shows its progress step by step. An executor that stopped to ask you is answered from the console (`↩ 回覆執行者`), and the way on waits in the prompt box as a dim suggestion: Tab, then Enter (`suggestNext`).
 - **Your choice of executor.** Claude Code background agents by default; Codex for everything or per project, with a fallback to Claude when Codex is unusable or low on quota. A prompt sent with a project selected carries an executor digest (what it was last doing, its last three tool calls, its last words), and the project card's 執行者 section shows the same. See [Dispatch settings](#dispatch-settings).
 - **Git, PR and CI without switching windows.** Branch and ahead/behind, uncommitted line counts, stash, recent commits, a warning when the last fetch is old; `▸ 檔案` opens the files grouped like `git status`; the PR's review state and failing CI checks, with the band turning red on a CI failure. See [Git, PR and CI](#git-pr-and-ci).
 - **Usage and cache.** Claude's 5-hour, weekly and per-model limits and Codex's quota share one 用量 table, with an estimate of when the current pace runs out; the prompt cache's countdown, the cost of re-writing it once cold, and the last hit rate. See [Usage pace](#usage-pace) and [Prompt cache and cost](#prompt-cache-and-cost).
@@ -105,6 +105,7 @@ Marketplace management is covered by the official [plugin marketplace documentat
 | `cacheTtl` | `auto` (the TTL the API reports in the session transcript's usage; 5 minutes until one is seen), `5m` or `1h` | `auto` |
 | `cacheWritePrice` | USD per million cache-write tokens for the estimate; empty uses the model's list price | Empty |
 | `autoSync` | `on`: when finished executor work left the CARD behind (待同步), the console dispatches one sync by itself, once per job, and never retries one that fails or writes nothing. `off`: only the 同步 button syncs | `on` |
+| `suggestNext` | `on`: the way on (a decision, a reply to an executor that asked, a gate, a sync, a continue) waits in the prompt box as a dim suggestion, Tab to take (see [Tab for the next step](#tab-for-the-next-step)); `off`: leave the box to Claude Code's own suggestions | `on` |
 | `activation` | `auto`: only a session where you ran `/console` runs the console, and it starts again when that session resumes; other sessions get the command guard only (see [Light sessions](#light-sessions)). `always`: every session | `auto` |
 | `projectMode` | `auto`: a session opened inside a registered project switches to project mode (see [Pipeline and project mode](#pipeline-and-project-mode)); `off`: always the multi-project console | `auto` |
 
@@ -164,7 +165,7 @@ The mod keeps a project-to-session mapping and the latest 20 managed job records
 
 `claude agents --json --all --cwd <project-root>` supplies active and completed agents. The mod accepts only background agents whose `cwd` exactly matches the project, uses their short `id`, full `sessionId`, `name`, `state`, `status`, and `waitingFor`, and reads output with `claude logs <id>`. A launch must resolve by its unique name to exactly one full session UUID (the existing UUID when resuming) before the mapping is saved; an ambiguous launch stays unresolved and blocks another dispatch. A later refresh can recover a uniquely named launch. Blocked or waiting agents remain running, and an absent agent does not imply completion. The local sample showed `working` and `blocked` states with `busy`, `idle`, and `waiting` statuses; the documented terminal states `done`, `failed`, and `stopped` end the managed job.
 
-The sessions file is mod-owned state. Malformed content fails closed instead of discarding the saved session identity. Writes are serialized inside one mod process, so keep one console process as its writer; simultaneous writes from separate processes are not guaranteed atomic. Claude dispatch adds no permission-bypass flag and inherits the normal Claude Code permission flow. Attach to a blocked background agent in Claude Code to handle its approval or input.
+The sessions file is mod-owned state. Malformed content fails closed instead of discarding the saved session identity. Writes are serialized inside one mod process, so keep one console process as its writer; simultaneous writes from separate processes are not guaranteed atomic. Claude dispatch adds no permission-bypass flag and inherits the normal Claude Code permission flow. A background agent that finished its turn on a question is answered from the console with `↩ 回覆執行者` (see [Project actions](#project-actions)); attach to one that waits on a permission prompt to handle the approval.
 
 Model Buttons offer the CLI aliases `fable`, `opus`, and `sonnet`; `/console model <name>` also accepts a free-form value. Effort options are `low`, `medium`, `high`, `xhigh`, and `max`. Empty values leave both choices to Claude Code.
 
@@ -232,6 +233,7 @@ The right-click menu (or `m` on the keyboard for the row under the cursor; Esc c
 | ▶ Run verification | CARD has `驗證` | Runs in the project root with a five-minute timeout; no model quota |
 | ⇢ Sync STATUS | SYNC, executor not `manual` | Dispatches the project's executor to update only CARD and history; `autoSync: on` does this by itself once per finished job |
 | ⇢ Continue | IDLE, with a next step and no decision or gate; executor not `manual` | Requires a second press within six seconds (the pane shows the next step it will dispatch), then dispatches the project's executor |
+| ↩ 回覆執行者 | A Claude executor finished its turn on a question to you; executor not `manual` | Fills the composer with `/console reply <project> `: write the answer and press Enter, and the console resumes the session that asked with your words as its prompt (plus the CARD rules a continue carries). No attaching. A permission prompt (`等待批准`) still needs attaching |
 | ⇢ 改用 Claude 派工 | A Codex dispatch held by `codexFallback: ask` | Sends the same action to Claude, recorded as a fallback |
 | ✎ Decide | `等使用者` is nonempty | Prefills a draft and one-shot project context; Claude runs only when submitted. In the expanded card each option is a pressable row, and `✎ 填入決策：1A 2B` fills the picked answer |
 | ⚑ Review gate / final review | Recognized spec, review, or release gate | Sends evidence to the console Claude; release review cannot execute release. The row unlocks when that turn ends, when the CARD moves past the gate, or after ten minutes with no review turn running |
@@ -241,7 +243,7 @@ The right-click menu (or `m` on the keyboard for the row under the cursor; Esc c
 
 **Sync progress.** A sync shows its steps on the project's `同步` line, `● 派工 ─ ◉ 執行 ─ ○ 寫回 STATUS` (● done, ◉ under way, ○ not reached, ✕ stopped there), with the executor, its phase and the elapsed time underneath, and the band shows `↻ 同步：執行中 1 分 20 秒`. It is done when the CARD's `更新` changes; a sync that ends without changing it says so (`✕ 寫回 STATUS`) instead of quietly leaving 待同步. The outcome stays on screen for five minutes and is also a toast. While a job or a sync runs, the console refreshes every 20 seconds instead of every minute.
 
-With the menu open, one key runs an action on offer: `v` verify, `s` sync, `c` continue (still asks for the second press), `d` decide, `g` gate, `o` open STATUS.md, `p` open the pull request. The menu lists the keys that apply to that project; a key for an action not on offer does nothing.
+With the menu open, one key runs an action on offer: `v` verify, `s` sync, `c` continue (still asks for the second press), `r` reply to the executor, `d` decide, `g` gate, `o` open STATUS.md, `p` open the pull request. The menu lists the keys that apply to that project; a key for an action not on offer does nothing.
 
 **Executor section.** An expanded card (the action menu, or the focused project of `↧ 各專案詳細`) has a 執行者 section with the same four lines as the executor digest. It is read when the card opens (`執行者：讀取中…` until then) and again only when the transcript changed; a card that is not open reads nothing.
 
@@ -270,6 +272,8 @@ A dispatch shows RUNNING optimistically until managed state is refreshed. Accept
 | --- | --- |
 | `/console` | Open or close the panel |
 | `/console refresh` | Refresh files and slow probes |
+| `/console reply <project> <answer>` | Answer the executor that stopped to ask, in its own session |
+| `/console sync\|continue\|gate\|verify <project>` | Run that project action; sending `continue` is its confirmation, `verify` of a new command still asks to run it again |
 | `/console band` | Toggle the band above the prompt |
 | `/console plain` | Toggle interactive and plain project rows |
 | `/console demo` | Load fictional data; `refresh` returns to live state |
@@ -293,6 +297,20 @@ What the selected project's prompt carries, so the console need not read files t
 | Executor digest (`執行者摘要：`) | Four lines about the project's latest executor session: `執行者：<launch name> · <kind> · <status>/<phase>`, `最後活動：<time> （N 分鐘前）`, `最後動作：` the last three tool calls, `最後一句：` its last words (up to 400 characters); `執行者摘要：無紀錄` when there is no job or transcript |
 
 The panel's own gate review and continue prompts carry the executor digest too. The session is the one the daemon recorded for the job (`~/.claude/jobs/<id>/state.json`), the plugin's record only when the daemon has none; only the transcript's last 64 KB is parsed, and an unchanged transcript (same mtime and size) is not read again.
+
+## Tab for the next step
+
+With `suggestNext: on` (the default) the console puts the way on in the empty prompt box as a dim suggestion; Tab takes it, Enter sends it. It is the project the 下一步 card points at:
+
+| The project | Suggestion |
+| --- | --- |
+| Has a decision (`等使用者`) | `「<project>」決策：`, then write the answer |
+| Its executor stopped to ask you | `/console reply <project> `, then write the reply |
+| Waits on a gate | `/console gate <project>` |
+| Waits on a sync | `/console sync <project>` |
+| Otherwise, the first idle project with a next step | `/console continue <project>` |
+
+A suggestion is offered when the way on changes, and again at the next refresh when the box could not show it (a turn was running, or you were typing). Nothing is suggested while that project's action is running, with demo data, or after a failed refresh. It needs no model call. Claude Code shows its own suggestions the rest of the time; `suggestNext: off` leaves the box to them.
 
 ## Light sessions
 
@@ -374,6 +392,8 @@ Thanks to arasovic and hamzafer.
 Since 0.11.0 the Git line's uncommitted line count follows change-ledger in [claude-code-mods](https://github.com/arasovic/claude-code-mods) by arasovic (MIT License), which shows `git diff --numstat` beside the files a session edited, and its stash count follows the git file stats of [claude-hud](https://github.com/jarrodwatts/claude-hud) by [jarrodwatts](https://github.com/jarrodwatts) (MIT License). As above, the code is console-status's own. Thanks to jarrodwatts.
 
 Since 0.13.0 the pane's section titles (name, a hairline to the edge, figures at the end) follow the titled panels of [lazygit](https://github.com/jesseduffield/lazygit) by [jesseduffield](https://github.com/jesseduffield) (MIT License). Only the look is borrowed; no code. Thanks to jesseduffield.
+
+Since 0.17.0 the Tab suggestion for the next step follows next-steps in [hamzafer](https://github.com/hamzafer)'s [claude-code-mods](https://github.com/hamzafer/claude-code-mods) (MIT License), which offers likely next prompts after each turn. console-status reads its suggestion from the STATUS CARD instead of asking a model, and contains none of its code.
 
 ## Limitations
 

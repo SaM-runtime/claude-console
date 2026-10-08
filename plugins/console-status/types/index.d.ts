@@ -68,7 +68,7 @@ export type FallbackOffer = { kind: 'sync' | 'continue'; reason: string; at: num
 
 export type FeedEvent = { at: number; text: string; tone: 'amber' | 'teal' | 'blue' | 'red' | 'green' }
 
-export type ActionKind = 'verify' | 'sync' | 'continue' | 'decide' | 'gate' | 'open'
+export type ActionKind = 'verify' | 'sync' | 'continue' | 'reply' | 'decide' | 'gate' | 'open'
 export type ContinueConfirmation = { at: number; signature: string }
 export type VerificationResult = { command: string; at: number; ok: boolean; exitCode: number | null; lines: string[]; truncated: boolean }
 export type PendingAction = { kind: ActionKind; at: number }

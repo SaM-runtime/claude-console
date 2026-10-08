@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -121,6 +121,12 @@
       "type": "string",
       "title": "Auto sync",
       "description": "on: when finished executor work left a project's STATUS CARD behind (待同步), dispatch one sync by itself, once per job; a sync that fails or writes nothing is not retried. off: wait for the 同步 button.",
+      "default": "on"
+    },
+    "suggestNext": {
+      "type": "string",
+      "title": "Suggest the next step",
+      "description": "on: offer the way on (a decision, a reply to an executor that asked, a gate, a sync, a continue) as the prompt box's dim suggestion, Tab to take. off: leave the box to Claude Code's own suggestions.",
       "default": "on"
     },
     "activation": {

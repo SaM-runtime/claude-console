@@ -65,3 +65,8 @@ export type Activation = 'auto' | 'always'
 export function activationMode(value: unknown): Activation {
   return String(value ?? '').trim().toLowerCase() === 'always' ? 'always' : 'auto'
 }
+
+/** `suggestNext` option: `on` (default) offers the way on as the prompt box's Tab suggestion, `off` leaves the box to Claude Code. */
+export function suggestNextMode(value: unknown): 'on' | 'off' {
+  return String(value ?? '').trim().toLowerCase() === 'off' ? 'off' : 'on'
+}

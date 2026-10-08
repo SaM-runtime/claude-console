@@ -3,14 +3,14 @@
 // Band above the prompt + `/console` pane; toasts on changes. Shows on phones via Remote Control.
 import { atom, read, update } from 'claude-code'
 import type { Register, PluginOptions } from 'claude-code'
-import { resolveConfig, resolveFallbackOptions, legacyDispatchPath, activationMode } from './config'
+import { resolveConfig, resolveFallbackOptions, legacyDispatchPath, activationMode, suggestNextMode } from './config'
 import type { ConsoleConfig } from './config'
 import { codexHealth, isActiveJob } from './logic'
 import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles, effectiveDispatch, setProjectOverride, executorSignature, projectOverride } from './dispatch'
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, askingSession, dispatchBlockReason, dispatchPrompt, freshSession, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
+import { actionKinds, actionLabel, askingSession, commandTarget, replyPrompt, suggestedPrompt, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -579,6 +579,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
       await sweepPending($)
       await advanceSyncs($, options)
       await autoSync($, options)
+      await suggestNext($, options)
       await followGitDetail($).catch(() => {})
       // Only the open cards of an open pane: a transcript that has not changed is not read again.
       if (await read($, isPaneOpen)) void syncDigests($, options)
@@ -656,7 +657,11 @@ async function confirmed($: any, statusPath: string, signature: string, now: num
   return false
 }
 
-async function triggerAction($: any, options: PluginOptions, statusPath: string, kind: ActionKind, request: { useClaude?: boolean; auto?: boolean } = {}) {
+/**
+ * `text`: a reply's words, sent to the executor that asked; without them a reply fills the prompt box instead.
+ * `confirmed`: the person already confirmed a continue (they sent the `/console continue` command), so no second press.
+ */
+async function triggerAction($: any, options: PluginOptions, statusPath: string, kind: ActionKind, request: { useClaude?: boolean; auto?: boolean; text?: string; confirmed?: boolean } = {}) {
   if (await demoEnabled($)) {
     $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。')
     return
@@ -674,17 +679,17 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     if ((await read($, pendingActions))[statusPath] && !(await sweepPending($, { only: statusPath, ownToken: token })).length) return
     const current = await read($, snapshot)
     project = current?.projects.find(p => p.statusPath === statusPath)
-    if (project && (kind === 'sync' || kind === 'continue') && dispatchBlockReason(project)) throw new Error(dispatchBlockReason(project))
+    if (project && (kind === 'sync' || kind === 'continue' || kind === 'reply') && dispatchBlockReason(project)) throw new Error(dispatchBlockReason(project))
     const state = current && project ? rows(current).find(r => r.full === project?.name)?.state : undefined
     if (!project || !state || !actionKinds(project, state).includes(kind)) {
       await actionNotice($, '狀態已變更，請依面板目前的動作操作。', false)
       return
     }
     const p = project
-    if ((kind === 'sync' || kind === 'continue') && current?.error) throw new Error('請先成功更新執行者狀態，再派工。')
+    if ((kind === 'sync' || kind === 'continue' || kind === 'reply') && current?.error) throw new Error('請先成功更新執行者狀態，再派工。')
     const name = p.name.replace(/\s.*$/, '')
     const now = await $.clock.now()
-    if (kind === 'continue' && !request.useClaude) {
+    if (kind === 'continue' && !request.useClaude && !request.confirmed) {
       if (!await confirmed($, statusPath, workSignature(p), now, CONTINUE_CONFIRM_MS,
         `${name}：${CONTINUE_CONFIRM_MS / 1000} 秒內再按一次派工：${p.next}`)) return
     }
@@ -724,7 +729,15 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       }
       await update($, verificationResults, values => ({ ...values, [statusPath]: result }))
       await actionNotice($, `${name}：${result.ok ? '✓ 驗證通過' : '✕ 驗證失敗'}${result.exitCode === null ? '（逾時或無法執行）' : `（exit ${result.exitCode}）`}`, result.ok)
-    } else if (kind === 'sync' || kind === 'continue') {
+    } else if (kind === 'reply' && !request.text?.trim()) {
+      // The answer is typed in the prompt box: a command that carries it back here, to the session that asked.
+      const filled = await $.prompt.fill({ text: `/console reply ${p.name} `, mode: 'replace' })
+      if (!filled.isFilled) throw new Error(filled.refusal === 'no_composer' ? `此介面沒有可預填的輸入框；請輸入 /console reply ${p.name} <回覆>。` : '輸入框目前無法預填，請關閉對話框後重試。')
+      await $.ui.close({ id: PANE }).catch(() => {})
+      await update($, isPaneOpen, () => false)
+      await actionNotice($, `${name}：在輸入框寫下回覆，Enter 送給執行者`, true)
+    } else if (kind === 'sync' || kind === 'continue' || kind === 'reply') {
+      const dispatchKindOf: 'sync' | 'continue' = kind === 'sync' ? 'sync' : 'continue'
       const { settings } = await readDispatch($, config)
       const eff = effectiveDispatch(settings, root, p.registryExecutor)
       if ((p.executor ?? current?.executor) && (p.executor ?? current?.executor) !== eff.executor) throw new Error('執行者已變更，請更新面板後再操作。')
@@ -739,11 +752,14 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       // Claude stand-in for Codex uses the global model/effort only when they are Claude's own.
       const claudeOpts = { model: settings.executor === 'claude' ? settings.model : '', effort: settings.executor === 'claude' ? settings.effort : '' }
       let chosen: ExecutorKind = eff.executor
-      let dispatchOpts: DispatchOptions = { model: eff.model, effort: eff.effort, kind }
+      let dispatchOpts: DispatchOptions = { model: eff.model, effort: eff.effort, kind: dispatchKindOf }
       const offer = (await read($, fallbackOffers))[statusPath]
-      if (eff.executor === 'codex' && request.useClaude) {
+      if (kind === 'reply') {
+        // Only a Claude session stops to ask, so the reply resumes it with Claude whatever the project uses now.
+        if (eff.executor !== 'claude') { chosen = 'claude'; dispatchOpts = { ...claudeOpts, kind: dispatchKindOf } }
+      } else if (eff.executor === 'codex' && request.useClaude) {
         chosen = 'claude'
-        dispatchOpts = { ...claudeOpts, kind, fallbackFrom: 'codex', fallbackReason: offer?.reason ?? '使用者選擇改用 Claude' }
+        dispatchOpts = { ...claudeOpts, kind: dispatchKindOf, fallbackFrom: 'codex', fallbackReason: offer?.reason ?? '使用者選擇改用 Claude' }
       } else if (eff.executor === 'codex') {
         const fallback = resolveFallbackOptions(options)
         const base = root.replace(/\/+$/, '').split('/').pop() ?? ''
@@ -757,7 +773,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
         }
         if (decision.action === 'claude') {
           chosen = 'claude'
-          dispatchOpts = { ...claudeOpts, kind, fallbackFrom: 'codex', fallbackReason: decision.reason }
+          dispatchOpts = { ...claudeOpts, kind: dispatchKindOf, fallbackFrom: 'codex', fallbackReason: decision.reason }
         }
       }
       const jobs = await workspaceJobs(chosen, deps, execConfig, root)
@@ -769,11 +785,14 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       }
       if (kind === 'continue' && chosen === 'claude' && freshSession(p)) dispatchOpts = { ...dispatchOpts, fresh: true }
       // A sync of a row whose job stopped to ask resumes that job's session, which may be a review's rather than the project's.
-      const asked = kind === 'sync' && chosen === 'claude' ? askingSession(p) : undefined
+      // A reply goes to that same session, with the person's words as the prompt.
+      const asked = (kind === 'sync' || kind === 'reply') && chosen === 'claude' ? askingSession(p) : undefined
+      if (kind === 'reply' && !asked) throw new Error('找不到等你回覆的執行者 session；請更新面板。')
       if (asked) dispatchOpts = { ...dispatchOpts, resumeSession: asked }
       const executor = createExecutor(chosen, deps, execConfig)
       // A continue carries what the executor was last doing, so a fresh session knows where it stopped.
-      const prompt = kind === 'continue' ? `${dispatchPrompt(p, kind)}\n${await digestBlock($, options, p)}` : dispatchPrompt(p, kind)
+      const prompt = kind === 'reply' ? replyPrompt(p, request.text ?? '')
+        : kind === 'continue' ? `${dispatchPrompt(p, kind)}\n${await digestBlock($, options, p)}` : dispatchPrompt(p, dispatchKindOf)
       const job = await executor.dispatch(root, prompt, dispatchOpts)
       await update($, fallbackOffers, values => { if (!values[statusPath]) return values; const next = { ...values }; delete next[statusPath]; return next })
       if (isActiveJob(job)) unpublishedLaunches.set(`${workspaceKey(root)}:${jobKey(job)}`, { root: workspaceKey(root), job })
@@ -781,7 +800,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       const id = job.id
       const startedAt = new Date(acceptedAt).toISOString()
       acceptedLaunches.add(id)
-      await rememberDispatchKind($, jobKey({ executor: chosen, id }), kind)
+      await rememberDispatchKind($, jobKey({ executor: chosen, id }), dispatchKindOf)
       launchGeneration++
       await update($, snapshot, value => value ? trackRowChanges(value, { ...value, projects: value.projects.map(item => item.statusPath === statusPath ? {
         ...item,
@@ -794,7 +813,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
         void scheduleFastTick($, options)
       }
       const fallbackNote = dispatchOpts.fallbackFrom ? `（Codex 改由 Claude：${dispatchOpts.fallbackReason}）` : ''
-      await actionNotice($, `${name}：${chosen} 已接受${kind === 'sync' ? '同步 STATUS' : '繼續下一步'}${fallbackNote}，等待執行結果`, true)
+      await actionNotice($, `${name}：${chosen} 已接受${kind === 'sync' ? '同步 STATUS' : kind === 'reply' ? '你的回覆' : '繼續下一步'}${fallbackNote}，等待執行結果`, true)
     } else if (kind === 'decide') {
       // Options already picked in the pane go into the draft, so the CTA and `d` never drop them.
       const picked = (await read($, decisionPicks))[p.statusPath + '\n' + p.ask] ?? {}
@@ -975,6 +994,24 @@ async function autoSync($: any, options: PluginOptions) {
     await Promise.resolve().then(() => $.store.set(AUTO_SYNCED_KEY, kept)).catch(() => {})
     await triggerAction($, options, p.statusPath, 'sync', { auto: true })
   }
+}
+
+/** The last suggestion the prompt box showed, so a refresh proposes again only when the way on changed. */
+let lastSuggestion: string | null = null
+
+/**
+ * `suggestNext: on`: the way on (a decision, a reply, a gate, a sync, a continue) as the prompt box's dim
+ * suggestion, Tab to take. Proposed when it changes; one the box could not show (a turn ran, the person was
+ * typing) is proposed again at the next refresh.
+ */
+async function suggestNext($: any, options: PluginOptions) {
+  if (suggestNextMode((options as any).suggestNext) === 'off' || !consoleActive || await demoEnabled($)) return
+  const s = await read($, snapshot)
+  const text = s ? suggestedPrompt(s, await read($, pendingActions)) : null
+  if (!text) { lastSuggestion = null; return }
+  if (text === lastSuggestion) return
+  const shown = await Promise.resolve().then(() => $.prompt.suggest({ text })).catch(() => null)
+  if (shown?.isShown) lastSuggestion = text
 }
 
 /** The TTL in force and where it came from: the option, else what usage showed or an idle gap proved (remembered across sessions), else 5m. */
@@ -1221,7 +1258,7 @@ async function runUpdate($: any): Promise<string> {
 }
 
 /** Action-menu hotkeys: one letter per action, shown in the menu; only actions on offer respond. */
-const HOTKEYS: Record<string, ActionKind> = { v: 'verify', s: 'sync', c: 'continue', d: 'decide', g: 'gate', o: 'open' }
+const HOTKEYS: Record<string, ActionKind> = { v: 'verify', s: 'sync', c: 'continue', r: 'reply', d: 'decide', g: 'gate', o: 'open' }
 const HOTKEY_OF: Partial<Record<ActionKind, string>> = Object.fromEntries(Object.entries(HOTKEYS).map(([k, kind]) => [kind, k]))
 
 async function activeSessions($: any): Promise<string[]> {
@@ -1297,7 +1334,7 @@ export const register: Register = (on, options) => {
     await update($, continueConfirmations, () => ({}))
     await update($, fallbackOffers, () => ({}))
     await loadTrust($)
-    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；band 橫帶；demo 示範；version 版本；update 更新外掛；off 此 session 不跑主控台' })
+    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；reply <專案> <回覆> 回覆停下來問你的執行者；sync / continue / gate / verify <專案> 執行動作；band 橫帶；demo 示範；version 版本；update 更新外掛；off 此 session 不跑主控台' })
     transcriptPath = null
     // A reload after an update starts a fresh check, which reads the newly installed manifest.
     await update($, updateInfo, value => value && value.phase !== 'idle' ? { ...value, phase: 'idle', checkedAt: 0 } as UpdateInfo : value)
@@ -1514,6 +1551,19 @@ export const register: Register = (on, options) => {
         return { text: `目前：${settings.executor} · ${settings.model || '預設'} · ${settings.effort || '預設'}\nexecutor：claude, codex\nmodel：${models.length ? models.map(m => m.model).join(', ') : '快取不可用；使用 /console model <name>'}\neffort：${effortOptions(settings.executor, models, settings.model).join(', ')}\n以 /console model "" 或 /console effort "" 恢復執行者預設。` }
       } catch (error) { return { text: `設定未儲存：${error instanceof Error ? error.message : String(error)}` } }
     }
+    const act = arg.match(new RegExp(`^(${COMMAND_ACTIONS.join('|')})(?:\\s+([\\s\\S]*))?$`))
+    if (act) {
+      const kind = act[1] as typeof COMMAND_ACTIONS[number]
+      if (await demoEnabled($)) return { text: '示範資料：不執行專案操作；/console refresh 回到實際資料。' }
+      const snap = await read($, snapshot)
+      const named = (act[2] ?? '').trim()
+      const target = commandTarget(snap && !snap.demo ? snap.projects : [], named)
+      if (!target) return { text: `${named ? `找不到專案「${named}」。` : ''}用法：/console ${kind} <專案名稱>${kind === 'reply' ? ' <回覆內容>' : ''}` }
+      if (kind === 'reply' && !target.text) return { text: `專案名稱後面接回覆內容：/console reply ${target.project.name} <回覆>` }
+      // Sending the command is the confirmation a continue's second press asks for; verify keeps its own check.
+      await triggerAction($, options, target.project.statusPath, kind, kind === 'reply' ? { text: target.text } : kind === 'continue' ? { confirmed: true } : {})
+      return { text: `${target.project.name}：${actionLabel(kind, target.project)}（結果見主控台動態）` }
+    }
     if (arg === 'refresh') {
       if (await demoEnabled($)) {
         dataGeneration++
@@ -1594,6 +1644,7 @@ export const register: Register = (on, options) => {
     cache: '主控台的 prompt 快取：最後一次請求後 5 分鐘（或 1 小時）內送出會讀快取；過期後下一則提示要把整段 context 重寫進快取，費用約為 input 價格的 1.25 倍（1 小時 TTL 為 2 倍）。TTL 由 cacheTtl 設定，auto 讀取 session 記錄裡 API 回報的實際 TTL（cache_creation 的 5m／1h 分項）。「上次命中」是上一個請求的 input 有多少比例由快取供應，偏低代表快取失效或剛冷啟動。',
     pipeline: '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線。● 完成　◉ 執行中　◆ 等待（主控台、使用者或同步）　✕ 驗證失敗　○ 未到。由 CARD、執行者工作與最近一次驗證推得。',
     action_continue: '6 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
+    action_reply: '執行者做完一輪停下來問你：在輸入框寫下回覆，Enter 後主控台用你的話接續同一個 session（Claude 背景 session，用該執行者額度），不用切過去 attach。等待批准的權限提示仍要 attach 處理。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
     action_gate: '把關卡與專案 context 送給主控台審核，使用 Claude 額度；不會執行 release。',
     action_open: '用編輯器開啟專案 STATUS.md，不使用模型額度。',
@@ -1945,7 +1996,7 @@ export const register: Register = (on, options) => {
     const targetProject = s.projects.find(p => p.name === target)
     const targetState = list.find(r => r.full === target)?.state
     const primaryAction: ActionKind | null = targetState === 'ACTION'
-      ? (targetProject && !hasAsk(targetProject) ? (actionKinds(targetProject, 'ACTION').includes('sync') ? 'sync' : null) : 'decide')
+      ? (targetProject && !hasAsk(targetProject) ? (['reply', 'sync'] as const).find(kind => actionKinds(targetProject, 'ACTION').includes(kind)) ?? null : 'decide')
       : targetState === 'GATE' && parseGate(targetProject?.gate)?.kind !== 'unknown' ? 'gate' : targetState === 'SYNC' && targetProject && !isManual(targetProject) ? 'sync' : null
     const focus = sel ?? list[Math.max(0, cur)]?.full ?? null
     const menuProject = menu === null ? null : s.projects.find(x => x.name === menu) ?? null
@@ -1953,7 +2004,7 @@ export const register: Register = (on, options) => {
     const livePending = (p: Project) => staleGate(pending[p.statusPath], p) ? undefined : pending[p.statusPath]
     const actionButton = (p: Project, kind: ActionKind, key: string) => {
       const active = livePending(p)
-      const blocked = kind === 'continue' || kind === 'sync' ? dispatchBlockReason(p) : ''
+      const blocked = kind === 'continue' || kind === 'sync' || kind === 'reply' ? dispatchBlockReason(p) : ''
       const confirming = confirmations[p.statusPath]?.signature === (kind === 'continue' ? workSignature(p) : kind === 'verify' ? verifySignature(p.verify) : null)
       const running = active?.kind === kind
       const elapsed = running ? Math.max(0, Math.floor((renderedAt - active.at) / 1000)) : 0
