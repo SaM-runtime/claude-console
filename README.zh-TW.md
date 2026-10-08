@@ -1,7 +1,35 @@
 # claude-console
 
-<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" alt="claude-console 示範：主控台面板、專案表、動作選單、額度電池" width="900"></a></p>
-<p align="center"><a href="docs/demo.mp4">▶ 觀看 30 秒介紹影片（MP4，示範資料）</a> · <a href="README.md">English</a></p>
+**在 Claude Code 裡同時顧好幾個專案的主控台。** 一個面板看完每個專案卡在哪、在等誰；決策用按的、派工一鍵、Git／PR／CI 與額度都在旁邊，不用切視窗。
+
+<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" alt="claude-console 示範：/console demo 開啟主控台，右鍵動作選單、數字鍵作答、填入決策、各專案詳細卡片" width="900"></a></p>
+<p align="center"><a href="docs/demo.mp4">▶ 觀看 45 秒示範影片（MP4）</a> · <a href="README.md">English</a></p>
+<p align="center"><sub>Claude Code 2.1.294 與 console-status 0.15.0 在終端機中的實際畫面（tmux 逐格擷取後轉成影片），資料來自 <code>/console demo</code>；下方字幕與滑鼠指標為後製加上。</sub></p>
+
+## 先看示範
+
+```powershell
+claude plugin marketplace add SaM-runtime/claude-console
+claude plugin install console-status@claude-console
+```
+
+在任一 Claude Code session 輸入 `/console demo`，不用登錄表也能看到完整面板；`/console refresh` 換回實際狀態。接上自己的專案請看[設定](#設定)。
+
+## 功能一覽
+
+- **一張表看全部專案。** 每個專案一列：狀態（`●` 需決策、`◆` 待審核、`▶` 執行中、`↻` 待同步、`○` 閒置）、六格流程管線（規格 → 實作 → 同步 → 驗證 → 審核 → 上線）、更新時間與 Git 摘要。最上方的「下一步」卡指出現在該處理哪一件；面板關起來時，輸入框上方的橫帶仍顯示各狀態數量。見[專案動作](#專案動作)與[流程管線與專案模式](#流程管線與專案模式)。
+- **決策用按的。** 卡片裡每個選項都能直接點；動作選單開著時，數字鍵依序作答（按 `2` 再按 `1` 就是 `1B 2-1`），Backspace 退回上一個。`✎ 填入決策` 或 `✎ 做決定` 把答案放進輸入框，按 Enter 送出。
+- **一鍵動作。** 驗證、同步 STATUS、繼續下一步、審核關卡、開啟 STATUS.md：右鍵或 `m` 開動作選單，每個動作都有單鍵快捷。執行者做完卻沒寫回 CARD 時，主控台會自動派一次同步（`autoSync`），同步進度一步一步顯示。
+- **派工可選執行者。** 預設用 Claude Code 背景 agent，也可整體或單一專案改用 Codex；Codex 不能用或額度不足時可退回 Claude。選取專案後送出的提示會附上「執行者摘要」（最後在做什麼、最後三個工具呼叫、最後一句話），專案卡的「執行者」區塊也顯示同樣內容。見[派工設定](#dispatch-settings派工設定)。
+- **Git、PR 與 CI 不用切視窗。** 分支與領先／落後、未提交行數、stash、最近幾筆提交、fetch 太久沒更新的提醒；`▸ 檔案` 展開依 `git status` 分組的檔案清單；PR 審查狀態與失敗的 CI 檢查，CI 失敗時橫帶亮紅。見 [Git、PR 與 CI](#gitpr-與-ci)。
+- **用量與快取。** Claude 的 5 小時、本週、各模型額度與 Codex 額度在同一張「用量」表，並估算照目前速度何時用完；提示快取的倒數、冷掉後重寫的費用與上次命中率。見[用量配速](#用量配速)與[快取與費用](#快取與費用)。
+- **護欄。** 不可逆的指令（`rm -r`、force push、`git reset --hard`、`DROP TABLE` 等）先問你；同一個工具呼叫以同樣錯誤失敗兩次，就不讓模型試第三次。見[指令護欄](#指令護欄)與[重複失敗護欄](#重複失敗護欄)。
+- **只在需要的 session 啟動。** 預設只有輸入過 `/console` 的 session 跑主控台（resume 後自動再啟動），其他 session 只有護欄；在已登錄專案的資料夾裡會切到專案模式。見[輕量 session](#輕量-session)。
+- **面板內更新。** 頁尾顯示目前版本，有新版時按 `⬆ 更新` 或輸入 `/console update`。見[升級](#升級)。
+
+各版本的完整變更見 [CHANGELOG.md](CHANGELOG.md)。
+
+## 運作方式
 
 `claude-console` 是本機多專案 Claude Code mod。單一主控台 session 負責各專案的規格、監督與審核關卡；操作者只提供決策，並在最後決定是否 release。
 
