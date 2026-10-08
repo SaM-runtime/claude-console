@@ -23,7 +23,9 @@ export function actionKinds(project: Project, state: State): ActionKind[] {
   const kinds: ActionKind[] = []
   const dispatchable = !isManual(project)
   if (project.verify.trim()) kinds.push('verify')
-  if (dispatchable && state === 'SYNC' && !dispatchBlockReason(project)) kinds.push('sync')
+  // A finished job that stopped to ask the user is an ACTION row; syncing its result is still the way on.
+  const asking = state === 'ACTION' && !hasAsk(project) && project.jobs.some(job => job.kind === 'newer' && job.asks)
+  if (dispatchable && (state === 'SYNC' || asking) && !dispatchBlockReason(project)) kinds.push('sync')
   const gate = parseGate(project.gate)
   const next = project.next.trim()
   if (dispatchable && state === 'IDLE' && !dispatchBlockReason(project) && next && !saysNone(next) && !hasAsk(project) && !gate) kinds.push('continue')
@@ -76,9 +78,22 @@ export function dispatchKind(prompt: string | undefined): 'sync' | 'continue' | 
   return text.startsWith(SYNC_INSTRUCTION) ? 'sync' : text.startsWith(CONTINUE_INSTRUCTION) ? 'continue' : undefined
 }
 
+/**
+ * How a continue turn starts and ends, so the session stays in step with the console: the rev that counts is
+ * the one read now (a resumed session remembers older ones), a review gate waits for a finished review, and a
+ * turn that reaches a gate or a decision ends instead of waiting on a question nobody is attached to see.
+ */
+const CONTINUE_RULES = [
+  '開始前先重讀 CARD，以這次讀到的 rev 為準；寫入前再重讀一次，只有這兩次不同才停下回報（不要跟記憶裡更早的 rev 比）。',
+  '驗收綠、獨立審核還沒跑完：關卡留 無，下一步寫審核任務；審核跑完才設 review。',
+  '審核任務的下一步以 .task/review-<name>.md 路徑開頭（才會開新 session）；修正工作以動詞開頭（例如「依 .task/review-x.md 的意見修正」）。',
+  '到關卡或需要使用者決定時，把它寫進 CARD（等使用者／關卡）後結束這一輪，不要提問等待。',
+]
+
 export function dispatchPrompt(project: Project, kind: 'sync' | 'continue'): string {
   const instruction = kind === 'sync' ? SYNC_INSTRUCTION : CONTINUE_INSTRUCTION
-  return `${instruction}\nSTATUS：${project.statusPath}\n只在此專案授權的本機範圍作業。不得執行正式環境變更或 release；需要上線時填入 release 關卡，交主控台整理後由使用者決定。`
+  const rules = kind === 'continue' ? `\n${CONTINUE_RULES.join('\n')}` : ''
+  return `${instruction}\nSTATUS：${project.statusPath}\n只在此專案授權的本機範圍作業。不得執行正式環境變更或 release；需要上線時填入 release 關卡，交主控台整理後由使用者決定。${rules}`
 }
 
 export function gatePrompt(project: Project): string {
@@ -88,6 +103,20 @@ export function gatePrompt(project: Project): string {
   return gate.kind === 'release'
     ? `${base}整理成「可上線／不可上線＋理由＋要使用者確認的一句」；不得自行執行 release 或任何正式環境變更。`
     : `${base}依證據判斷，指出結果與理由，更新關卡結論；不得執行 release 或正式環境變更。`
+}
+
+/**
+ * An independent review starts in a new session: it must not carry the work's context. A review's 下一步 starts
+ * with its task path (`.task/review-x.md（…）`); work that follows a review starts with a verb
+ * (`依 .task/review-x.md 的意見修正`) and resumes the project's session.
+ */
+export function freshSession(project: Project): boolean {
+  return /^`?\.task[\\/]+review-[^\s）)`]*\.md/i.test(project.next.trim())
+}
+
+/** The session of the newest finished job that stopped to ask the user: the one its row's sync must resume. */
+export function askingSession(project: Project): string | undefined {
+  return project.jobs.filter(job => job.kind === 'newer' && job.asks && job.sessionId).pop()?.sessionId
 }
 
 export function workSignature(project: Project): string {
