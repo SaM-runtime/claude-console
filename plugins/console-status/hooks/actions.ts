@@ -1,4 +1,4 @@
-import type { Project, ActionKind, ContinueConfirmation, VerificationResult } from '../types'
+import type { Project, ActionKind, ContinueConfirmation, VerificationResult, PendingAction, ReviewRequest } from '../types'
 import type { State } from './logic'
 import { hasAsk, parseGate, saysNone } from './logic'
 
@@ -23,13 +23,50 @@ export function actionKinds(project: Project, state: State): ActionKind[] {
   const kinds: ActionKind[] = []
   const dispatchable = !isManual(project)
   if (project.verify.trim()) kinds.push('verify')
-  if (dispatchable && state === 'SYNC' && !dispatchBlockReason(project)) kinds.push('sync')
+  // A finished job that stopped to ask the user is an ACTION row; syncing its result is still the way on.
+  const asking = state === 'ACTION' && !hasAsk(project) && project.jobs.some(job => job.kind === 'newer' && job.asks)
+  if (dispatchable && (state === 'SYNC' || asking) && !dispatchBlockReason(project)) kinds.push('sync')
   const gate = parseGate(project.gate)
   const next = project.next.trim()
   if (dispatchable && state === 'IDLE' && !dispatchBlockReason(project) && next && !saysNone(next) && !hasAsk(project) && !gate) kinds.push('continue')
   if (hasAsk(project)) kinds.push('decide')
   if (gate && gate.kind !== 'unknown') kinds.push('gate')
   return [...kinds, 'open']
+}
+
+/** A submitted review may wait this long for a turn to finish it before the row unlocks by itself. */
+export const GATE_PENDING_MS = 10 * 60_000
+
+/**
+ * Whether a turn's text is the review a request submitted. The host may wrap a plugin's prompt
+ * (`The console-status plugin sent a message:` above it, a note below it), so the prompt's first
+ * line found inside the turn's text counts as much as the exact text.
+ */
+export function reviewTurnMatches(request: { text: string }, turnText: string): boolean {
+  if (turnText === request.text) return true
+  const marker = request.text.split(/\r?\n/).map(line => line.trim()).find(line => line) ?? ''
+  return marker.length >= 12 && turnText.includes(marker)
+}
+
+/** A pending review whose CARD no longer carries a gate: over, as far as the row is concerned. */
+export function staleGate(pending: PendingAction | undefined, project: Project): boolean {
+  return !!pending && pending.kind === 'gate' && !parseGate(project.gate)
+}
+
+const sameGate = (current: string | undefined, submitted: string | undefined) => submitted === undefined || (current ?? '').trim() === submitted.trim()
+
+/**
+ * Why a pending action should be dropped, or null while someone still owns it: a review whose gate the CARD
+ * moved past, or that waited GATE_PENDING_MS with no turn running for it; any other action nobody in this
+ * plugin lifetime holds the lock for, which only an earlier lifetime (before a reload) can have left behind.
+ */
+export function stalePendingReason(pending: PendingAction, request: ReviewRequest | undefined, project: Project | undefined, now: number, locked: boolean, turnRunning: boolean): string | null {
+  if (pending.kind !== 'gate') return locked ? null : '動作已失去追蹤'
+  if (!request) return locked ? null : '審核已失去追蹤'
+  if (project && !sameGate(project.gate, request.gate)) return '關卡已變更'
+  if (request.turnId && turnRunning) return null
+  if (now - pending.at >= GATE_PENDING_MS) return '審核狀態已逾時'
+  return null
 }
 
 const SYNC_INSTRUCTION = '把最近完成的工作結果寫回 STATUS CARD，只改 CARD 與歷程，不做其他變更'
@@ -41,9 +78,22 @@ export function dispatchKind(prompt: string | undefined): 'sync' | 'continue' | 
   return text.startsWith(SYNC_INSTRUCTION) ? 'sync' : text.startsWith(CONTINUE_INSTRUCTION) ? 'continue' : undefined
 }
 
+/**
+ * How a continue turn starts and ends, so the session stays in step with the console: the rev that counts is
+ * the one read now (a resumed session remembers older ones), a review gate waits for a finished review, and a
+ * turn that reaches a gate or a decision ends instead of waiting on a question nobody is attached to see.
+ */
+const CONTINUE_RULES = [
+  '開始前先重讀 CARD，以這次讀到的 rev 為準；寫入前再重讀一次，只有這兩次不同才停下回報（不要跟記憶裡更早的 rev 比）。',
+  '驗收綠、獨立審核還沒跑完：關卡留 無，下一步寫審核任務；審核跑完才設 review。',
+  '審核任務的下一步以 .task/review-<name>.md 路徑開頭（才會開新 session）；修正工作以動詞開頭（例如「依 .task/review-x.md 的意見修正」）。',
+  '到關卡或需要使用者決定時，把它寫進 CARD（等使用者／關卡）後結束這一輪，不要提問等待。',
+]
+
 export function dispatchPrompt(project: Project, kind: 'sync' | 'continue'): string {
   const instruction = kind === 'sync' ? SYNC_INSTRUCTION : CONTINUE_INSTRUCTION
-  return `${instruction}\nSTATUS：${project.statusPath}\n只在此專案授權的本機範圍作業。不得執行正式環境變更或 release；需要上線時填入 release 關卡，交主控台整理後由使用者決定。`
+  const rules = kind === 'continue' ? `\n${CONTINUE_RULES.join('\n')}` : ''
+  return `${instruction}\nSTATUS：${project.statusPath}\n只在此專案授權的本機範圍作業。不得執行正式環境變更或 release；需要上線時填入 release 關卡，交主控台整理後由使用者決定。${rules}`
 }
 
 export function gatePrompt(project: Project): string {
@@ -53,6 +103,20 @@ export function gatePrompt(project: Project): string {
   return gate.kind === 'release'
     ? `${base}整理成「可上線／不可上線＋理由＋要使用者確認的一句」；不得自行執行 release 或任何正式環境變更。`
     : `${base}依證據判斷，指出結果與理由，更新關卡結論；不得執行 release 或正式環境變更。`
+}
+
+/**
+ * An independent review starts in a new session: it must not carry the work's context. A review's 下一步 starts
+ * with its task path (`.task/review-x.md（…）`); work that follows a review starts with a verb
+ * (`依 .task/review-x.md 的意見修正`) and resumes the project's session.
+ */
+export function freshSession(project: Project): boolean {
+  return /^`?\.task[\\/]+review-[^\s）)`]*\.md/i.test(project.next.trim())
+}
+
+/** The session of the newest finished job that stopped to ask the user: the one its row's sync must resume. */
+export function askingSession(project: Project): string | undefined {
+  return project.jobs.filter(job => job.kind === 'newer' && job.asks && job.sessionId).pop()?.sessionId
 }
 
 export function workSignature(project: Project): string {

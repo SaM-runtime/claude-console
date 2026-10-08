@@ -1,4 +1,4 @@
-export type JobFlag = { executor?: 'claude' | 'codex'; kind: 'running' | 'newer'; /** What the console dispatched the job for, when known. */ task?: 'sync' | 'continue'; id: string; status: string; summary: string; startedAt?: string; phase?: string; logFile?: string; last?: string }
+export type JobFlag = { executor?: 'claude' | 'codex'; kind: 'running' | 'newer'; /** What the console dispatched the job for, when known. */ task?: 'sync' | 'continue'; id: string; status: string; summary: string; startedAt?: string; phase?: string; logFile?: string; last?: string; /** A finished job whose turn ended asking the user something. */ asks?: boolean; /** That job's session, which syncing its row resumes. */ sessionId?: string }
 
 /** One executor task of a project, as the console lists it. */
 export type ExecutorTask = { id: string; executor?: 'claude' | 'codex'; fallbackFrom?: 'codex'; status: string; title: string; model: string; effort: string; startedAt?: string; completedAt?: string }
@@ -47,12 +47,14 @@ export type ActionKind = 'verify' | 'sync' | 'continue' | 'decide' | 'gate' | 'o
 export type ContinueConfirmation = { at: number; signature: string }
 export type VerificationResult = { command: string; at: number; ok: boolean; exitCode: number | null; lines: string[]; truncated: boolean }
 export type PendingAction = { kind: ActionKind; at: number }
-export type ReviewRequest = { text: string; projectName: string; at: number; turnId?: string }
+/** `gate` is the CARD 關卡 the review was submitted for; a CARD that moved past it ends the row's wait. */
+export type ReviewRequest = { text: string; projectName: string; at: number; turnId?: string; gate?: string }
 
 /** This plugin's installed version, the marketplace's latest, and an update in progress. */
 export type UpdateInfo = { current: string | null; latest: string | null; checkedAt: number; error?: string; phase: 'idle' | 'checking' | 'updating' | 'updated' | 'failed'; message?: string }
 
-export type Blocked = { name: string; why: string }
+/** A session waiting on a person; `project` is the registered project it runs in (`主控台` for the console's folder). */
+export type Blocked = { name: string; why: string; project?: string }
 
 /** Where a 同步 STATUS dispatch is: sending, running, written back, finished without a CARD change, or failed. */
 export type SyncStage = 'dispatch' | 'running' | 'done' | 'unchanged' | 'dispatch-failed' | 'run-failed'

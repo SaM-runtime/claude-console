@@ -37,7 +37,7 @@ Task file skeleton (`.task/<name>.md`):
 ```markdown
 Scope: <files/modules in and out of scope>
 Acceptance: `<command>` -> <expected output or exit code> (baseline: <ref>)
-Done when: acceptance passes and CARD is updated (rev + 1, 關卡 set per rules)
+Done when: acceptance passes and CARD is updated (rev + 1; 關卡 stays 無 and 下一步 names the review task until an independent review has finished)
 Report: .task/REPORT.md, at most 15 lines: result, acceptance output, changed files, open risks
 ```
 
@@ -93,9 +93,10 @@ A gate approval never substitutes for user authorization. Only the console clear
 
 ## Claude executor
 
-- Native background agents in the project root; the mod keeps one managed session per project and resumes it.
-- Normal Claude Code permissions apply; attach to a blocked agent to answer it.
-- Review: dispatch a separate review task with the same contract (acceptance output, diff named by the report); its verdict goes to the `review` gate.
+- Native background agents in the project root; the mod keeps one managed session per project and resumes it. When a resume comes back as a new session and the original is gone (retired by the daemon, or finished), the new one becomes the project's session.
+- A turn starts by re-reading the CARD; the rev it reads then is the one that counts. Stop only when the CARD changed again before the write, never because a rev remembered from an earlier turn differs.
+- At a gate or a decision, the executor writes it into the CARD (`關卡`, `等使用者`) and ends its turn. It never asks a question and waits: nobody is attached to answer, and a blocked agent drifts out of step with the console. Attach to a blocked agent only for a permission prompt.
+- Review: dispatch a separate review task (`.task/review-*.md`) with the same contract (acceptance output, diff named by the report). It starts in a fresh session, never resumes the project's, and its verdict goes to the `review` gate. Until it finishes, `關卡` stays `無` and `下一步` names the review task, so the panel can dispatch it. A review's `下一步` starts with its task path (`.task/review-x.md（…）`); work that follows a review starts with a verb (`依 .task/review-x.md 的意見修正`) and resumes the project's session.
 
 ## Decisions
 

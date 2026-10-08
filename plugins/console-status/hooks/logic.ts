@@ -10,7 +10,7 @@ const NONE = new Set(['', '無', '沒有', '-', '未知'])
 
 export type RegistryRow = { name: string; statusPath: string; executor?: ProjectExecutor }
 export type Job = { id: string; kind?: 'sync' | 'continue'; fallbackFrom?: 'codex'; fallbackReason?: string; unmanagedSessionId?: string; warning?: string; executor?: 'claude' | 'codex'; nativeId?: string; sessionId?: string; jobClass?: string; status?: string; summary?: string; createdAt?: string; updatedAt?: string; completedAt?: string; startedAt?: string; phase?: string; logFile?: string; request?: { prompt?: string; effort?: string; model?: string } }
-export type Agent = { name?: string; kind?: string; status?: string; state?: string; waitingFor?: string; sessionId?: string; cwd?: string }
+export type Agent = { name?: string; kind?: string; status?: string; state?: string; waitingFor?: string; sessionId?: string; cwd?: string; pid?: number | null; startedAt?: number | string }
 
 /**
  * Rows of the "STATUS 卡位置" table in projects-scope.md; `~` expanded to `home`.
@@ -18,7 +18,7 @@ export type Agent = { name?: string; kind?: string; status?: string; state?: str
  * tables without that column parse exactly as before.
  */
 export function parseRegistry(text: string, home: string): RegistryRow[] {
-  const parts = text.split('## STATUS 卡位置')
+  const parts = lf(text).split('## STATUS 卡位置')
   if (parts.length < 2) return []
   const section = parts[1].split('\n## ')[0]
   const rows: RegistryRow[] = []
@@ -41,9 +41,12 @@ export function parseRegistry(text: string, home: string): RegistryRow[] {
   return rows
 }
 
+/** CRLF (or a lone CR) as LF: a STATUS or registry saved on Windows reads like any other. */
+const lf = (text: string) => text.replace(/\r\n?/g, '\n')
+
 /** `- key：value` lines between `<!-- CARD ... -->` and `<!-- /CARD -->`; null when absent. */
 export function parseCard(text: string): Record<string, string> | null {
-  const m = text.match(/<!-- CARD[\s\S]*?-->([\s\S]*?)<!-- \/CARD -->/)
+  const m = lf(text).match(/<!-- CARD[\s\S]*?-->([\s\S]*?)<!-- \/CARD -->/)
   if (!m) return null
   const card: Record<string, string> = {}
   for (const line of m[1].split('\n')) {
@@ -106,7 +109,9 @@ export function jobFlags(jobs: Job[], cardMs: number | null): JobFlag[] {
     if (j.kind === 'sync' && j.status === 'completed') continue
     if (j.status === 'completed' && cardWrittenSince(cardMs, j.startedAt ?? j.createdAt)) continue
     const t = Date.parse(j.completedAt ?? j.createdAt ?? '')
-    if (cardMs === null || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary, ...(j.kind ? { task: j.kind } : {}) })
+    // A Claude job whose turn ended on a question to the user (the agent went idle while blocked).
+    const asks = j.status === 'completed' && (j.phase ?? '').startsWith('idle: 等你回覆')
+    if (cardMs === null || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary, ...(j.kind ? { task: j.kind } : {}), ...(asks ? { asks: true, ...(j.sessionId ? { sessionId: j.sessionId } : {}) } : {}) })
   }
   return flags
 }
@@ -498,6 +503,8 @@ export function rows(s: Snapshot): Row[] {
     if (parseGate(p.gate)) return { state: 'GATE', project: name, item: shortAsk(p.gate ?? '', 30), age, full }
     const running = p.jobs.filter(j => j.kind === 'running')
     if (running.length) return { state: 'RUNNING', project: name, item: (running.length > 1 ? `${running.length} 個任務・` : '') + runLine(running[0], s.at), age, full }
+    // A manual project has no sync button, so the way on is only taking over the session.
+    if (p.jobs.some(j => j.kind === 'newer' && j.asks)) return { state: 'ACTION', project: name, item: `執行者在等你回覆：接手該 session${p.executor === 'manual' ? '' : ' 或同步'}`, age, full }
     if (p.jobs.some(j => j.kind === 'newer')) return { state: 'SYNC', project: name, item: '結果未同步至 STATUS', age, full }
     return { state: 'IDLE', project: name, item: shortAsk(p.state || '—', 30), age, full }
   })
@@ -524,16 +531,61 @@ export function next(s: Snapshot): string | null {
 
 const normPath = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 
-/** Sessions that belong to this console (its folder or a registered project), not this one, waiting on a person. */
-export function relevantBlocked(agents: Agent[], selfId: string | null, roots: string[], home: string): Blocked[] {
-  const allowed = roots.map(normPath)
+/** Lines of the waiting-sessions list in the pane; the rest is summed up as `…另 N 條`. */
+export const BLOCKED_MAX = 3
+
+/**
+ * A background session the daemon retired stays in `claude agents` with its last state, but with
+ * neither `pid` nor `status`. Nobody can answer it, so it is not a session waiting on a person.
+ */
+const retiredAgent = (a: Agent) => a.kind === 'background' && (a.pid === undefined || a.pid === null) && !a.status?.trim()
+
+/** What the session is actually waiting for: a permission prompt, a question it stopped on, or other input. */
+const BLOCKED_RANK = ['等待批准', '停在提問', '等待輸入']
+function blockedWhy(a: Agent): string {
+  if (a.status === 'waiting') return '等待批准'
+  if (a.status === 'idle' && a.state === 'blocked') return '停在提問'
+  return '等待輸入'
+}
+
+const startedMs = (a: Agent) => typeof a.startedAt === 'number' ? a.startedAt : Date.parse(a.startedAt ?? '') || 0
+
+/**
+ * Sessions that belong to this console (its folder or a registered project), not this one, waiting on a person:
+ * retired ones left out, the newest per project only, newest first, each named with its project.
+ * `roots` may be bare paths (no project name) or `{ root, name }`.
+ */
+export function relevantBlocked(agents: Agent[], selfId: string | null, roots: (string | { root: string; name: string })[], home: string): Blocked[] {
+  const allowed = roots.map(r => typeof r === 'string' ? { root: normPath(r), name: '' } : { root: normPath(r.root), name: r.name })
   const consoleDir = normPath(home)
-  const mine = agents.filter(a => {
-    if (a.sessionId && a.sessionId === selfId) return false
+  const projectOf = (a: Agent): { key: string; name: string } | null => {
     const cwd = normPath(a.cwd ?? '')
-    return cwd === consoleDir || allowed.some(r => cwd === r || cwd.startsWith(r + '/'))
-  })
-  return blockedSessions(mine).map(b => ({ ...b, why: b.why === '等批准' ? '等待批准' : '等待輸入' }))
+    const hit = allowed.filter(r => cwd === r.root || cwd.startsWith(r.root + '/')).sort((x, y) => y.root.length - x.root.length)[0]
+    if (hit) return { key: hit.root, name: hit.name }
+    return cwd === consoleDir ? { key: consoleDir, name: '主控台' } : null
+  }
+  // The same sessions blockedSessions lists: with some identity, blocked or waiting.
+  const listed = agents.filter(a => !(a.sessionId && a.sessionId === selfId) && !retiredAgent(a) && projectOf(a) !== null
+    && Boolean(a.name?.trim() || a.sessionId?.trim() || a.cwd?.trim() || a.waitingFor?.trim())
+    && (a.state === 'blocked' || a.status === 'waiting'))
+  // Per project the most pressing wording wins (a permission prompt must not hide behind a newer question); then the newest.
+  const rank = (a: Agent) => BLOCKED_RANK.indexOf(blockedWhy(a))
+  const newest = new Map<string, { agent: Agent; name: string }>()
+  for (const a of listed) {
+    const project = projectOf(a)!
+    const seen = newest.get(project.key)
+    const better = !seen || rank(a) < rank(seen.agent) || (rank(a) === rank(seen.agent) && startedMs(a) > startedMs(seen.agent))
+    if (better) newest.set(project.key, { agent: a, name: project.name })
+  }
+  return [...newest.values()]
+    .sort((x, y) => startedMs(y.agent) - startedMs(x.agent))
+    .map(({ agent, name }) => ({ name: agent.name?.trim() || '(未命名 session)', why: blockedWhy(agent), ...(name ? { project: name } : {}) }))
+}
+
+/** The pane's lines for waiting sessions: `name（project）：why`, at most `max`, then `…另 N 條`. */
+export function blockedLines(blocked: Blocked[], max = BLOCKED_MAX): string[] {
+  const lines = blocked.slice(0, max).map(b => `${b.name}${b.project ? `（${b.project}）` : ''}：${b.why}`)
+  return blocked.length > max ? [...lines, `…另 ${blocked.length - max} 條`] : lines
 }
 
 /**

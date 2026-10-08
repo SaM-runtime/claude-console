@@ -10,7 +10,7 @@ import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, dispatchBlockReason, dispatchPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted } from './actions'
+import { actionKinds, actionLabel, askingSession, dispatchBlockReason, dispatchPrompt, freshSession, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -27,8 +27,8 @@ import type { CacheTtl } from './cache'
 import { commandPreview, dangerReason, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
-import type { Project, Snapshot, ActionKind, VerificationResult } from '../types'
-import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
+import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction } from '../types'
+import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody, METER } from './battery'
@@ -109,7 +109,9 @@ let updateCheck: Promise<UpdateInfo | null> | null = null
 const UPDATE_NOTIFIED_KEY = 'updateNotified'
 const RELOAD_DELAY_MS = 1500
 const RELOAD_WATCHDOG_MS = 20_000
-const actionLocks = new Set<string>()
+/** statusPath → the action holding its row, with a token so a lock let go of early is not released again later by its owner. */
+const actionLocks = new Map<string, { kind: ActionKind; token: number }>()
+let lockSeq = 0
 const earlyReviewStarts = new Map<string, string>()
 let selectionClaim: string | null = null
 
@@ -364,7 +366,6 @@ async function refresh($: any, options: PluginOptions, force = false) {
       return pr
     }
     const bases = registryRows.map(({ root }) => root.replace(/\/+$/, '').split('/').pop() ?? '')
-    const roots = registryRows.map(({ root }) => root)
     // Projects are independent: read them a few at a time instead of one after another.
     const loaded = await mapLimit(registryRows, REFRESH_CONCURRENCY, async ({ row, root }, index) => {
       const eff = effective[index]!
@@ -385,7 +386,10 @@ async function refresh($: any, options: PluginOptions, force = false) {
       }
       await Promise.all(project.jobs.filter(j => j.kind === 'running').map(async j => {
         const job = jobs.find(item => item.id === j.id && item.executor === j.executor)
-        if (job) j.last = await createExecutor(job.executor ?? listing, deps, withCompanion(config)).lastLine(job).catch(() => '')
+        if (!job) return
+        const last = await createExecutor(job.executor ?? listing, deps, withCompanion(config)).lastLine(job).catch(() => '')
+        // A resume copy speaks from the old session's memory; its words are not this dispatch's result.
+        j.last = last && job.unmanagedSessionId ? `（resume 複本）${last}` : last
       }))
       return { project, warnings }
     })
@@ -395,7 +399,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
     const formatWarning = stateFormatWarning()
     const companionWarning = [companion?.warning, formatWarning].filter(Boolean).join('；')
     const cur: Snapshot = {
-      at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, await io.session.id().catch(() => null) as string | null, roots, home), codex: codexInUse ? relevantCodex(codex, bases) : '',
+      at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, await io.session.id().catch(() => null) as string | null, registryRows.map(({ row, root }) => ({ root, name: row.name })), home), codex: codexInUse ? relevantCodex(codex, bases) : '',
       ...(codexInUse ? { codexInUse: true } : {}),
       ...(codexInUse && (companion || formatWarning) ? { companion: { path: companion?.path ?? '', source: companion?.source ?? 'none', ...(companionWarning ? { warning: companionWarning } : {}) } } : {}),
       contextPercent: usage?.context?.percent ?? null, error,
@@ -429,6 +433,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
       }
     })
     if (current()) {
+      await sweepPending($)
       await advanceSyncs($, options)
       await autoSync($, options)
     }
@@ -511,13 +516,16 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     return
   }
   if (actionLocks.has(statusPath)) return
-  actionLocks.add(statusPath)
+  const token = ++lockSeq
+  actionLocks.set(statusPath, { kind, token })
   let timer: { cancel(): void } | undefined
   let project: Project | undefined
   let ownsPending = false
   let keepPending = false
   try {
-    if ((await read($, pendingActions))[statusPath]) return
+    // A pending action the row still shows but nothing will finish (a review the CARD moved past or that
+    // timed out, an action left by an earlier plugin lifetime) is dropped here, so the press goes ahead.
+    if ((await read($, pendingActions))[statusPath] && !(await sweepPending($, { only: statusPath, ownToken: token })).length) return
     const current = await read($, snapshot)
     project = current?.projects.find(p => p.statusPath === statusPath)
     if (project && (kind === 'sync' || kind === 'continue') && dispatchBlockReason(project)) throw new Error(dispatchBlockReason(project))
@@ -613,6 +621,10 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
         await refresh($, options, true)
         throw new Error(reason)
       }
+      if (kind === 'continue' && chosen === 'claude' && freshSession(p)) dispatchOpts = { ...dispatchOpts, fresh: true }
+      // A sync of a row whose job stopped to ask resumes that job's session, which may be a review's rather than the project's.
+      const asked = kind === 'sync' && chosen === 'claude' ? askingSession(p) : undefined
+      if (asked) dispatchOpts = { ...dispatchOpts, resumeSession: asked }
       const executor = createExecutor(chosen, deps, execConfig)
       const job = await executor.dispatch(root, dispatchPrompt(p, kind), dispatchOpts)
       await update($, fallbackOffers, values => { if (!values[statusPath]) return values; const next = { ...values }; delete next[statusPath]; return next })
@@ -647,13 +659,13 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       // PromptSubmitArgs has no context field, and calls from this plugin skip its own hook.
       // Carry the same selection block in the submitted text without consuming a user's draft selection.
       const text = `${gatePrompt(p)}\n\n${context ?? ''}`
-      await update($, reviewRequests, values => ({ ...values, [statusPath]: { text, projectName: p.name, at: now } }))
+      await update($, reviewRequests, values => ({ ...values, [statusPath]: { text, projectName: p.name, at: now, gate: p.gate ?? '' } }))
       try {
         const result = await $.prompt.submit({ text })
         if (result.drop) throw new Error(result.drop)
         let turnId: string | undefined
         for (const [id, startedText] of earlyReviewStarts) {
-          if (startedText === result.text) { turnId = id; break }
+          if (reviewTurnMatches({ text: result.text }, startedText)) { turnId = id; break }
         }
         await update($, reviewRequests, values => {
           const request = values[statusPath]
@@ -688,8 +700,67 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     if (!keepPending) timer?.cancel()
     try {
       if (ownsPending && !keepPending) await update($, pendingActions, values => { const next = { ...values }; delete next[statusPath]; return next })
-    } finally { actionLocks.delete(statusPath) }
+    } finally { if (actionLocks.get(statusPath)?.token === token) actionLocks.delete(statusPath) }
   }
+}
+
+/**
+ * Forgets one pending action, the one given (same kind and time), and, unless told to keep it, its review request.
+ * Anything pressed on the row since then is left alone. Returns whether the pending action was still there to drop;
+ * only then does a review's lock go too, so the row can act again.
+ */
+async function dropPending($: any, path: string, entry: PendingAction, { request = true, keepToken }: { request?: boolean; keepToken?: number } = {}): Promise<boolean> {
+  let dropped = false
+  await update($, pendingActions, values => {
+    const held = values[path]
+    if (!held || held.kind !== entry.kind || held.at !== entry.at) return values
+    dropped = true
+    const next = { ...values }; delete next[path]; return next
+  })
+  if (request) await update($, reviewRequests, values => { if (!values[path] || (entry.kind === 'gate' && values[path].at !== entry.at)) return values; const next = { ...values }; delete next[path]; return next })
+  const lock = actionLocks.get(path)
+  if (dropped && lock?.kind === 'gate' && lock.token !== keepToken) actionLocks.delete(path)
+  return dropped
+}
+
+/**
+ * Drops pending actions nothing will finish, so a row never stays locked: a review whose gate the CARD moved
+ * past, one that waited GATE_PENDING_MS with no turn running for it, and any action without a lock in this
+ * plugin lifetime. Runs after each refresh, at every main-thread turn end, on `/console off` (which also lets go
+ * of every review not running) and before a press on a row that still shows one. Returns the paths it dropped.
+ */
+async function sweepPending($: any, scope: { only?: string; ownToken?: number; offConsole?: boolean } = {}): Promise<string[]> {
+  const pending = await read($, pendingActions)
+  const paths = Object.keys(pending).filter(path => !scope.only || path === scope.only)
+  if (!paths.length) return []
+  const requests = await read($, reviewRequests)
+  const s = await read($, snapshot)
+  const now = await $.clock.now()
+  const turnRunning = await read($, isTurnRunning)
+  const dropped: { path: string; entry: PendingAction; name: string; reason: string; keepRequest: boolean }[] = []
+  for (const path of paths) {
+    const entry = pending[path]
+    const request = requests[path]
+    const project = s?.projects.find(p => p.statusPath === path)
+    const lock = actionLocks.get(path)
+    const locked = !!lock && lock.token !== scope.ownToken
+    let reason = stalePendingReason(entry, request, project, now, locked, turnRunning)
+    if (!reason && scope.offConsole && entry.kind === 'gate' && !(request?.turnId && turnRunning)) reason = '主控台已關閉，審核狀態已清除'
+    if (!reason) continue
+    const name = (project?.name ?? request?.projectName ?? path).replace(/\s.*$/, '')
+    // Only the row is let go: a review turn already bound, or one still queued behind a long turn when the wait
+    // ran out, still reports its answer when it ends.
+    dropped.push({ path, entry, name, reason, keepRequest: (reason === '關卡已變更' && !!request?.turnId) || reason === '審核狀態已逾時' })
+  }
+  const done: typeof dropped = []
+  for (const item of dropped) if (await dropPending($, item.path, item.entry, { request: !item.keepRequest, keepToken: scope.ownToken })) done.push(item)
+  for (const item of done) {
+    const text = `${item.name}：${item.reason}，按鈕已解鎖`
+    // The pane is closing on /console off, and the display generation moves on: say it directly.
+    if (scope.offConsole) $.ui.toast(text, { timeoutMs: 8000 })
+    else await actionNotice($, text, false)
+  }
+  return done.map(item => item.path)
 }
 
 async function setSync($: any, statusPath: string, track: SyncProgress) {
@@ -977,6 +1048,8 @@ async function startConsole($: any, options: PluginOptions, remember: boolean, r
 
 /** `/console off`: back to a light session; the guard stays. */
 async function stopConsole($: any) {
+  // A review nobody is running for must not survive into the next /console; running work keeps its lock.
+  await sweepPending($, { offConsole: true })
   consoleActive = false
   dataGeneration++
   refreshTimer?.cancel(); refreshTimer = undefined
@@ -1067,7 +1140,7 @@ export const register: Register = (on, options) => {
     let hadUnbound = false
     await update($, reviewRequests, requests => Object.fromEntries(Object.entries(requests).map(([path, request]) => {
       if (!request.turnId) hadUnbound = true
-      if (!matched && !request.turnId && request.text === e.text) {
+      if (!matched && !request.turnId && reviewTurnMatches(request, e.text)) {
         matched = true
         return [path, { ...request, turnId: e.turnId }]
       }
@@ -1130,14 +1203,17 @@ export const register: Register = (on, options) => {
     if (!e.agentId) await update($, isTurnRunning, () => false)
     if (!e.agentId) {
       const requests = await read($, reviewRequests)
+      const started = earlyReviewStarts.get(e.turnId)
       for (const [path, request] of Object.entries(requests)) {
-        if (request.turnId !== e.turnId) continue
+        // Bound when it started, or recognised now by the prompt it carried (the host may have wrapped it).
+        if (request.turnId ? request.turnId !== e.turnId : !(started && reviewTurnMatches(request, started))) continue
         earlyReviewStarts.delete(e.turnId)
-        await update($, reviewRequests, values => { const rest = { ...values }; delete rest[path]; return rest })
-        await update($, pendingActions, values => { const rest = { ...values }; delete rest[path]; return rest })
+        // Only this review's own pending entry: a verify pressed while it ran keeps its own.
+        await dropPending($, path, { kind: 'gate', at: request.at })
         const answer = e.answer.trim().split(/\r?\n/).find(line => line.trim())?.slice(0, 120) ?? '請查看主控台回覆'
         await actionNotice($, `${request.projectName}：${e.reason === 'answer' ? `審核已回覆：${answer}` : `審核未完成（${e.reason}）`}`, e.reason === 'answer')
       }
+      await sweepPending($)
     }
     earlyReviewStarts.delete(e.turnId)
     if (consoleActive) void refresh($, options)
@@ -1305,7 +1381,7 @@ export const register: Register = (on, options) => {
     sync_progress: '同步進度：派工（送給執行者）→ 執行（執行者寫回中）→ 寫回 STATUS（CARD 的「更新」有變才算完成）。● 完成　◉ 進行中　○ 未到　✕ 停在這一步。',
     IDLE: '閒置：沒有任務、也沒有待決事項。',
     codex: 'Codex：companion broker 與已安裝的 Codex app 版本一致才算正常；過期時派工會失敗。',
-    sessions: '其他工作階段：屬於主控台或已登記專案的其他 Claude Code session，正停在等批准或等輸入，要切到該 session 處理。與「需決策」不同：這是操作層面的卡住，不是專案決策。',
+    sessions: '其他工作階段：屬於主控台或已登記專案的其他 Claude Code session，正在等待批准（權限提示）、停在提問（做完一輪停下來問問題）或等待輸入，要切到該 session 處理。已退休的不列；同一專案只列最新一條，最多 3 條。與「需決策」不同：這是操作層面的卡住，不是專案決策。',
     ctx: '上下文：本主控台 session 還剩多少上下文。用掉一半以上建議換新主控台。',
     // Rate-limit rows (`limit_<kind>`) are added as the host reports them, so a per-model window explains itself by name.
     version: '版本：目前安裝的 console-status 與 GitHub main 上的最新版，每 30 分鐘與每次載入時檢查。「⬆ 更新」從 marketplace 安裝新版（從本機 git 資料夾載入時改在該資料夾 git pull），完成後自動 /reload-plugins；也可輸入 /console update。',
@@ -1427,7 +1503,8 @@ export const register: Register = (on, options) => {
       if (menuProject && !(await demoEnabled($))) {
         const kind = HOTKEYS[k]
         const state = list.find(r => r.full === menuProject.name)?.state
-        if (kind && state && actionKinds(menuProject, state).includes(kind) && !(await read($, pendingActions))[menuProject.statusPath]) {
+        const held = (await read($, pendingActions))[menuProject.statusPath]
+        if (kind && state && actionKinds(menuProject, state).includes(kind) && (!held || staleGate(held, menuProject))) {
           void triggerAction($, options, menuProject.statusPath, kind)
           return {}
         }
@@ -1624,11 +1701,15 @@ export const register: Register = (on, options) => {
     const target = nextProject(s)
     const targetProject = s.projects.find(p => p.name === target)
     const targetState = list.find(r => r.full === target)?.state
-    const primaryAction: ActionKind | null = targetState === 'ACTION' ? 'decide' : targetState === 'GATE' && parseGate(targetProject?.gate)?.kind !== 'unknown' ? 'gate' : targetState === 'SYNC' && targetProject && !isManual(targetProject) ? 'sync' : null
+    const primaryAction: ActionKind | null = targetState === 'ACTION'
+      ? (targetProject && !hasAsk(targetProject) ? (actionKinds(targetProject, 'ACTION').includes('sync') ? 'sync' : null) : 'decide')
+      : targetState === 'GATE' && parseGate(targetProject?.gate)?.kind !== 'unknown' ? 'gate' : targetState === 'SYNC' && targetProject && !isManual(targetProject) ? 'sync' : null
     const focus = sel ?? list[Math.max(0, cur)]?.full ?? null
     const menuProject = menu === null ? null : s.projects.find(x => x.name === menu) ?? null
+    // A review the CARD has moved past no longer holds its row; the next sweep forgets it.
+    const livePending = (p: Project) => staleGate(pending[p.statusPath], p) ? undefined : pending[p.statusPath]
     const actionButton = (p: Project, kind: ActionKind, key: string) => {
-      const active = pending[p.statusPath]
+      const active = livePending(p)
       const blocked = kind === 'continue' || kind === 'sync' ? dispatchBlockReason(p) : ''
       const confirming = confirmations[p.statusPath]?.signature === (kind === 'continue' ? workSignature(p) : kind === 'verify' ? verifySignature(p.verify) : null)
       const running = active?.kind === kind
@@ -1646,7 +1727,7 @@ export const register: Register = (on, options) => {
       const state = list.find(r => r.full === p.name)?.state ?? 'NOCARD'
       const kinds = actionKinds(p, state)
       const blockedReason = !isManual(p) ? dispatchBlockReason(p) : ''
-      const active = pending[p.statusPath]?.kind
+      const active = livePending(p)?.kind
       if (active && !kinds.includes(active)) kinds.unshift(active)
       const offer = p.executor === 'codex' ? offers[p.statusPath] : undefined
       // While a second press is armed, say exactly what it will do: the toast alone disappears.
@@ -1657,8 +1738,8 @@ export const register: Register = (on, options) => {
           {kinds.map(kind => actionButton(p, kind, prefix + kind))}
           {blockedReason && <Text key={prefix + 'blocked'} color={C.dim}>派工鎖定：{blockedReason}</Text>}
           {offer && <Box key={'help-' + prefix + 'fallback'} hover={{ scope: 'help-fallback' }}>
-            <Button key={prefix + 'fallback'} plain dimColor={!!pending[p.statusPath]} label={`⇢ 改用 Claude 派工（${actionLabel(offer.kind, p).replace(/^⇢\s*/, '')}）`} onPress={async () => {
-              if (!pending[p.statusPath]) await triggerAction($, options, p.statusPath, offer.kind, { useClaude: true })
+            <Button key={prefix + 'fallback'} plain dimColor={!!livePending(p)} label={`⇢ 改用 Claude 派工（${actionLabel(offer.kind, p).replace(/^⇢\s*/, '')}）`} onPress={async () => {
+              if (!livePending(p)) await triggerAction($, options, p.statusPath, offer.kind, { useClaude: true })
             }} />
           </Box>}
         </Box>
@@ -2011,7 +2092,7 @@ export const register: Register = (on, options) => {
               })()}
             </Box>
           )}
-          {s.blocked.map((b, i) => <Text key={'b' + i + '-' + b.name} color={C.amber} wrap="truncate-end">{`  ・${b.name}：${b.why}`}</Text>)}
+          {blockedLines(s.blocked).map((line, i) => <Text key={'b' + i} color={C.amber} wrap="truncate-end">{`  ・${line}`}</Text>)}
           {codexShown && health !== 'ok' && s.codex.trim() && <Text color={health === 'stale' ? C.red : C.dim} wrap="truncate-end">{`  ・${s.codex}`}</Text>}
           {codexShown && s.companion && (s.companion.source !== 'configured' || s.companion.warning) && (
             <Text key="companion" color={s.companion.warning ? C.amber : C.dim} wrap="truncate-end">{`  ・companion：${s.companion.path || '（無）'}${s.companion.source === 'installed' || s.companion.source === 'cache' ? '（自動選用）' : ''}${s.companion.warning ? `　⚠ ${s.companion.warning}` : ''}`}</Text>

@@ -112,7 +112,8 @@ test('a running Claude resume copy blocks Claude and Codex dispatch until the co
     { id: 'pending', launchName: 'copy-launch', sessionId: original, root: 'D:/Project Alpha', prompt: 'sample work', startedAt: '2030-01-05T11:00:00Z', status: 'running', phase: 'unknown' },
   ] } } })
   const copiedAgent = { id: 'abc12345', name: 'copy-launch', sessionId: copy, cwd: 'D:/Project Alpha', kind: 'background', state: 'working' }
-  const old = { id: 'def67890', name: 'old-launch', sessionId: original, cwd: 'D:/Project Alpha', kind: 'background', state: 'done', startedAt: '2030-01-05T10:00:00Z' }
+  // The original session is at work, so the resume is a copy, not a move.
+  const old = { id: 'def67890', name: 'old-launch', sessionId: original, cwd: 'D:/Project Alpha', kind: 'background', state: 'working', status: 'busy', pid: 7, startedAt: '2030-01-05T10:00:00Z' }
   h.agents.push(old, copiedAgent)
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   const ui = await $.ui.mount(PANE)

@@ -205,7 +205,7 @@ The right-click menu (or `m` on the keyboard for the row under the cursor; Esc c
 | ⇢ Continue | IDLE, with a next step and no decision or gate; executor not `manual` | Requires a second press within six seconds (the pane shows the next step it will dispatch), then dispatches the project's executor |
 | ⇢ 改用 Claude 派工 | A Codex dispatch held by `codexFallback: ask` | Sends the same action to Claude, recorded as a fallback |
 | ✎ Decide | `等使用者` is nonempty | Prefills a draft and one-shot project context; Claude runs only when submitted |
-| ⚑ Review gate / final review | Recognized spec, review, or release gate | Sends evidence to the console Claude; release review cannot execute release |
+| ⚑ Review gate / final review | Recognized spec, review, or release gate | Sends evidence to the console Claude; release review cannot execute release. The row unlocks when that turn ends, when the CARD moves past the gate, or after ten minutes with no review turn running |
 | ↗ Open STATUS.md | Always | Requests the editor to open the file |
 
 **When a project is 待同步.** A finished job counts as written back when the CARD's `更新` is at or after the minute the job started: a job that updated the CARD on its way out is done, not 待同步. Only a job that ended without touching the CARD (or failed) leaves the project in 待同步.
@@ -213,6 +213,8 @@ The right-click menu (or `m` on the keyboard for the row under the cursor; Esc c
 **Sync progress.** A sync shows its steps on the project's `同步` line, `● 派工 ─ ◉ 執行 ─ ○ 寫回 STATUS` (● done, ◉ under way, ○ not reached, ✕ stopped there), with the executor, its phase and the elapsed time underneath, and the band shows `↻ 同步：執行中 1 分 20 秒`. It is done when the CARD's `更新` changes; a sync that ends without changing it says so (`✕ 寫回 STATUS`) instead of quietly leaving 待同步. The outcome stays on screen for five minutes and is also a toast. While a job or a sync runs, the console refreshes every 20 seconds instead of every minute.
 
 With the menu open, one key runs an action on offer: `v` verify, `s` sync, `c` continue (still asks for the second press), `d` decide, `g` gate, `o` open STATUS.md, `p` open the pull request. The menu lists the keys that apply to that project; a key for an action not on offer does nothing.
+
+**Other sessions.** Under 用量, `其他工作階段` lists Claude Code sessions in the console's folder or a registered project that wait on you: `等待批准` (a permission prompt), `停在提問` (it finished a turn on a question) or `等待輸入`. Sessions the daemon retired (no process, no status) are left out, each project shows one, named with the project (the most pressing wording first, then the newest), and past three lines the list ends with `…另 N 條`. A session stopped on a question is only pointed out here; its project row already offers the decision.
 
 ## Git, PR and CI
 

@@ -218,8 +218,12 @@ test('copy keeps original session and blocks dispatch until it finishes', async 
   for (const delayed of [false, true]) {
     const h = harness({ 'D:/claude.json': JSON.stringify({ version: 1, roots: { 'd:/project alpha': { root: 'D:/Project Alpha', sessionId: original, jobs: [] } } }) })
     const copiedAgent = { id: 'abc12345', name: NAME0, sessionId: copy, cwd: 'D:/Project Alpha', kind: 'background', state: 'working' }
-    const reply = (agents: unknown[]) => ({ exitCode: 0, stdout: JSON.stringify(agents), stderr: '' })
-    h.replies.push(reply([]), { exitCode: 0, stdout: 'abc12345', stderr: '' }, reply(delayed ? [] : [copiedAgent]))
+    // The original session is at work again when the resume comes back as another session, so that one is a copy, not a move.
+    // Before each dispatch it is idle, or the dispatch would refuse on its own.
+    const originalAgent = { id: 'orig0001', name: 'previous-launch', sessionId: original, cwd: 'D:/Project Alpha', kind: 'background', state: 'working', status: 'busy', pid: 7, startedAt: NOW - 10 * 60_000 }
+    const idleOriginal = { ...originalAgent, state: 'blocked', status: 'idle' }
+    const reply = (agents: unknown[], first: unknown = originalAgent) => ({ exitCode: 0, stdout: JSON.stringify([first, ...agents]), stderr: '' })
+    h.replies.push(reply([], idleOriginal), { exitCode: 0, stdout: 'abc12345', stderr: '' }, reply(delayed ? [] : [copiedAgent]))
     const executor = createExecutor('claude', h.deps, { companionScript: '', companionStateRoots: [], claudeSessionsPath: 'D:/claude.json' })
     const error = await errorOf(() => executor.dispatch('D:/Project Alpha', 'resume work', {}))
     expect(error).toMatch(delayed ? /could not uniquely confirm/ : /unmanaged/i)
@@ -232,8 +236,8 @@ test('copy keeps original session and blocks dispatch until it finishes', async 
     expect(job.warning).toMatch(/unmanaged/i)
     expect(isActiveJob(job)).toBe(true)
     expect(jobFlags([job], NOW - 60_000)[0].kind).toBe('running')
-    h.replies.push(reply([copiedAgent]))
-    expect(await errorOf(() => executor.dispatch('D:/Project Alpha', 'duplicate', {}))).toMatch(/active/i)
+    h.replies.push(reply([copiedAgent], idleOriginal))
+    expect(await errorOf(() => executor.dispatch('D:/Project Alpha', 'duplicate', {}))).toMatch(/workspace has an active job/i)
     expect(h.calls.filter(call => call.argv.includes('--bg')).length).toBe(1)
     h.replies.push(reply([{ ...copiedAgent, state: 'done' }]))
     const [finished] = await executor.listJobs('D:/Project Alpha')
@@ -243,7 +247,7 @@ test('copy keeps original session and blocks dispatch until it finishes', async 
     expect(isActiveJob(finished)).toBe(false)
     expect(finished.completedAt).toBe(new Date(NOW).toISOString())
     expect(JSON.parse(h.files['D:/claude.json']).roots['d:/project alpha'].sessionId).toBe(original)
-    h.replies.push(reply([{ ...copiedAgent, state: 'done' }]), { exitCode: 0, stdout: 'def67890', stderr: '' },
+    h.replies.push(reply([{ ...copiedAgent, state: 'done' }], idleOriginal), { exitCode: 0, stdout: 'def67890', stderr: '' },
       reply([{ ...copiedAgent, id: 'def67890', name: NAME1, sessionId: original }]))
     await executor.dispatch('D:/Project Alpha', 'next work', {})
     const resumed = h.calls.filter(call => call.argv.includes('--bg'))[1].argv
@@ -278,8 +282,10 @@ test('a missing copy cannot be completed by the original session previous turn',
 test('a copy already done at confirmation retains its completion timestamp and original session', async () => {
   const original = '11111111-2222-4333-8444-555555555555'
   const h = harness({ 'D:/claude.json': JSON.stringify({ version: 1, roots: { 'd:/project alpha': { root: 'D:/Project Alpha', sessionId: original, jobs: [] } } }) })
+  // At work when the launch is confirmed, so the session that came back is a copy.
+  const originalAgent = { id: 'orig0001', name: 'previous-launch', sessionId: original, cwd: 'D:/Project Alpha', kind: 'background', state: 'working', status: 'busy', pid: 7, startedAt: NOW - 10 * 60_000 }
   h.replies.push({ exitCode: 0, stdout: '[]', stderr: '' }, { exitCode: 0, stdout: 'abc12345', stderr: '' },
-    { exitCode: 0, stdout: JSON.stringify([{ id: 'abc12345', name: NAME0, sessionId: '66666666-7777-4888-8999-000000000000', cwd: 'D:/Project Alpha', kind: 'background', state: 'done' }]), stderr: '' })
+    { exitCode: 0, stdout: JSON.stringify([originalAgent, { id: 'abc12345', name: NAME0, sessionId: '66666666-7777-4888-8999-000000000000', cwd: 'D:/Project Alpha', kind: 'background', state: 'done' }]), stderr: '' })
   const executor = createExecutor('claude', h.deps, { companionScript: '', companionStateRoots: [], claudeSessionsPath: 'D:/claude.json' })
   expect(await errorOf(() => executor.dispatch('D:/Project Alpha', 'work', {}))).toMatch(/unmanaged/)
   h.replies.push({ exitCode: 0, stdout: '[]', stderr: '' })
