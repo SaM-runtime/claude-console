@@ -19,8 +19,8 @@ import { stateFormatIssues, stateFormatWarning } from './jobs'
 import { pipeline, projectForCwd, projectModeSection, progressContext, progressSignature } from './pipeline'
 import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
-import { gitBadge, gitLine, gitProbeMode, gitStatusArgs, parseGitStatus, parsePrView, prLine, prViewArgs } from './git'
-import type { PrInfo, CacheClock, UpdateInfo } from '../types'
+import { FETCH_STALE_MS, agoText, commitLine, gitBadge, gitLine, gitLogArgs, gitNumstatArgs, gitProbeMode, gitStatusArgs, parseGitLog, parseGitStatus, parseNumstat, parsePrView, prLine, prViewArgs } from './git'
+import type { PrInfo, CacheClock, GitCommit, GitInfo, UpdateInfo } from '../types'
 import { CACHE_WARN_MS, cacheChip, cacheTtlOption, cacheView, cacheWarning, hitRate, hitText, leftText, learnTtl, priceOverride, tokensText, transcriptCache, transcriptPathFor, ttlLabel, usd } from './cache'
 import { limitPace } from './pace'
 import { LOOP_NOTE, LoopMemory, loopKey, loopMode } from './loop'
@@ -148,6 +148,8 @@ let companion: CompanionResolution | null = null
 let lastSlow = 0
 /** Last `gh pr view` per project root: re-asked on the slow interval, every tick while CI runs, or on a branch change. */
 const prCache = new Map<string, { at: number; branch: string; pr: PrInfo | null }>()
+/** Recent commits per project root, read again only when HEAD moves. */
+const commitCache = new Map<string, { head: string; commits: GitCommit[] }>()
 let demoActive = false
 let dataGeneration = 0
 let refreshOwner: { generation: number; queued: boolean } | null = null
@@ -379,6 +381,29 @@ async function refresh($: any, options: PluginOptions, force = false) {
     }
     stateFormatIssues.clear()
     const gitMode = gitProbeMode((options as any).gitProbe)
+    // What a developer would otherwise type: the recent commits (when HEAD moved), the size of the
+    // uncommitted change (when there is one) and when the last fetch ran. A failure leaves the field out.
+    const gitDetails = async (root: string, git: GitInfo): Promise<GitInfo> => {
+      const quiet = (error: unknown) => { if (error === DISCARDED_REFRESH) throw error; return null }
+      const cached = git.head ? commitCache.get(root) : undefined
+      const [commits, lines, fetched] = await Promise.all([
+        !git.head ? null : cached && cached.head === git.head ? cached.commits
+          : io.process.run(gitLogArgs(root), { timeoutMs: 10_000 }).then((r: any) => {
+            if (r.exitCode !== 0) return null
+            const list = parseGitLog(String(r.stdout ?? ''))
+            commitCache.set(root, { head: git.head!, commits: list })
+            return list
+          }).catch(quiet),
+        git.changed && git.head ? io.process.run(gitNumstatArgs(root), { timeoutMs: 10_000 }).then((r: any) => r.exitCode === 0 ? parseNumstat(String(r.stdout ?? '')) : null).catch(quiet) : null,
+        guarded(() => Promise.resolve().then(() => $.fs.stat(`${root.replace(/[\\/]+$/, '')}/.git/FETCH_HEAD`))).catch(quiet) as Promise<{ mtimeMs?: number } | null>,
+      ])
+      return {
+        ...git,
+        ...(commits && commits.length ? { commits } : {}),
+        ...(lines ? { lines } : {}),
+        ...(typeof fetched?.mtimeMs === 'number' ? { fetchedAt: fetched.mtimeMs } : {}),
+      }
+    }
     const pullRequest = async (root: string, branch: string, at: number, forced: boolean): Promise<PrInfo | null> => {
       const cached = prCache.get(root)
       const live = !!cached?.pr && cached.pr.state === 'OPEN' && cached.pr.checks.pending > 0
@@ -396,7 +421,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
     const loaded = await mapLimit(registryRows, REFRESH_CONCURRENCY, async ({ row, root }, index) => {
       const eff = effective[index]!
       const listing: ExecutorKind = eff.executor === 'manual' ? settings.executor : eff.executor
-      const [card, listed, git, stat] = await Promise.all([
+      const [card, listed, status, stat] = await Promise.all([
         io.fs.read(row.statusPath).catch(() => null) as Promise<string | null>,
         guarded(() => workspaceJobs(listing, deps, withCompanion(config), root)),
         gitMode === 'off' ? null : io.process.run(gitStatusArgs(root), { timeoutMs: 10_000 })
@@ -408,6 +433,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
         const kind = job.kind ?? kinds.get(jobKey(job))
         return kind && kind !== job.kind ? { ...job, kind } : job
       })
+      const git = status ? await gitDetails(root, status) : null
       const pr = git && gitMode === 'on' && git.branch ? await pullRequest(root, git.branch, now, force) : null
       const warnings = jobs.filter(job => job.warning).map(job => `${row.name}：${job.warning}`)
       const project: Project = {
@@ -1881,6 +1907,15 @@ export const register: Register = (on, options) => {
           </Box>
         })() : field('同步', !running.length && p.jobs.some(j => j.kind === 'newer') ? '執行者已結束，結果未寫回 STATUS' : '', C.blue)}
         {p.git && field('Git', gitLine(p.git), p.git.conflicts ? C.red : p.git.changed || p.git.untracked ? C.amber : p.git.ahead || p.git.behind ? C.blue : C.dim)}
+        {p.git?.upstream && p.git.fetchedAt !== undefined && renderedAt - p.git.fetchedAt > FETCH_STALE_MS && field('Fetch', `上次 fetch ${agoText(p.git.fetchedAt, renderedAt)}，領先／落後可能不是最新`, C.amber)}
+        {p.git?.commits?.length ? (
+          <Box key={prefix + 'commits'} gap={2}>
+            <Box width={6} flexShrink={0}><Text color={C.dim}>提交</Text></Box>
+            <Box flexGrow={1} flexShrink={1} flexDirection="column">
+              {p.git.commits.slice(0, opts.state ? 5 : 3).map((c, i) => <Text key={prefix + 'c' + c.hash} color={i === 0 ? C.text : C.dim} wrap="truncate-end">{commitLine(c, renderedAt)}</Text>)}
+            </Box>
+          </Box>
+        ) : null}
         {p.pr && (
           <Box key={prefix + 'pr'} gap={2}>
             <Box width={6} flexShrink={0}><Text color={C.dim}>PR</Text></Box>

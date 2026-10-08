@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.0
+
+- **The git you would otherwise type, on the console.** Per project, the Git line adds the uncommitted change's size `（+120 −34）` (`git diff --numstat HEAD`, only while something is uncommitted) and `stash n` (`git status --show-stash`); a `提交` field lists the latest commits with short hash, subject and age (three in the action menu, five in the card; `git log -5`, read again only when HEAD moves); a `Fetch` line warns when the last `git fetch` is over a day old, since ahead/behind is only as fresh as it. A selected project's latest commit rides along with the next prompt. Ideas from change-ledger in arasovic/claude-code-mods and claude-hud by jarrodwatts (both MIT), credited in the README.
+
 ## 0.10.0
 
 - **Usage pace.** Each Claude rate-limit meter in the pane checks the average rate since its window opened; when that rate runs the window out before it resets, the reset time is followed by `照目前速度約 2 小時 13 分後用完` (amber, red inside the last hour). Idea from session-meter in arasovic/claude-code-mods (MIT).

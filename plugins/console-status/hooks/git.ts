@@ -1,6 +1,6 @@
 // Git and pull-request state per project: what a developer checks before and after a dispatch.
 // `git status` is local and cheap (every refresh); `gh pr view` goes to the network (slow interval).
-import type { GitInfo, PrInfo } from '../types'
+import type { GitCommit, GitInfo, PrInfo } from '../types'
 
 export type GitProbe = 'on' | 'git' | 'off'
 
@@ -12,8 +12,58 @@ export function gitProbeMode(value: unknown): GitProbe {
 
 /** `--no-optional-locks`: a status read must never take the index lock a running executor needs. */
 export function gitStatusArgs(root: string): string[] {
-  return ['git', '--no-optional-locks', '-C', root, 'status', '--porcelain=v2', '--branch']
+  return ['git', '--no-optional-locks', '-C', root, 'status', '--porcelain=v2', '--branch', '--show-stash']
 }
+
+/** The newest commits: short hash, commit time (seconds) and subject, unit-separated. */
+export function gitLogArgs(root: string, count = 5): string[] {
+  return ['git', '--no-optional-locks', '-C', root, 'log', `-${count}`, '--no-color', '--format=%h%x1f%ct%x1f%s']
+}
+
+/** Lines added and removed in uncommitted changes, staged or not. */
+export function gitNumstatArgs(root: string): string[] {
+  return ['git', '--no-optional-locks', '-C', root, 'diff', '--numstat', '--no-color', 'HEAD']
+}
+
+export function parseGitLog(text: string): GitCommit[] {
+  const out: GitCommit[] = []
+  for (const line of text.split(/\r?\n/)) {
+    const [hash, at, ...rest] = line.split('\x1f')
+    const seconds = Number(at)
+    if (!hash || !/^[0-9a-f]{4,40}$/.test(hash) || !Number.isFinite(seconds)) continue
+    out.push({ hash, at: seconds * 1000, subject: rest.join('\x1f').trim() })
+  }
+  return out
+}
+
+/** `git diff --numstat` totals; a binary file (`-`) counts no lines. */
+export function parseNumstat(text: string): { add: number; del: number } {
+  let add = 0, del = 0
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^(\d+|-)\t(\d+|-)\t/.exec(line)
+    if (!m) continue
+    if (m[1] !== '-') add += Number(m[1])
+    if (m[2] !== '-') del += Number(m[2])
+  }
+  return { add, del }
+}
+
+/** `3 小時前` style age for commits and fetches. */
+export function agoText(t: number, now: number): string {
+  const m = Math.floor(Math.max(0, now - t) / 60_000)
+  if (m < 1) return '剛剛'
+  if (m < 60) return `${m} 分鐘前`
+  if (m < 1440) return `${Math.floor(m / 60)} 小時前`
+  return `${Math.floor(m / 1440)} 天前`
+}
+
+/** One commit for the card: `a1b2c3d 修正同步（2 小時前）`. */
+export function commitLine(c: GitCommit, now: number): string {
+  return `${c.hash} ${c.subject}（${agoText(c.at, now)}）`
+}
+
+/** A fetch older than this makes ahead/behind stale enough to say so. */
+export const FETCH_STALE_MS = 24 * 3_600_000
 
 const PR_FIELDS = 'number,title,state,isDraft,url,reviewDecision,statusCheckRollup'
 export function prViewArgs(): string[] {
@@ -36,7 +86,10 @@ export function parseGitStatus(text: string): GitInfo | null {
       if (m) { info.ahead = Number(m[1]); info.behind = Number(m[2]) }
     } else if (line.startsWith('# branch.oid ')) {
       const oid = line.slice('# branch.oid '.length).trim()
-      if (oid !== '(initial)') info.oid = oid.slice(0, 7)
+      if (oid !== '(initial)') { info.oid = oid.slice(0, 7); info.head = oid }
+    } else if (line.startsWith('# stash ')) {
+      const n = Number(line.slice('# stash '.length).trim())
+      if (n > 0) info.stash = n
     } else if (line.startsWith('1 ') || line.startsWith('2 ')) info.changed++
     else if (line.startsWith('u ')) info.conflicts++
     else if (line.startsWith('? ')) info.untracked++
@@ -98,9 +151,10 @@ export function gitLine(git: GitInfo): string {
   if (git.ahead) parts.push(`領先 ${git.ahead}`)
   if (git.behind) parts.push(`落後 ${git.behind}`)
   if (git.conflicts) parts.push(`${git.conflicts} 個衝突`)
-  if (git.changed) parts.push(`${git.changed} 個檔案未提交`)
+  if (git.changed) parts.push(`${git.changed} 個檔案未提交${git.lines && (git.lines.add || git.lines.del) ? `（+${git.lines.add} −${git.lines.del}）` : ''}`)
   if (git.untracked) parts.push(`${git.untracked} 個未追蹤`)
   if (!git.ahead && !git.behind && !git.conflicts && !git.changed && !git.untracked) parts.push('乾淨')
+  if (git.stash) parts.push(`stash ${git.stash}`)
   return parts.join('　')
 }
 

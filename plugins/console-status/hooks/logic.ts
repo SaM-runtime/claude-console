@@ -1,6 +1,6 @@
 // Pure logic for console-status: no I/O, so tests can exercise it directly.
 import type { Blocked, ExecutorTask, JobFlag, Project, Snapshot } from '../types'
-import { gitLine, prLine, prTransitions } from './git'
+import { commitLine, gitLine, prLine, prTransitions } from './git'
 import { parseProjectExecutor } from './dispatch'
 import type { ProjectExecutor } from './dispatch'
 
@@ -638,6 +638,7 @@ export function selectionContext(snap: Snapshot | null, full: string | null): st
   if (p.next) lines.push(`下一步：${p.next}`)
   for (const j of p.jobs) lines.push(j.kind === 'running' ? `執行者執行中：${j.id}` : `執行者結果未同步至 STATUS：${j.id}（${j.status}）`)
   if (p.git) lines.push(`Git：${gitLine(p.git)}`)
+  if (p.git?.commits?.[0]) lines.push(`最新提交：${commitLine(p.git.commits[0], snap.at)}`)
   if (p.pr) lines.push(`PR：${prLine(p.pr)}${p.pr.url ? ` ${p.pr.url}` : ''}`)
   return lines.join('\n')
 }

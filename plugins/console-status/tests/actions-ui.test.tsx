@@ -19,7 +19,7 @@ function fixture(on: any) {
     agentsDelay: 0,
     files: {} as Record<string, string>,
     /** `git status --porcelain=v2 --branch` and `gh pr view --json` output; empty: not a repository / no PR. */
-    git: '', gh: '', gitCalls: [] as any[],
+    git: '', gh: '', gitLog: '', gitDiff: '', gitCalls: [] as any[],
   }
   on('fs.list', () => ({ value: [{ name: 'Project Alpha-hash', kind: 'dir' }] }))
   on('fs.read', (_: any, e: any) => {
@@ -40,7 +40,11 @@ function fixture(on: any) {
     if (e.argv[0] === 'claude') { if (data.agentsDelay) await clock.sleep(data.agentsDelay); return { value: result(0, '[]') } }
     if (e.argv.includes('-File')) return { value: result(0, 'OK codex=0.0.0-test') }
     // Git and PR probes run on every refresh; these tests count only the actions' own commands.
-    if (e.argv[0] === 'git') { data.gitCalls.push(e); return { value: data.git ? result(0, data.git) : result(128, '', 'not a git repository') } }
+    if (e.argv[0] === 'git') {
+      data.gitCalls.push(e)
+      if (!data.git) return { value: result(128, '', 'not a git repository') }
+      return { value: result(0, e.argv.includes('log') ? data.gitLog ?? '' : e.argv.includes('diff') ? data.gitDiff ?? '' : data.git) }
+    }
     if (e.argv[0] === 'gh') { data.gitCalls.push(e); return { value: data.gh ? result(0, data.gh) : result(1, '', 'no pull requests found') } }
     data.processCalls.push(e)
     return { value: await data.run(e) }
@@ -364,10 +368,12 @@ const PR = (checks: any[]) => JSON.stringify({ number: 17, title: 'Parser rewrit
 
 test('the action menu shows the branch, uncommitted work and the PR checks, and the table has a Git column', OPTIONS, async ($, on) => {
   const { data } = fixture(on)
-  data.git = GIT_STATUS
+  data.git = GIT_STATUS + '# stash 1\n'
+  data.gitLog = `abc1234\x1f${Math.floor(Date.parse('2030-01-05T09:00:00Z') / 1000)}\x1fParse nested tables\ndef5678\x1f${Math.floor(Date.parse('2030-01-04T08:00:00Z') / 1000)}\x1fAdd parser tests\n`
+  data.gitDiff = '10\t2\tsrc/a.ts\n2\t1\tsrc/b.ts\n-\t-\tlogo.png\n'
   data.gh = PR([{ __typename: 'CheckRun', name: 'build (windows)', status: 'COMPLETED', conclusion: 'FAILURE' }, { __typename: 'CheckRun', name: 'lint', status: 'IN_PROGRESS', conclusion: '' }])
   await $.command.run({ command: 'console', args: 'refresh' } as any)
-  expect(data.gitCalls.find(call => call.argv[0] === 'git').argv).toEqual(['git', '--no-optional-locks', '-C', 'D:/Project Alpha', 'status', '--porcelain=v2', '--branch'])
+  expect(data.gitCalls.find(call => call.argv[0] === 'git').argv).toEqual(['git', '--no-optional-locks', '-C', 'D:/Project Alpha', 'status', '--porcelain=v2', '--branch', '--show-stash'])
   expect(data.gitCalls.find(call => call.argv[0] === 'gh').init.cwd).toBe('D:/Project Alpha')
   const wide = await $.ui.mount({ ...PANE(), props: { ...PANE().props, bodyColumns: 100 } })
   expect(await wide.find({ type: 'Text', text: 'Git' })).toBeDefined()
@@ -375,7 +381,10 @@ test('the action menu shows the branch, uncommitted work and the PR checks, and 
   await wide.unmount()
   const ui = await $.ui.mount(PANE('terminal'))
   await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)
-  expect(await ui.find({ type: 'Text', text: 'feature/parser → origin/feature/parser　領先 2　2 個檔案未提交　1 個未追蹤' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'feature/parser → origin/feature/parser　領先 2　2 個檔案未提交（+12 −3）　1 個未追蹤　stash 1' })).toBeDefined()
+  // The latest commit leads the 提交 field, as git log would show it.
+  expect(await ui.find({ type: 'Text', text: /^abc1234 Parse nested tables（\d+ 小時前）$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^def5678 Add parser tests（1 天前）$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /#17 Parser rewrite（開啟）　CI ✕ 1 失敗：build \(windows\)　1 進行中　待審查/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /快捷鍵　v 執行驗證・c 繼續下一步・o 開啟 STATUS\.md・p 開啟 PR・Esc 關閉/ })).toBeDefined()
   await ui.unmount()
@@ -437,7 +446,7 @@ test('gitProbe git reads the branch but never calls gh', { options: { ...OPTIONS
   data.git = GIT_STATUS
   data.gh = PR([])
   await $.command.run({ command: 'console', args: 'refresh' } as any)
-  expect(data.gitCalls.map(call => call.argv[0])).toEqual(['git'])
+  expect(data.gitCalls.map(call => call.argv[0])).toEqual(['git', 'git', 'git'])
   expect(data.state.snapshot.projects[0].git.branch).toBe('feature/parser')
   expect(data.state.snapshot.projects[0].pr).toBeUndefined()
 })
