@@ -33,6 +33,14 @@ export type Project = {
 }
 
 export type GitCommit = { hash: string; at: number; subject: string }
+/** One changed path in the on-demand file view; `code` is git's two-letter XY status. */
+export type GitFile = { path: string; code: string; stage: 'staged' | 'partial' | 'unstaged' | 'conflict'; from?: string; lines?: { add: number; del: number } }
+/** The file view a person opens from a project's Git row; read on demand, not every refresh. */
+export type GitDetail = {
+  at: number; sig: string; files: GitFile[]; untracked: string[]; ignored: string[]
+  commit?: GitCommit & { files: { path: string; lines?: { add: number; del: number } }[] }
+  error?: string
+}
 export type GitInfo = {
   branch: string; detached?: boolean; oid?: string; upstream?: string; ahead: number; behind: number; changed: number; untracked: number; conflicts: number
   /** HEAD's full id (absent before the first commit), the key the commit list is cached under. */
@@ -118,6 +126,8 @@ declare module 'claude-code' {
       isRefreshing: boolean
       hovered: string | null
       menuFor: string | null
+      gitOpen: string | null
+      gitViews: Record<string, GitDetail | 'loading'>
       dispatchPicker: 'executor' | 'model' | 'effort' | null
       selected: string | null
       cursor: number

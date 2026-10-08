@@ -1,6 +1,6 @@
 // Git and pull-request state per project: what a developer checks before and after a dispatch.
 // `git status` is local and cheap (every refresh); `gh pr view` goes to the network (slow interval).
-import type { GitCommit, GitInfo, PrInfo } from '../types'
+import type { GitCommit, GitDetail, GitFile, GitInfo, PrInfo } from '../types'
 
 export type GitProbe = 'on' | 'git' | 'off'
 
@@ -60,6 +60,98 @@ export function agoText(t: number, now: number): string {
 /** One commit for the card: `a1b2c3d 修正同步（2 小時前）`. */
 export function commitLine(c: GitCommit, now: number): string {
   return `${c.hash} ${c.subject}（${agoText(c.at, now)}）`
+}
+
+/**
+ * The on-demand file view: every changed, untracked and ignored path, NUL-separated so names with
+ * spaces or non-ASCII survive. `traditional` folds a wholly ignored directory into one `dir/` entry.
+ */
+export function gitFilesArgs(root: string): string[] {
+  return ['git', '--no-optional-locks', '-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=normal', '--ignored=traditional']
+}
+
+/** HEAD's subject line and the files it touched with their line counts. */
+export function gitShowArgs(root: string): string[] {
+  return ['git', '--no-optional-locks', '-C', root, 'show', '--no-color', '--no-renames', '--numstat', '--format=%h%x1f%ct%x1f%s', 'HEAD']
+}
+
+/** Lines per path from `git diff --numstat`; a binary file has no counts. */
+export function parseNumstatFiles(text: string): Map<string, { add: number; del: number } | null> {
+  const out = new Map<string, { add: number; del: number } | null>()
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^(\d+|-)\t(\d+|-)\t(.+)$/.exec(line)
+    if (!m) continue
+    out.set(m[3]!, m[1] === '-' || m[2] === '-' ? null : { add: Number(m[1]), del: Number(m[2]) })
+  }
+  return out
+}
+
+const CONFLICT = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'])
+
+/** `git status --porcelain=v1 -z` split into changed, untracked and ignored paths. */
+export function parseGitFiles(text: string, lines?: Map<string, { add: number; del: number } | null>): Pick<GitDetail, 'files' | 'untracked' | 'ignored'> {
+  const files: GitFile[] = [], untracked: string[] = [], ignored: string[] = []
+  const parts = text.split('\0')
+  for (let i = 0; i < parts.length; i++) {
+    const entry = parts[i]!
+    if (entry.length < 4) continue
+    const code = entry.slice(0, 2), path = entry.slice(3)
+    if (code === '??') { untracked.push(path); continue }
+    if (code === '!!') { ignored.push(path); continue }
+    // A rename or copy carries its old path in the next field.
+    const from = code[0] === 'R' || code[0] === 'C' ? parts[++i] : undefined
+    const staged = code[0] !== ' ' && code[0] !== '?'
+    const file: GitFile = {
+      path, code,
+      stage: CONFLICT.has(code) ? 'conflict' : staged && code[1] !== ' ' ? 'partial' : staged ? 'staged' : 'unstaged',
+      ...(from ? { from } : {}),
+    }
+    const counted = lines?.get(path)
+    if (counted) file.lines = counted
+    files.push(file)
+  }
+  return { files, untracked, ignored }
+}
+
+/** `git show --numstat --format=…` for HEAD, or null before the first commit or on a failed run. */
+export function parseGitShow(text: string): GitDetail['commit'] | null {
+  const lines = text.split(/\r?\n/)
+  const head = parseGitLog(lines[0] ?? '')[0]
+  if (!head) return null
+  const files: { path: string; lines?: { add: number; del: number } }[] = []
+  for (const [path, counted] of parseNumstatFiles(lines.slice(1).join('\n'))) files.push(counted ? { path, lines: counted } : { path })
+  return { ...head, files }
+}
+
+const KIND: Record<string, string> = { M: '修改', A: '新增', D: '刪除', R: '改名', C: '複製', T: '類型' }
+
+/** The short word for one side of git's XY code: `staged` reads X, the work tree reads Y. */
+export function fileKind(file: GitFile, side: 'staged' | 'unstaged'): string {
+  if (file.stage === 'conflict') return '衝突'
+  const letter = side === 'staged' ? file.code[0]! : file.code[1]!
+  return KIND[letter] ?? letter
+}
+
+/**
+ * The file view's groups, in git's own order: what the next commit takes, what it leaves, conflicts.
+ * A partly staged file is in both, like `git status` lists it.
+ */
+export function fileGroups(files: GitFile[]): { staged: GitFile[]; unstaged: GitFile[]; conflicts: GitFile[] } {
+  return {
+    conflicts: files.filter(f => f.stage === 'conflict'),
+    staged: files.filter(f => f.stage === 'staged' || f.stage === 'partial'),
+    unstaged: files.filter(f => f.stage === 'unstaged' || f.stage === 'partial'),
+  }
+}
+
+/** `+12 −3`, or nothing for a binary or uncounted file. */
+export function linesText(lines?: { add: number; del: number }): string {
+  return lines ? `+${lines.add} −${lines.del}` : ''
+}
+
+/** What the file view was read against: a different one means the view is out of date. */
+export function gitSignature(git: GitInfo | undefined): string {
+  return git ? [git.head ?? '', git.changed, git.untracked, git.conflicts, git.lines?.add ?? 0, git.lines?.del ?? 0].join('|') : ''
 }
 
 /** A fetch older than this makes ahead/behind stale enough to say so. */

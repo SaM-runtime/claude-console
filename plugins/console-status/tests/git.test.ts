@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { agoText, commitLine, gitBadge, gitLine, gitLogArgs, gitNumstatArgs, gitProbeMode, parseGitLog, parseGitStatus, parseNumstat, parsePrView, prLine, prTransitions } from '../hooks/git'
+import { agoText, commitLine, fileGroups, fileKind, linesText, parseGitFiles, parseGitShow, parseNumstatFiles, gitBadge, gitLine, gitLogArgs, gitNumstatArgs, gitProbeMode, parseGitLog, parseGitStatus, parseNumstat, parsePrView, prLine, prTransitions } from '../hooks/git'
 import { selectionContext } from '../hooks/logic'
 import type { GitInfo, PrInfo } from '../types'
 
@@ -87,4 +87,28 @@ test('what you would type by hand: stash count, recent commits, the size of the 
   expect(agoText(now - 50 * 3_600_000, now)).toBe('2 天前')
   expect(commitLine({ hash: 'a1b2c3d', at: now - 3_600_000, subject: 'Fix sync' }, now)).toBe('a1b2c3d Fix sync（1 小時前）')
   expect(gitLine({ ...clean, changed: 2, lines: { add: 12, del: 3 }, stash: 1 })).toBe('main → origin/main　2 個檔案未提交（+12 −3）　stash 1')
+})
+
+test('the file view parses NUL-separated status, renames, ignored folders and HEAD numstat', () => {
+  const text = [' M a b.ts', 'MM c.ts', 'R  new.ts', 'old.ts', 'UU m.ts', '?? n.txt', '!! node_modules/', ''].join('\0')
+  const parsed = parseGitFiles(text, parseNumstatFiles('3\t1\ta b.ts\n-\t-\timg.png\n'))
+  expect(parsed.files).toEqual([
+    { path: 'a b.ts', code: ' M', stage: 'unstaged', lines: { add: 3, del: 1 } },
+    { path: 'c.ts', code: 'MM', stage: 'partial' },
+    { path: 'new.ts', code: 'R ', stage: 'staged', from: 'old.ts' },
+    { path: 'm.ts', code: 'UU', stage: 'conflict' },
+  ])
+  expect(parsed.untracked).toEqual(['n.txt'])
+  expect(parsed.ignored).toEqual(['node_modules/'])
+  const groups = fileGroups(parsed.files)
+  expect(groups.staged.map(f => f.path)).toEqual(['c.ts', 'new.ts'])
+  expect(groups.unstaged.map(f => f.path)).toEqual(['a b.ts', 'c.ts'])
+  expect(groups.conflicts.map(f => f.path)).toEqual(['m.ts'])
+  expect(fileKind(parsed.files[2]!, 'staged')).toBe('改名')
+  expect(fileKind(parsed.files[1]!, 'unstaged')).toBe('修改')
+  expect(linesText({ add: 2, del: 0 })).toBe('+2 −0')
+  expect(parseGitShow('abc1234\x1f1700000000\x1fFix it\n\n2\t1\tsrc/x.ts\n-\t-\tlogo.png\n')).toEqual({
+    hash: 'abc1234', at: 1_700_000_000_000, subject: 'Fix it', files: [{ path: 'src/x.ts', lines: { add: 2, del: 1 } }, { path: 'logo.png' }],
+  })
+  expect(parseGitShow('fatal: bad revision')).toBeNull()
 })
