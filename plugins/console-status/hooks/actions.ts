@@ -1,10 +1,10 @@
-import type { Project, ActionKind, ContinueConfirmation, VerificationResult, PendingAction, ReviewRequest } from '../types'
+import type { Project, Snapshot, ActionKind, ContinueConfirmation, VerificationResult, PendingAction, ReviewRequest } from '../types'
 import { terminalLines } from './terminal'
 import type { State } from './logic'
-import { hasAsk, parseGate, saysNone } from './logic'
+import { hasAsk, parseGate, rows, saysNone } from './logic'
 
 export const ACTION_LABEL: Record<ActionKind, string> = {
-  verify: '▶ 執行驗證', sync: '⇢ 同步 STATUS', continue: '⇢ 繼續下一步',
+  verify: '▶ 執行驗證', sync: '⇢ 同步 STATUS', continue: '⇢ 繼續下一步', reply: '↩ 回覆執行者',
   decide: '✎ 做決定', gate: '⚑ 審核關卡', open: '↗ 開啟 STATUS.md',
 }
 
@@ -26,6 +26,8 @@ export function actionKinds(project: Project, state: State): ActionKind[] {
   if (project.verify.trim()) kinds.push('verify')
   // A finished job that stopped to ask the user is an ACTION row; syncing its result is still the way on.
   const asking = state === 'ACTION' && !hasAsk(project) && project.jobs.some(job => job.kind === 'newer' && job.asks)
+  // The asking session can be answered in place: the reply resumes it with the person's words as its prompt.
+  if (dispatchable && asking && askingSession(project) && !dispatchBlockReason(project)) kinds.push('reply')
   if (dispatchable && (state === 'SYNC' || asking) && !dispatchBlockReason(project)) kinds.push('sync')
   const gate = parseGate(project.gate)
   const next = project.next.trim()
@@ -110,6 +112,11 @@ export function dispatchPrompt(project: Project, kind: 'sync' | 'continue'): str
   return `${instruction}\nSTATUS：${project.statusPath}\n只在此專案授權的本機範圍作業。不得執行正式環境變更或 release；需要上線時填入 release 關卡，交主控台整理後由使用者決定。${rules}`
 }
 
+/** A reply to an executor that stopped to ask: the person's words first, then the same rules a continue carries. */
+export function replyPrompt(project: Project, text: string): string {
+  return `使用者在主控台回覆你上一輪的提問：\n${text.trim()}\n\n依這個回覆繼續；遵守任務骨架；結束時更新 STATUS CARD（含關卡欄）。\nSTATUS：${project.statusPath}\n只在此專案授權的本機範圍作業。不得執行正式環境變更或 release；需要上線時填入 release 關卡，交主控台整理後由使用者決定。\n${CONTINUE_RULES.join('\n')}`
+}
+
 export function gatePrompt(project: Project): string {
   const gate = parseGate(project.gate)
   if (!gate || gate.kind === 'unknown') throw new Error('關卡種類無法辨識；請先檢查 STATUS。')
@@ -172,4 +179,54 @@ export function launchId(stdout: string): string | null {
     const data = JSON.parse(stdout.trim())
     return typeof data?.jobId === 'string' && data.jobId.trim() ? data.jobId : null
   } catch { return null }
+}
+
+/**
+ * What the prompt box offers as its dim Tab suggestion: the way on for the project the next-step card points at
+ * (a decision, a reply to an executor that asked, a review gate, a sync), else continuing the first idle project
+ * with a next step. Each is a prompt or a `/console` command that does exactly that; null when nothing waits.
+ */
+export function suggestedPrompt(s: Snapshot, pending: Record<string, unknown> = {}): string | null {
+  if (s.demo || s.error) return null
+  const list = rows(s)
+  const ready = (name: string) => {
+    const p = s.projects.find(x => x.name === name)
+    return p && !pending[p.statusPath] ? p : undefined
+  }
+  const urgent = list.find(r => r.state === 'ACTION' || r.state === 'GATE') ?? list.find(r => r.state === 'SYNC')
+  if (urgent) {
+    const p = ready(urgent.full)
+    if (!p) return null
+    const kinds = actionKinds(p, urgent.state)
+    if (kinds.includes('decide')) return `「${p.name}」決策：`
+    if (kinds.includes('reply')) return `/console reply ${p.name} `
+    if (kinds.includes('gate')) return `/console gate ${p.name}`
+    if (kinds.includes('sync')) return `/console sync ${p.name}`
+    return null
+  }
+  for (const r of list) {
+    if (r.state !== 'IDLE') continue
+    const p = ready(r.full)
+    if (p && actionKinds(p, 'IDLE').includes('continue')) return `/console continue ${p.name}`
+  }
+  return null
+}
+
+/** The actions a `/console <action> <project>` command can start; verify keeps its own second-press check. */
+export const COMMAND_ACTIONS = ['verify', 'sync', 'continue', 'reply', 'gate'] as const
+
+/**
+ * The project a command names and the words after it: the longest project name the text starts with
+ * (names may hold spaces), else the one whose name starts with the first word, ignoring case.
+ */
+export function commandTarget<P extends { name: string }>(projects: P[], rest: string): { project: P; text: string } | null {
+  const text = rest.trim()
+  const lower = text.toLowerCase()
+  const exact = projects.filter(p => lower === p.name.toLowerCase() || lower.startsWith(p.name.toLowerCase() + ' '))
+    .sort((a, b) => b.name.length - a.name.length)[0]
+  if (exact) return { project: exact, text: text.slice(exact.name.length).trim() }
+  const word = text.split(/\s+/)[0] ?? ''
+  if (!word) return null
+  const prefix = projects.filter(p => p.name.toLowerCase().startsWith(word.toLowerCase()))
+  return prefix.length === 1 ? { project: prefix[0]!, text: text.slice(word.length).trim() } : null
 }

@@ -582,7 +582,12 @@ export function rows(s: Snapshot): Row[] {
     const running = p.jobs.filter(j => j.kind === 'running')
     if (running.length) return { state: 'RUNNING', project: name, item: (running.length > 1 ? `${running.length} 個任務・` : '') + runLine(running[0], s.at), age, full }
     // A manual project has no sync button, so the way on is only taking over the session.
-    if (p.jobs.some(j => j.kind === 'newer' && j.asks)) return { state: 'ACTION', project: name, item: `執行者在等你回覆：接手該 session${p.executor === 'manual' ? '' : ' 或同步'}`, age, full }
+    if (p.jobs.some(j => j.kind === 'newer' && j.asks)) {
+      // A Claude session that asked can be answered from the console (↩ 回覆); a manual project is only taken over.
+      const item = p.executor === 'manual' ? '執行者在等你回覆：接手該 session'
+        : p.jobs.some(j => j.kind === 'newer' && j.asks && j.sessionId) ? '執行者在等你回覆：↩ 回覆或同步' : '執行者在等你回覆：接手該 session 或同步'
+      return { state: 'ACTION', project: name, item, age, full }
+    }
     if (p.jobs.some(j => j.kind === 'newer')) return { state: 'SYNC', project: name, item: '結果未同步至 STATUS', age, full }
     return { state: 'IDLE', project: name, item: shortAsk(p.state || '—', 30), age, full }
   })
