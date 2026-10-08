@@ -32,7 +32,19 @@ export type Project = {
   pr?: PrInfo
 }
 
-export type GitInfo = { branch: string; detached?: boolean; oid?: string; upstream?: string; ahead: number; behind: number; changed: number; untracked: number; conflicts: number }
+export type GitCommit = { hash: string; at: number; subject: string }
+export type GitInfo = {
+  branch: string; detached?: boolean; oid?: string; upstream?: string; ahead: number; behind: number; changed: number; untracked: number; conflicts: number
+  /** HEAD's full id (absent before the first commit), the key the commit list is cached under. */
+  head?: string
+  stash?: number
+  /** Lines added and removed in uncommitted changes against HEAD (`git diff --numstat HEAD`). */
+  lines?: { add: number; del: number }
+  /** Newest first. */
+  commits?: GitCommit[]
+  /** When `git fetch` last wrote FETCH_HEAD. */
+  fetchedAt?: number
+}
 export type PrInfo = {
   number: number; title: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; draft: boolean; url: string; review?: string
   checks: { pass: number; fail: number; pending: number; failing: string[] }

@@ -219,12 +219,13 @@ With the menu open, one key runs an action on offer: `v` verify, `s` sync, `c` c
 
 ## Git, PR and CI
 
-Each refresh reads `git status --porcelain=v2 --branch` in every project root (with `--no-optional-locks`, so it never takes the index lock a running executor needs). When `gh` is installed and signed in, `gh pr view` reads the current branch's pull request and its checks every five minutes, every minute while checks are still running, and on a forced refresh or a branch change. Neither spends model quota.
+Each refresh reads `git status --porcelain=v2 --branch --show-stash` in every project root (with `--no-optional-locks`, so it never takes the index lock a running executor needs). When `gh` is installed and signed in, `gh pr view` reads the current branch's pull request and its checks every five minutes, every minute while checks are still running, and on a forced refresh or a branch change. Neither spends model quota.
 
 - The project table gains a `Git` column (from 80 columns wide) with the most pressing item: `✕衝突n` merge conflicts, `CI✕n` failed checks on the open PR, `●n` uncommitted or untracked files, `↑n` unpushed, `↓n` behind upstream, `CI…` checks running, `✓` clean.
 - The action menu and expanded card show the branch and upstream, ahead/behind, uncommitted and untracked counts, and the PR with its review state and the names of failing checks, plus `↗ 開啟` to open it (`gh pr view --web`, else the OS URL handler).
+- What you would otherwise type by hand: the uncommitted change's size `（+120 −34）` (`git diff --numstat HEAD`, read only while something is uncommitted) and `stash n` on the Git line; a `提交` field with the latest commit (short hash, subject, age) and the ones before it, three in the menu and five in the card (`git log -5`, read again only when HEAD moves); and, when the last `git fetch` is over a day old, a `Fetch` line saying ahead/behind may be out of date (the time of `.git/FETCH_HEAD`).
 - The band shows `CI 失敗 n` in red while open PRs have failing checks. A new failure is a toast and a red feed line; a recovery and a merge are green feed lines.
-- A selected project's Git and PR lines ride along with the next prompt, so the console knows the branch and the failing check without asking.
+- A selected project's Git, latest commit and PR lines ride along with the next prompt, so the console knows the branch and the failing check without asking.
 
 Set `gitProbe` to `git` to skip GitHub, or `off` to skip both. A project root that is not a repository simply shows nothing.
 
@@ -327,6 +328,8 @@ Three features since 0.10.0 take their idea from mods in other people's reposito
 - The cache hit rate beside the cache clock follows cache-clock in [claude-code-mods](https://github.com/hamzafer/claude-code-mods) by [hamzafer](https://github.com/hamzafer) (MIT License).
 
 Thanks to arasovic and hamzafer.
+
+Since 0.11.0 the Git line's uncommitted line count follows change-ledger in [claude-code-mods](https://github.com/arasovic/claude-code-mods) by arasovic (MIT License), which shows `git diff --numstat` beside the files a session edited, and its stash count follows the git file stats of [claude-hud](https://github.com/jarrodwatts/claude-hud) by [jarrodwatts](https://github.com/jarrodwatts) (MIT License). As above, the code is console-status's own. Thanks to jarrodwatts.
 
 ## Limitations
 

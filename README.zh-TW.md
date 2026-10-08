@@ -218,12 +218,13 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 ## Git、PR 與 CI
 
-每次 refresh 會在各專案根目錄執行 `git status --porcelain=v2 --branch`（加上 `--no-optional-locks`，不會搶執行者需要的 index 鎖）。有安裝並登入 `gh` 時，`gh pr view` 讀取目前分支的 PR 與檢查：每五分鐘一次，檢查仍在跑時每分鐘一次，強制 refresh 或切換分支時立即讀取。兩者都不花模型額度。
+每次 refresh 會在各專案根目錄執行 `git status --porcelain=v2 --branch --show-stash`（加上 `--no-optional-locks`，不會搶執行者需要的 index 鎖）。有安裝並登入 `gh` 時，`gh pr view` 讀取目前分支的 PR 與檢查：每五分鐘一次，檢查仍在跑時每分鐘一次，強制 refresh 或切換分支時立即讀取。兩者都不花模型額度。
 
 - 專案表格多一欄 `Git`（寬度 80 欄以上），顯示最需要處理的一項：`✕衝突n` 合併衝突、`CI✕n` 開啟中 PR 的檢查失敗、`●n` 未提交或未追蹤檔案、`↑n` 未推送、`↓n` 落後上游、`CI…` 檢查進行中、`✓` 乾淨。
 - 動作選單與展開的專案卡顯示分支與上游、領先／落後、未提交與未追蹤數量，以及 PR 的審查狀態與失敗檢查名稱，並提供 `↗ 開啟`（`gh pr view --web`，失敗時改用系統預設瀏覽器）。
+- 原本要自己打指令看的資訊：Git 那一行加上未提交變更的行數 `（+120 −34）`（`git diff --numstat HEAD`，只在有未提交變更時讀）與 `stash n`；`提交` 欄位列出最新一筆 commit（短 hash、標題、多久前）和之前幾筆，動作選單 3 筆、專案卡 5 筆（`git log -5`，HEAD 沒動就不重讀）；上次 `git fetch` 超過一天時多一行 `Fetch`，提醒領先／落後可能不是最新（依 `.git/FETCH_HEAD` 的時間）。
 - 開啟中的 PR 有檢查失敗時，橫帶以紅色顯示 `CI 失敗 n`。新的失敗會 toast 並寫入紅色動態；恢復通過與合併寫入綠色動態。
-- 選取專案後，下一則提示會附上它的 Git 與 PR 資訊，主控台不用再問就知道分支與失敗的檢查。
+- 選取專案後，下一則提示會附上它的 Git、最新提交與 PR 資訊，主控台不用再問就知道分支與失敗的檢查。
 
 `gitProbe` 設為 `git` 可略過 GitHub，設為 `off` 兩者都略過。專案根目錄不是 Git repo 時不顯示任何 Git 資訊。
 
@@ -326,6 +327,8 @@ claude plugin install paste-preview@paste-preview
 - 快取倒數旁的命中率參考 [hamzafer](https://github.com/hamzafer) 的 [claude-code-mods](https://github.com/hamzafer/claude-code-mods) 裡的 cache-clock（MIT 授權）。
 
 感謝 arasovic 與 hamzafer。
+
+0.11.0 起 Git 那一行的未提交行數，參考 arasovic 的 [claude-code-mods](https://github.com/arasovic/claude-code-mods) 裡的 change-ledger（MIT 授權），它在 session 改過的檔案旁顯示 `git diff --numstat`；stash 數量參考 [jarrodwatts](https://github.com/jarrodwatts) 的 [claude-hud](https://github.com/jarrodwatts/claude-hud) 的 git 檔案統計（MIT 授權）。同上，程式碼都是 console-status 自己寫的。感謝 jarrodwatts。
 
 ## 限制
 
