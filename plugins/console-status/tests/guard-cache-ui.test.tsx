@@ -171,3 +171,41 @@ test('loopGuard off adds no note', { options: { ...OPTIONS.options, loopGuard: '
   const second: any = await $.tool.call({ tool: 'Bash', command: 'fail now' } as any)
   expect(second.context ?? []).toEqual([])
 })
+
+const MSGS = [{ role: 'user', text: 'summary', toolUses: [] }]
+
+test('a compaction while idle swaps the cold-cache price for the summary\'s, with no warning', OPTIONS, async ($, on) => {
+  const { data, clock } = fixture(on, null)
+  on('command.register', () => ({ value: undefined }))
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
+  on('prompt.submit', (_: any, e: any) => ({ text: e.text }))
+  on('turn.step', async function* (_: any, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn',
+      usage: { model: 'claude-opus-5-5', input_tokens: 2_000, output_tokens: 3_000, cache_read_input_tokens: 150_000, cache_creation_input_tokens: 45_000 } }
+  })
+  on('session.compact', () => ({ messages: MSGS, tokensBefore: 200_000, tokensAfter: 30_000 }))
+  await $.session.start({ cwd: 'D:/Console', surface: 'terminal', isInteractive: true } as any)
+  await clock.settle()
+  await step($, on, 150_000)
+  await $.turn.complete({ turnId: 't', answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' } as any)
+  await clock.advance(2 * 60_000)
+  // A subagent's or a precomputed compaction leaves the main clock alone.
+  await ($ as any).session.compact({ trigger: 'precompute', messages: MSGS })
+  expect(data.state.cacheClock.tokens).toBe(200_000)
+  await ($ as any).session.compact({ trigger: 'auto', messages: MSGS })
+  expect(data.state.cacheClock.tokens).toBe(30_000)
+  expect(data.state.feed[0].text).toBe('對話已壓縮：200k → 30k tokens')
+  // Long past the old TTL the band prices the summary and never calls it cold.
+  await clock.advance(20 * 60_000)
+  const band = await $.ui.mount(BAND)
+  expect(await band.find({ type: 'Text', text: '已壓縮 $0.15' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^快取已冷/ })).toBeUndefined()
+  await band.unmount()
+  await $.prompt.submit({ text: 'back again' } as any).catch(() => {})
+  expect(data.toasts.some(t => t.startsWith('主控台快取'))).toBe(false)
+  const pane = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
+    props: { title: 'Console', isFocused: true, bodyColumns: 90, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any)
+  expect(await pane.find({ type: 'Text', text: /^已壓縮 20m前　200k → 30k tokens・下則重寫約 \$0\.15$/ })).toBeDefined()
+  await pane.unmount()
+})

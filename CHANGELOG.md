@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.0
+
+- **The cache hint knows about compaction, including Claude Code's idle compaction.** Claude Code 2.1.286 can compact a long conversation on the one-hour cache while it sits idle, shortly before the cache expires (`Compacted while idle, before the prompt cache expired`; rolled out by Claude Code, turned off with its own `idleCompaction: false`, threshold `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`). The console's clock still described the context from before: the band went `快取已冷 $1.60` at the hour and a prompt on return warned of re-writing 214k tokens, when the next prompt only writes the summary. A compaction of the console session (idle, `/compact` or at the threshold; not a subagent's, not a precompute) now resets the clock to the summary's size: the band shows `已壓縮 $0.12`, the pane `已壓縮 3m前　214k → 31k tokens・下則重寫約 $0.12`, the feed `對話已壓縮：214k → 31k tokens`, and no cold-cache toast fires. When Claude Code does not report the size afterwards the chip is cleared until the next response. A cold read right after a compaction no longer teaches a five-minute TTL, and a reload whose transcript ends in a compaction does not seed the clock from the response before it.
+
 ## 0.15.0
 
 A usability pass over the daily flows (read the next step, decide, check the project card) at the widths the pane is really used at.

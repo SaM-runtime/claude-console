@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { cacheChip, cacheTtlOption, cacheView, cacheWarning, inputPricePerMTok, learnTtl, leftText, priceOverride, rewriteCost, transcriptCache, transcriptPathFor, ttlLabel } from '../hooks/cache'
+import { cacheChip, compactedClock, cacheTtlOption, cacheView, cacheWarning, inputPricePerMTok, learnTtl, leftText, priceOverride, rewriteCost, transcriptCache, transcriptPathFor, ttlLabel } from '../hooks/cache'
 import type { CacheClock } from '../types'
 
 const round = (v: number | null) => v === null ? null : Math.round(v * 1000) / 1000
@@ -73,4 +73,34 @@ test('the transcript tail gives the last main-thread response, timed from its re
   expect(transcriptPathFor('C:/Users/me/.claude/', 'D:\\Work\\K app', 'abc')).toBe('C:/Users/me/.claude/projects/D--Work-K-app/abc.jsonl')
   expect(ttlLabel('1h', 'usage')).toBe('1h・實際')
   expect(ttlLabel('5m', undefined)).toBe('5m・預設')
+})
+
+test('a compaction replaces the clock: the summary is what the next prompt writes, and it is not called cold', () => {
+  const prev = clock({ at: 0, ttl: '1h', tokens: 214_000, hit: 0.98 })
+  const after = compactedClock(prev, 54 * 60_000, 214_000, 31_000)!
+  expect(after).toEqual({ at: 54 * 60_000, tokens: 31_000, model: 'claude-opus-5-5', ttl: '1h', compacted: { at: 54 * 60_000, before: 214_000 } })
+  expect(compactedClock(prev, 1, 214_000, undefined)).toBe(null)
+  expect(compactedClock(null, 1, 214_000, 31_000)).toBe(null)
+  // Past the old TTL it is still the summary's cost, not the old context's.
+  const view = cacheView(after, 70 * 60_000, false, null)!
+  expect(view.compacted).toBe(true)
+  expect(view.warm).toBe(false)
+  expect(round(view.cost)).toBe(0.248)
+  expect(cacheChip(view, false)).toEqual({ text: '已壓縮 $0.25', tone: 'green' })
+  expect(cacheChip(view, true)).toEqual({ text: '⧗壓 $0.25', tone: 'green' })
+  // A tiny summary drops the chip; a cold read right after does not teach a 5-minute TTL.
+  expect(cacheView(compactedClock(prev, 0, 214_000, 8_000), 60_000, false, null)).toBe(null)
+  expect(learnTtl(after, 54 * 60_000 + 20 * 60_000, 'claude-opus-5-5', 0)).toBe(null)
+})
+
+test('a compaction after the last response leaves nothing to seed the clock from', () => {
+  const row = (o: any) => JSON.stringify({ isSidechain: false, ...o })
+  const usage = { input_tokens: 1, output_tokens: 9, cache_read_input_tokens: 200_000, cache_creation_input_tokens: 10, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 10 } }
+  const base = [
+    row({ type: 'user', timestamp: '2026-10-08T10:00:00Z' }),
+    row({ type: 'assistant', timestamp: '2026-10-08T10:00:05Z', message: { id: 'm1', model: 'claude-opus-5-5', usage } }),
+  ]
+  expect(transcriptCache(base.join('\n'))!.tokens).toBe(200_020)
+  const compacted = [...base, row({ type: 'system', subtype: 'compact_boundary', timestamp: '2026-10-08T10:54:00Z', compactMetadata: { trigger: 'auto', preTokens: 200_020 } })]
+  expect(transcriptCache(compacted.join('\n'))).toBe(null)
 })
