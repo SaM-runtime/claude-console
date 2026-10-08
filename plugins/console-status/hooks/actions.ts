@@ -96,12 +96,18 @@ const SYNC_RULES = [
   TIME_RULE,
   '沒有新結果也要寫回：更新時間與 rev，並在歷程記一行「同步：沒有新結果」。',
 ]
+/**
+ * The CARD carries the project's state, not the work's context: a session that starts cold (a retired session's
+ * replacement, Claude standing in for Codex) re-investigates without it. The Handoff section carries that.
+ */
+const HANDOFF_RULE = '開工時讀 STATUS 的「## Handoff」段；結束這一輪前覆寫它（8 行內：正在做什麼、動過的檔案與原因、目前判斷與證據、下一個具體動作、不要再試的做法），沒有這段就新增在 CARD 下方。'
 const CONTINUE_RULES = [
   REV_RULE,
   TIME_RULE,
   '驗收綠、獨立審核還沒跑完：關卡留 無，下一步寫審核任務；審核跑完才設 review。',
   '審核任務的下一步以 .task/review-<name>.md 路徑開頭（才會開新 session）；修正工作以動詞開頭（例如「依 .task/review-x.md 的意見修正」）。',
   '到關卡或需要使用者決定時，把它寫進 CARD（等使用者／關卡）後結束這一輪，不要提問等待。',
+  HANDOFF_RULE,
 ]
 
 export function dispatchPrompt(project: Project, kind: 'sync' | 'continue'): string {

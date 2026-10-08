@@ -131,6 +131,7 @@ export function projectModeSection(p: Pick<Project, 'name' | 'statusPath'>): str
     '- 完成一段工作就更新 CARD：寫入前重讀，rev 與上次讀到的不同就停下回報衝突、不覆寫；寫入 rev + 1、狀態、驗證（指令與實際結果）、下一步；更新欄寫現在的本機時間（先執行 date 或 Get-Date，不要猜）。',
     '- 關卡欄只放一個值：無／spec：…／review：…／release：…。到關卡就停下並附上證據；不自行清除關卡，不執行 release 或任何正式環境變更。',
     '- 需要使用者拍板的事寫進「等使用者」，不要自行決定。',
+    '- 開工時讀 STATUS 的「## Handoff」段；告一段落時覆寫它（8 行內：正在做什麼、動過的檔案、目前判斷與證據、下一個具體動作），讓沒有這段對話的 session 能直接接手。',
   ].join('\n')
 }
 

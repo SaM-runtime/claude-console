@@ -21,6 +21,16 @@
 - Only the console clears a gate (back to `無`) after it decides. `release` additionally needs the user's explicit approval of the exact scope; a gate approval never substitutes for user authorization.
 - An unfinished or failed review job never counts as passed.
 
+## Handoff
+
+<!-- Overwritten at the end of every turn, at most 8 lines. The CARD says where the project stands; this says where the work stands, for a session that starts without the last one's context (a retired session's replacement, Claude standing in for Codex, a new executor). Read it before starting. -->
+
+- Doing: <what this turn was in the middle of>
+- Touched: `<path>`, `<path>` (<why each>)
+- Current read: <working hypothesis or finding, with its evidence path>
+- Resume at: <the next concrete step, specific enough to start without re-investigating>
+- Don't retry: <see Approaches that did not work, or 無>
+
 ## Scope
 
 - In scope:

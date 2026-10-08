@@ -218,7 +218,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 ## STATUS 卡
 
-每份 STATUS 檔包含一個以 `<!-- CARD -->`、`<!-- /CARD -->` 包住的機器可讀區塊，維持十行以內。Parser 認得 [範本](workflow/STATUS-template.md) 中的繁體中文 key，包括 `更新`、`狀態`、`驗證`、`等使用者`、`下一步`、`關卡`。
+每份 STATUS 檔包含一個以 `<!-- CARD -->`、`<!-- /CARD -->` 包住的機器可讀區塊，維持十行以內。Parser 認得 [範本](workflow/STATUS-template.md) 中的繁體中文 key，包括 `更新`、`狀態`、`驗證`、`等使用者`、`下一步`、`關卡`。CARD 下方的 `## Handoff` 段（8 行內，每輪覆寫）把工作的脈絡交給下一個 session：正在做什麼、動過的檔案、目前判斷、從哪裡接著做。主控台不解析這段，由執行者開工時讀取。
 
 `關卡` 填 `無`、`spec：…`、`review：…` 或 `release：…`。無法辨識但非空的關卡也會阻止繼續。Git 專案可把本機 STATUS 放在 `.console/STATUS.md`，需要保持本機時加入該 repo 的 `.git/info/exclude`。
 

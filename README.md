@@ -219,7 +219,7 @@ Before dispatching to any executor, read ~/.claude/handoffs/dispatch.json
 
 ## STATUS cards
 
-Each STATUS file has one machine-readable block delimited by `<!-- CARD -->` and `<!-- /CARD -->`. Keep it to ten lines or fewer. The parser recognizes the Traditional Chinese keys in [the template](workflow/STATUS-template.md), including `更新`, `狀態`, `驗證`, `等使用者`, `下一步`, and `關卡`.
+Each STATUS file has one machine-readable block delimited by `<!-- CARD -->` and `<!-- /CARD -->`. Keep it to ten lines or fewer. The parser recognizes the Traditional Chinese keys in [the template](workflow/STATUS-template.md), including `更新`, `狀態`, `驗證`, `等使用者`, `下一步`, and `關卡`. Below the CARD, a `## Handoff` section (at most 8 lines, overwritten each turn) carries the work's context to the next session: what it was doing, files touched, the current read, and where to resume. The console does not parse it; executors read it when they start.
 
 Set `關卡` to `無`, `spec：…`, `review：…`, or `release：…`. Unknown nonempty gate text also blocks continuation. A practical local path for a Git project is `.console/STATUS.md`, excluded through that project's `.git/info/exclude` when it should remain local.
 

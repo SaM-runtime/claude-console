@@ -58,6 +58,12 @@ Never relax acceptance silently. A contract change goes back to the spec step an
 - `xhigh` only after medium or high has failed.
 - Two consecutive failures: the console diagnoses the cause instead of raising effort again.
 
+## Handoff between sessions
+
+The CARD hands the console the project's state; it does not carry the work's context. A session that starts cold (the daemon retired the project's session, Claude stands in for Codex, the executor changed) would otherwise re-investigate from scratch. So every executor turn ends by overwriting the STATUS `## Handoff` section, at most 8 lines: what it was doing, the files it touched and why, its current read with evidence, the exact place to resume, and what not to retry. Every turn starts by reading it after the CARD. A resumed session reads it too: it is cheaper than trusting a long, compacted memory.
+
+Keep durable knowledge elsewhere: project conventions in CLAUDE.md / AGENTS.md, decisions under `## Decisions`, dead ends under `## Approaches that did not work`. Handoff holds only what the next turn needs.
+
 ## Gates
 
 The CARD `關卡` line holds exactly one value: `無`, `spec：…`, `review：…`, or `release：…`. These are the only three gates.
