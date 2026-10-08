@@ -79,7 +79,10 @@ export type ReviewRequest = { text: string; projectName: string; at: number; tur
 export type UpdateInfo = { current: string | null; latest: string | null; checkedAt: number; error?: string; phase: 'idle' | 'checking' | 'updating' | 'updated' | 'failed'; message?: string }
 
 /** A session waiting on a person; `project` is the registered project it runs in (`主控台` for the console's folder). */
-export type Blocked = { name: string; why: string; project?: string }
+/** A project card's 執行者 section: reading, the four lines, no record, or why it could not be read. */
+export type ExecutorDigest = { phase: 'loading' | 'ready' | 'none' | 'error'; lines?: string[]; error?: string }
+
+export type Blocked ={ name: string; why: string; project?: string }
 
 /** Where a 同步 STATUS dispatch is: sending, running, written back, finished without a CARD change, or failed. */
 export type SyncStage = 'dispatch' | 'running' | 'done' | 'unchanged' | 'dispatch-failed' | 'run-failed'
@@ -103,6 +106,8 @@ export type Snapshot = {
   at: number
   projects: Project[]
   blocked: Blocked[]
+  /** Names of every waiting session before `blocked` keeps one per project; what toasts and the feed compare. */
+  waiting?: string[]
   codex: string
   contextPercent: number | null
   /** What this console session has cost so far (USD at API prices), when the host keeps a ledger. */
@@ -151,6 +156,8 @@ declare module 'claude-code' {
       isTurnRunning: boolean
       updateInfo: UpdateInfo | null
       syncProgress: Record<string, SyncProgress>
+      /** statusPath → the executor digest shown on an expanded project card. */
+      executorDigests: Record<string, ExecutorDigest>
     }
   }
 }
