@@ -332,6 +332,8 @@ Thanks to arasovic and hamzafer.
 
 Since 0.11.0 the Git line's uncommitted line count follows change-ledger in [claude-code-mods](https://github.com/arasovic/claude-code-mods) by arasovic (MIT License), which shows `git diff --numstat` beside the files a session edited, and its stash count follows the git file stats of [claude-hud](https://github.com/jarrodwatts/claude-hud) by [jarrodwatts](https://github.com/jarrodwatts) (MIT License). As above, the code is console-status's own. Thanks to jarrodwatts.
 
+Since 0.13.0 the pane's section titles (name, a hairline to the edge, figures at the end) follow the titled panels of [lazygit](https://github.com/jesseduffield/lazygit) by [jesseduffield](https://github.com/jesseduffield) (MIT License). Only the look is borrowed; no code. Thanks to jesseduffield.
+
 ## Limitations
 
 - Bundled probes: PowerShell scripts on Windows, `sh` scripts on macOS and Linux (Linux is covered by tests and a simulated stale broker, not daily use). There a broker is reported STALE when its `codex app-server` started before the installed Codex CLI was last upgraded.

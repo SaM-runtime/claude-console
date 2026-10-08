@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.0
+
+- **One visual system for the pane.** Every section (專案, 動態, 用量) opens the same way: its name, a hairline to the right edge, its figures at the end, so the separate rule lines are gone and each section is one row shorter. Section names are the strongest text after the next step; tool names in 用量 step down a level so they no longer outweigh the section titles.
+- **The next step reads first.** The 下一步 card gets an accent edge in the colour of whoever it waits on (amber for a decision, purple for a review), its action sits on a filled chip that brightens under the pointer, and the step leads with the project name in bold.
+- **Aligned card fields.** In the action menu and the detail cards, 動作 and 執行者 sit on the same label column as 狀態, 待決, 下一步 and Git. The action menu shows how long ago the project was updated, and no longer repeats the decision summary above the full decision list.
+- **Narrow widths.** Under 96 columns the state counts in the 專案 title keep their glyph and number only (the names stay in the hover help), and `其他工作階段` becomes `工作階段`. Wrapping rows of buttons (actions, executor, dispatch picker) no longer leave blank lines between wrapped lines.
+- **Smaller touches.** The dispatch values show `▾` (`▴` while their picker is open) so they read as pickers; live counts in the band are bold; feed entries use `•` instead of the 需決策 glyph `●`; the footer's version line drops the error detail (it stays in the hover help).
+- The section-title style follows the titled panels of [lazygit](https://github.com/jesseduffield/lazygit) (MIT); credited in the README. No code is taken from it.
+
 ## 0.12.0
 
 - **Git file list on demand.** `▸ 檔案` on a project's Git line (or `f` in the action menu) opens the files behind the counts, grouped like `git status`: conflicts, staged, unstaged, untracked, each with its kind and line counts; then the files HEAD touched (`git show --numstat`) and what `.gitignore` excludes (`--ignored=traditional`, so an ignored folder is one entry). Nothing is read until it is opened; while open it is read again when the project's Git state changes. Up to 12 files per group, long paths cut in the middle so the file name stays.

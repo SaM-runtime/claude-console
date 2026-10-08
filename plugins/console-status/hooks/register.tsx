@@ -1499,7 +1499,7 @@ export const register: Register = (on, options) => {
     codex_quota: 'Codex：Codex 帳號額度的剩餘量，取自最近一次 Codex 工作紀錄（每 5 分鐘讀一次）；很久沒用 Codex 時數字可能是舊的。',
   }
   const C = {
-    text: '#CAD3E0', strong: '#E5EAF0', dim: '#6E7787', faint: '#4A5260', bar: '#1C222B',
+    text: '#CAD3E0', strong: '#E5EAF0', dim: '#6E7787', faint: '#4A5260', rule: '#353D4A', bar: '#1C222B',
     sel: '#22304A', hover: '#1A2029',
     amber: '#F0C674', amberBg: '#3A3120', teal: '#8BD5CA', tealBg: '#1D3734',
     blue: '#8AADF4', blueBg: '#212D45', purple: '#CA9EE6', purpleBg: '#33283F', grey: '#8A93A0', green: '#A6D189', red: '#E78284', orange: '#EF9F76',
@@ -1566,7 +1566,10 @@ export const register: Register = (on, options) => {
               <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' || item.id === 'ci' ? C.red : item.id === 'cache' ? (chip?.tone === 'red' ? C.red : chip?.tone === 'amber' ? C.amber : C.green) : item.id === 'sync' ? TONE[syncTag?.tone ?? 'blue'] : FG[item.id as State] ?? C.text}
                 bold={item.id === 'cache' && chip?.tone === 'amber'}
                 backgroundColor={item.id === 'demo' ? C.bar : item.id === 'cache' && chip?.tone === 'amber' ? C.amberBg : undefined}>
-                {item.id === 'next' && item.text.startsWith('▸ 下一步') ? [<Text key="nl" bold>▸ 下一步</Text>, <Text key="nt" color={C.text}>{item.text.slice(5)}</Text>] : item.text}</Text>
+                {item.id === 'next' && item.text.startsWith('▸ 下一步') ? [<Text key="nl" bold>▸ 下一步</Text>, <Text key="nt" color={C.text}>{item.text.slice(5)}</Text>]
+                  // A live count is the figure the eye looks for: bold, its label at normal weight.
+                  : FG[item.id as State] && !item.zero && /\s\d+$/.test(item.text) ? [<Text key="cl">{item.text.replace(/\d+$/, '')}</Text>, <Text key="cn" bold>{item.text.match(/\d+$/)![0]}</Text>]
+                  : item.text}</Text>
             </Box>)}
           </Box>
           <Box flexGrow={1} minWidth={band.items.length ? 1 : 0} />
@@ -1796,7 +1799,7 @@ export const register: Register = (on, options) => {
     const USAGE_LABEL = Math.max(6, ...limits.map(l => displayWidth(limitName(l.kind))))
     const usageRow = (key: string, tool: string, label: string, help: string | null, body: any) => (
       <Box key={key} gap={1} {...(help ? { hover: { scope: 'help-' + help } } : {})}>
-        <Box width={USAGE_TOOL} flexShrink={0}><Text bold color={C.strong}>{tool}</Text></Box>
+        <Box width={USAGE_TOOL} flexShrink={0}><Text bold color={C.text}>{tool}</Text></Box>
         <Box width={USAGE_LABEL} flexShrink={0}><Text color={C.dim}>{label}</Text></Box>
         {body}
       </Box>
@@ -1847,8 +1850,11 @@ export const register: Register = (on, options) => {
       // While a second press is armed, say exactly what it will do: the toast alone disappears.
       const armed = confirmations[p.statusPath]?.signature
       const pendingConfirm = armed === workSignature(p) ? `再按一次將派工：${p.next}` : armed === verifySignature(p.verify) ? `再按一次將執行：${p.verify}` : ''
+      // Actions and executor sit on the same label column as the fields above them.
       return <Box flexDirection="column">
-        <Box gap={2} flexWrap="wrap">
+        <Box gap={2}>
+        <Box width={6} flexShrink={0}><Text color={C.dim}>動作</Text></Box>
+        <Box columnGap={2} flexWrap="wrap" flexGrow={1} flexShrink={1}>
           {kinds.map(kind => actionButton(p, kind, prefix + kind))}
           {blockedReason && <Text key={prefix + 'blocked'} color={C.dim}>派工鎖定：{blockedReason}</Text>}
           {offer && <Box key={'help-' + prefix + 'fallback'} hover={{ scope: 'help-fallback' }}>
@@ -1857,10 +1863,12 @@ export const register: Register = (on, options) => {
             }} />
           </Box>}
         </Box>
-        {pendingConfirm && <Text key={prefix + 'confirm'} color={C.amber} wrap="wrap">{pendingConfirm}</Text>}
-        <Box gap={1} flexWrap="wrap">
-          <Text color={C.dim}>執行者</Text>
-          <Box hover={{ scope: 'help-project_executor' }} gap={1}>
+        </Box>
+        {pendingConfirm && <Box paddingLeft={8}><Text key={prefix + 'confirm'} color={C.amber} wrap="wrap">{pendingConfirm}</Text></Box>}
+        <Box gap={2}>
+          <Box width={6} flexShrink={0}><Text color={C.dim}>執行者</Text></Box>
+          <Box columnGap={1} flexWrap="wrap" flexGrow={1} flexShrink={1}>
+          <Box hover={{ scope: 'help-project_executor' }} columnGap={1} flexWrap="wrap">
             {(['', 'claude', 'codex', 'manual'] as const).map(value => {
               const override = projectOverride(dispatch.settings, projectRoot(p.statusPath))?.executor ?? ''
               const chosen = override === value
@@ -1872,6 +1880,7 @@ export const register: Register = (on, options) => {
           </Box>
           {isManual(p) && <Text color={C.dim}>手動交接：面板不派工（CARD、驗證、關卡照常）</Text>}
           {offer && <Text color={C.amber} wrap="truncate-end">Codex 未派工：{offer.reason}</Text>}
+          </Box>
         </Box>
       </Box>
     }
@@ -2025,7 +2034,16 @@ export const register: Register = (on, options) => {
         {(result.lines.length ? result.lines : ['（無輸出）']).map((line, index) => <Text key={'output-' + index} color={C.dim} wrap="truncate-end">{line}</Text>)}
       </Box>
     }
-    const rule = <Text color={C.faint} wrap="truncate-end">{'─'.repeat(width)}</Text>
+    // Every section opens the same way: its name, a hairline to the edge, then its own figures on the right.
+    const section = (key: string, label: string, right: any = null) => (
+      <Box key={key} gap={1} height={1} overflow="hidden">
+        <Box flexShrink={0}><Text bold color={C.strong}>{label}</Text></Box>
+        <Box flexGrow={1} flexShrink={1} minWidth={1} height={1} overflow="hidden"><Text color={C.rule} wrap="truncate-end">{'─'.repeat(width)}</Text></Box>
+        {right && <Box flexShrink={0} gap={2}>{right}</Box>}
+      </Box>
+    )
+    // Below this width the counts keep their glyphs and numbers; the names stay in the hover help.
+    const compactCounts = width < 96
     await read($, cacheTick)
     const paneClock = demo || cacheMode(options) === 'off' ? null : await read($, cacheClock)
     const paneView = paneClock ? cacheView(paneClock, now, await read($, isTurnRunning), priceOverride((options as any).cacheWritePrice)) : null
@@ -2043,23 +2061,26 @@ export const register: Register = (on, options) => {
             <Text bold color={C.strong} wrap="truncate-end">主控台{demo && <Text color={C.dim} backgroundColor={C.bar}> 示範資料 </Text>}<Text color={C.dim}>{`　${s.projects.length} 個專案`}</Text></Text>
             <Box flexShrink={0}><Text color={C.faint}>{`更新於 ${time}`}</Text></Box>
           </Box>
-          <Box gap={1} flexWrap="wrap">
+          <Box columnGap={1} flexWrap="wrap">
             <Text color={C.dim}>派工</Text>
             <Box hover={{ scope: 'help-dispatch_executor' }}>
               <Button key="dispatch-executor" plain label={dispatch.settings.executor} onPress={() => togglePicker('executor')} />
+              <Text color={picker === 'executor' ? C.blue : C.faint}>{picker === 'executor' ? '▴' : '▾'}</Text>
             </Box>
             <Text color={C.faint}>·</Text>
             <Text color={C.dim}>模型</Text>
             <Box hover={{ scope: 'help-dispatch_model' }}>
               <Button key="dispatch-model" plain label={dispatch.settings.model || '預設'} onPress={() => togglePicker('model')} />
+              <Text color={picker === 'model' ? C.blue : C.faint}>{picker === 'model' ? '▴' : '▾'}</Text>
             </Box>
             <Text color={C.faint}>·</Text>
             <Text color={C.dim}>強度</Text>
             <Box hover={{ scope: 'help-dispatch_effort' }}>
               <Button key="dispatch-effort" plain label={dispatch.settings.effort || '預設'} onPress={() => togglePicker('effort')} />
+              <Text color={picker === 'effort' ? C.blue : C.faint}>{picker === 'effort' ? '▴' : '▾'}</Text>
             </Box>
           </Box>
-          {picker && <Box key="dispatch-picker" gap={1} flexWrap="wrap">
+          {picker && <Box key="dispatch-picker" columnGap={1} flexWrap="wrap">
             <Text color={C.dim}>{PICKER_LABEL[picker]}</Text>
             {pickerChoices(picker).map(value => {
               const chosen = (dispatch.settings[picker] ?? '') === value
@@ -2085,25 +2106,31 @@ export const register: Register = (on, options) => {
           </Box>
         )}
 
-        <Box flexDirection="column" backgroundColor={C.bar} paddingX={1}>
-          <Box justifyContent="space-between">
-            <Text bold color={n ? C.amber : C.green}>{n ? '▸ 下一步' : '✓ 就緒'}</Text>
-            {targetProject && primaryAction && actionButton(targetProject, primaryAction, 'next-action')}
+        {/* The one card that says what to do now: an accent edge in the colour of whoever it waits on, its action as a filled chip. */}
+        <Box key="next" flexDirection="row" backgroundColor={C.bar}>
+          <Box width={1} flexShrink={0} backgroundColor={n ? (targetState ? FG[targetState] : C.amber) : C.green} />
+          <Box flexDirection="column" flexGrow={1} flexShrink={1} paddingX={1}>
+            <Box justifyContent="space-between" gap={1}>
+              <Text bold color={n ? (targetState ? FG[targetState] : C.amber) : C.green}>{n ? '▸ 下一步' : '✓ 就緒'}</Text>
+              {targetProject && primaryAction && (
+                <Box key="next-cta" flexShrink={0} paddingX={1} backgroundColor={targetState && BG[targetState] ? BG[targetState] : C.sel}
+                  hover={{ backgroundColor: targetState === 'GATE' ? '#463755' : targetState === 'ACTION' ? '#4D412B' : '#2B3D5E' }}>
+                  {actionButton(targetProject, primaryAction, 'next-action')}
+                </Box>
+              )}
+            </Box>
+            {/* Who, then what: the project name carries the weight, the step reads as body text. */}
+            <Text color={C.text} wrap={detail ? 'wrap' : 'truncate-end'}>{n === null ? <Text color={C.dim}>目前沒有需要處理的項目</Text>
+              : n.includes('・') ? [<Text key="nw" bold color={C.strong}>{n.slice(0, n.indexOf('・'))}</Text>, <Text key="ns" color={C.faint}>{'　'}</Text>, <Text key="nx">{n.slice(n.indexOf('・') + 1)}</Text>] : n}</Text>
           </Box>
-          <Text color={C.strong} wrap={detail ? 'wrap' : 'truncate-end'}>{n ?? '目前沒有需要處理的項目'}</Text>
         </Box>
 
         <Box flexDirection="column">
-          <Box justifyContent="space-between" gap={2} flexWrap="wrap">
-            <Text bold color={C.dim}>專案</Text>
-            <Box gap={2} flexWrap="wrap">
-              {s.projects.length > 1 && SHOWN.map(k => (
-                <Box key={'k' + k} hover={{ scope: 'help-' + k }}>
-                  <Text color={c[k] ? FG[k] : C.faint}>{GLYPH[k]} {LABEL[k]} <Text bold>{c[k]}</Text></Text>
-                </Box>
-              ))}
+          {section('projects-title', '專案', s.projects.length > 1 ? SHOWN.map(k => (
+            <Box key={'k' + k} hover={{ scope: 'help-' + k }}>
+              <Text color={c[k] ? FG[k] : C.faint}>{compactCounts ? `${GLYPH[k]} ` : `${GLYPH[k]} ${LABEL[k]} `}<Text bold>{c[k]}</Text></Text>
             </Box>
-          </Box>
+          )) : null)}
           <Box gap={1} paddingRight={1}>
             <Box width={W.state}><Text color={C.faint}> 狀態</Text></Box>
             <Box width={W.project}><Text color={C.faint}>名稱</Text></Box>
@@ -2112,7 +2139,6 @@ export const register: Register = (on, options) => {
             {W.git > 0 && <Box width={W.git} flexShrink={0} hover={{ scope: 'help-git' }}><Text color={C.faint}>Git</Text></Box>}
             <Box width={W.age} justifyContent="flex-end"><Text color={C.faint}>更新</Text></Box>
           </Box>
-          {rule}
           {table}
           {menuProject && (
             <Box key="menu" flexDirection="column" borderStyle="round" borderColor={C.blue} paddingX={1} marginTop={1}>
@@ -2121,9 +2147,12 @@ export const register: Register = (on, options) => {
                   {(() => { const st = list.find(r => r.full === menuProject.name)?.state ?? 'NOCARD'; return <Text bold color={FG[st]} backgroundColor={BG[st]}>{chipText(st)}</Text> })()}
                   <Text bold color={C.strong} wrap="truncate-end">{menuProject.name}</Text>
                 </Box>
-                <Button key="m-close" plain dimColor label="✕ 關閉" onPress={() => void update($, menuFor, () => null)} />
+                <Box gap={2} flexShrink={0}>
+                  {(() => { const age = list.find(r => r.full === menuProject.name)?.age; return age && age !== '—' ? <Text color={C.dim}>{`${age}前更新`}</Text> : null })()}
+                  <Button key="m-close" plain dimColor label="✕ 關閉" onPress={() => void update($, menuFor, () => null)} />
+                </Box>
               </Box>
-              {pipes.get(menuProject.name) && <Box marginTop={1}>{pipelineLine(pipes.get(menuProject.name)!, PIPE, ui, 'm-pipeline', { noteless: menuProject.jobs.some(j => j.kind === 'running') })}</Box>}
+              {pipes.get(menuProject.name) && <Box marginTop={1}>{pipelineLine(pipes.get(menuProject.name)!, PIPE, ui, 'm-pipeline', { noteless: menuProject.jobs.some(j => j.kind === 'running') || hasAsk(menuProject) })}</Box>}
               {projectInfo(menuProject, 'm-info-')}
               <Box marginTop={1}>{projectActions(menuProject, 'm-')}</Box>
               {verificationView(menuProject)}
@@ -2180,7 +2209,7 @@ export const register: Register = (on, options) => {
                   </Box>
                   {pipes.get(p.name) && <Box marginTop={1}>{pipelineLine(pipes.get(p.name)!, PIPE, ui, 'd-pipeline-' + p.name, { noteless: true })}</Box>}
                   {projectInfo(p, 'd-info-' + p.name + '-', { state: true })}
-                  {projectActions(p, 'detail-' + p.name + '-')}
+                  <Box marginTop={1}>{projectActions(p, 'detail-' + p.name + '-')}</Box>
                   {verificationView(p)}
                   {(p.tasks ?? []).length > 0 && (
                     <Box flexDirection="column" marginTop={1}>
@@ -2205,8 +2234,8 @@ export const register: Register = (on, options) => {
         )}
 
         {feed.length > 0 && (
-          <Box flexDirection="column">
-            <Text bold color={C.dim}>動態</Text>
+          <Box key="feed-section" flexDirection="column">
+            {section('feed-title', '動態')}
             {(() => {
               const props = { events: feed.slice(0, 5).map(ev => ({ at: ev.at, text: ev.text, color: TONE[ev.tone] ?? C.text })), now, normal: C.text, bright: C.strong, dim: C.dim }
               return rich ? <ui.Client key="feed" module="./feed.tsx" width="100%" props={props} /> : feedBody(props, now, ui, false)
@@ -2215,18 +2244,14 @@ export const register: Register = (on, options) => {
         )}
 
         <Box key="usage" flexDirection="column">
-          <Box justifyContent="space-between" gap={2} flexWrap="wrap">
-            <Text bold color={C.dim}>用量</Text>
-            <Box gap={2} flexWrap="wrap">
-              {codexShown && <Box key="h-codex" hover={{ scope: 'help-codex' }}>
-                <Text color={C.dim}>Codex <Text color={health === 'stale' ? C.red : health === 'ok' ? C.green : C.dim}>● {health === 'stale' ? '需處理' : health === 'ok' ? '正常' : '未檢查'}</Text></Text>
-              </Box>}
-              <Box key="h-sessions" hover={{ scope: 'help-sessions' }}>
-                <Text color={C.dim}>其他工作階段 <Text color={s.blocked.length ? C.amber : C.green}>● {s.blocked.length ? `${s.blocked.length} 個停住` : '無'}</Text></Text>
-              </Box>
-            </Box>
-          </Box>
-          {rule}
+          {section('usage-title', '用量', [
+            codexShown && <Box key="h-codex" hover={{ scope: 'help-codex' }}>
+              <Text color={C.dim}>Codex <Text color={health === 'stale' ? C.red : health === 'ok' ? C.green : C.dim}>● {health === 'stale' ? '需處理' : health === 'ok' ? '正常' : '未檢查'}</Text></Text>
+            </Box>,
+            <Box key="h-sessions" hover={{ scope: 'help-sessions' }}>
+              <Text color={C.dim}>{compactCounts ? '工作階段 ' : '其他工作階段 '}<Text color={s.blocked.length ? C.amber : C.green}>● {s.blocked.length ? `${s.blocked.length} 個停住` : '無'}</Text></Text>
+            </Box>,
+          ].filter(Boolean))}
           {/* One table for every tool: the tool's name on its first row, the meters lined up under each other. */}
           <Box key="q-claude" flexDirection="column">
             {(() => {
@@ -2298,7 +2323,7 @@ export const register: Register = (on, options) => {
             </Box>
             <Box key="version" gap={2} flexShrink={1} hover={{ scope: 'help-version' }}>
               <Box flexShrink={1}>
-                <Text color={version?.phase === 'failed' ? C.red : hasUpdate(version) ? C.amber : C.faint} wrap="truncate-end">{versionLine(version)}</Text>
+                <Text color={version?.phase === 'failed' ? C.red : hasUpdate(version) ? C.amber : C.faint} wrap="truncate-end">{version?.phase === 'idle' && version.error ? versionLine(version).replace(/（[^）]*）$/, '') : versionLine(version)}</Text>
               </Box>
               {hasUpdate(version) && (version?.phase === 'idle' || version?.phase === 'failed') && (
                 <Box flexShrink={0}><Button key="update" plain label={`⬆ 更新到 v${version!.latest}`} onPress={() => void runUpdate($)} /></Box>

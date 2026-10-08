@@ -146,3 +146,18 @@ test('a missing registry names the path and the way out', { options: { registryP
   expect(await ui.find({ type: 'Text', text: /找不到登錄表 D:\/Nowhere\/registry\.md.*\/console demo/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('sections share one title row; counts go compact under 96 columns; the next step has a chip', async ($, on) => {
+  await demo($, on)
+  for (const [bodyColumns, compact] of [[120, false], [72, true]] as const) {
+    const options = pane('terminal')
+    options.props.bodyColumns = bodyColumns
+    const ui = await $.ui.mount(options)
+    for (const key of ['projects-title', 'feed-title', 'usage-title']) expect((await ui.find({ key }))?.props.height).toBe(1)
+    expect(await ui.find({ type: 'Text', text: /^─+$/ })).toBeDefined()
+    expect((await ui.find({ key: 'kACTION' }))?.text).toBe(compact ? '● 1' : '● 需決策 1')
+    expect((await ui.find({ key: 'next-cta' }))?.props.backgroundColor).toBeDefined()
+    expect((await ui.find({ key: 'next-action' }))?.text).toBe('✎ 做決定')
+    await ui.unmount()
+  }
+})
