@@ -139,6 +139,10 @@ test('reset time: same day shows clock and countdown, later days show the date',
   expect(resetText(new Date(2030, 0, 5, 17, 13).toISOString(), now)).toBe('重置 17:13・2 小時 13 分後')
   expect(resetText(new Date(2030, 0, 8, 9, 0).toISOString(), now)).toBe('重置 1/8 (二) 09:00・2 天 18 小時後')
   expect(resetText(undefined, now)).toBe('')
+  // A narrow pane keeps only the countdown.
+  expect(resetText(new Date(2030, 0, 5, 17, 13).toISOString(), now, true)).toBe('2時13分後重置')
+  expect(resetText(new Date(2030, 0, 8, 9, 0).toISOString(), now, true)).toBe('2天18時後重置')
+  expect(resetText(new Date(2030, 0, 5, 15, 40).toISOString(), now, true)).toBe('40分後重置')
 })
 
 test('running job line: elapsed time and the last log line', () => {

@@ -310,7 +310,7 @@ test('the keyboard opens and closes the action menu for the row under the cursor
   await ui.post({ key: 'down' }, { in: 'rows' } as any)
   await ui.post({ key: 'm' }, { in: 'rows' } as any)
   expect(await ui.find({ key: 'm-verify' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /右鍵或 m 開啟動作選單/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /m (開啟)?動作選單/ })).toBeDefined()
   await ui.post({ key: 'escape' }, { in: 'rows' } as any)
   expect(await ui.find({ key: 'm-verify' })).toBeUndefined()
   await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)

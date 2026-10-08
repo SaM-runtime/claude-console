@@ -364,10 +364,14 @@ function splitDecisions(text: string): string[] {
   const out: string[] = []
   let depth = 0
   let buf = ''
+  let code = false
   for (const ch of text) {
-    if (OPEN.includes(ch)) depth++
-    else if (CLOSE.includes(ch)) depth = Math.max(0, depth - 1)
-    if (depth === 0 && (ch === '；' || ch === ';' || ch === '\n')) {
+    // `cd app; npm test` is one command: a backtick span never splits, except at a line break.
+    if (ch === '`') code = !code
+    else if (ch === '\n') code = false
+    else if (!code && OPEN.includes(ch)) depth++
+    else if (!code && CLOSE.includes(ch)) depth = Math.max(0, depth - 1)
+    if (!code && depth === 0 && (ch === '；' || ch === ';' || ch === '\n')) {
       if (buf.trim()) out.push(buf.trim())
       buf = ''
       continue
@@ -416,6 +420,28 @@ export function decisionAnswer(decisions: Decision[], picks: Record<string, stri
     if (!d.options.length || !key) return `${i + 1}：`
     return /^[A-Z]$/.test(key) ? `${i + 1}${key}` : `${i + 1}-${key}`
   }).join(' ')
+}
+
+/**
+ * Picks after one key in the decision card: digit N takes option N of the first decision still
+ * open (starting over once all are answered), Backspace drops the latest pick. `null` = no change.
+ */
+export function pickDecision(decisions: Decision[], picks: Record<string, string>, key: string): Record<string, string> | null {
+  if (key === 'backspace' || key === 'delete') {
+    const last = Object.keys(picks).map(Number).sort((a, b) => b - a)[0]
+    if (last === undefined) return null
+    const rest = { ...picks }
+    delete rest[String(last)]
+    return rest
+  }
+  const n = Number(key)
+  if (!Number.isInteger(n) || n < 1) return null
+  const choosable = decisions.map((d, i) => d.options.length ? i : -1).filter(i => i >= 0)
+  const open = choosable.find(i => picks[String(i)] === undefined)
+  const base = open === undefined ? {} : picks
+  const at = open ?? choosable[0]
+  const option = at === undefined ? undefined : decisions[at].options[n - 1]
+  return option ? { ...base, [String(at)]: option.key } : null
 }
 
 /** One line for narrow places: every decision title, options folded away. */
@@ -796,7 +822,7 @@ export function nextProject(s: Snapshot): string | null {
 }
 
 /** `重置 17:00・2 小時 13 分後` (same day) or `重置 10/8 (三) 09:00・2 天 4 小時後`. */
-export function resetText(iso: string | undefined, now: number): string {
+export function resetText(iso: string | undefined, now: number, compact = false): string {
   if (!iso) return ''
   const t = Date.parse(iso)
   if (!Number.isFinite(t)) return ''
@@ -807,6 +833,8 @@ export function resetText(iso: string | undefined, now: number): string {
   const mins = Math.max(0, Math.round((t - now) / 60000))
   const dd = Math.floor(mins / 1440), hh = Math.floor((mins % 1440) / 60), mm = mins % 60
   const left = dd ? `${dd} 天 ${hh} 小時後` : hh ? `${hh} 小時 ${mm} 分後` : `${mm} 分後`
+  // A narrow pane keeps the countdown, the part that decides whether to wait.
+  if (compact) return `${dd ? `${dd}天${hh}時` : hh ? `${hh}時${mm}分` : `${mm}分`}後重置`
   return `重置 ${when}・${left}`
 }
 

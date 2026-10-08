@@ -30,7 +30,7 @@ import { commandPreview, dangerReason, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction } from '../types'
-import { jobWarnings, waitingNames, parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
+import { jobWarnings, waitingNames, parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody, METER } from './battery'
@@ -796,13 +796,16 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       const fallbackNote = dispatchOpts.fallbackFrom ? `（Codex 改由 Claude：${dispatchOpts.fallbackReason}）` : ''
       await actionNotice($, `${name}：${chosen} 已接受${kind === 'sync' ? '同步 STATUS' : '繼續下一步'}${fallbackNote}，等待執行結果`, true)
     } else if (kind === 'decide') {
-      const filled = await $.prompt.fill({ text: `「${p.name}」決策：`, mode: 'replace' })
+      // Options already picked in the pane go into the draft, so the CTA and `d` never drop them.
+      const picked = (await read($, decisionPicks))[p.statusPath + '\n' + p.ask] ?? {}
+      const answer = Object.keys(picked).length ? decisionAnswer(parseAsk(p.ask), picked) : ''
+      const filled = await $.prompt.fill({ text: `「${p.name}」決策：${answer}`, mode: 'replace' })
       if (!filled.isFilled) throw new Error(filled.refusal === 'no_composer' ? '此介面沒有可預填的輸入框；請在主控台輸入決策。' : '輸入框目前無法預填，請關閉對話框後重試。')
       await update($, selected, () => p.name)
       // Removing the focused pane returns keyboard input to the filled composer.
       await $.ui.close({ id: PANE }).catch(() => {})
       await update($, isPaneOpen, () => false)
-      await actionNotice($, `${name}：決策草稿已預填，請補完後送出`, true)
+      await actionNotice($, answer && !answer.includes('：') ? `${name}：決策已填入輸入框，Enter 送出` : `${name}：決策草稿已預填，請補完後送出`, true)
     } else if (kind === 'gate') {
       const context = selectionContext(current, p.name)
       // PromptSubmitArgs has no context field, and calls from this plugin skip its own hook.
@@ -1706,6 +1709,17 @@ export const register: Register = (on, options) => {
       }
       const menuName = await read($, menuFor)
       const menuProject = menuName === null ? null : s?.projects.find(p => p.name === menuName)
+      // Digits answer the decisions in order without the mouse: `1` then `2` reads as 1A 2B.
+      if (menuProject && hasAsk(menuProject) && (/^[1-9]$/.test(k) || k === 'backspace' || k === 'delete')) {
+        const decisions = parseAsk(menuProject.ask)
+        const pickKey = menuProject.statusPath + '\n' + menuProject.ask
+        await update($, decisionPicks, values => {
+          const others = Object.fromEntries(Object.entries(values).filter(([key]) => key !== menuProject.statusPath && !key.startsWith(menuProject.statusPath + '\n')))
+          const next = pickDecision(decisions, values[pickKey] ?? {}, k)
+          return next ? { ...others, [pickKey]: next } : values
+        })
+        return {}
+      }
       if (menuProject && !(await demoEnabled($))) {
         const kind = HOTKEYS[k]
         const state = list.find(r => r.full === menuProject.name)?.state
@@ -1880,7 +1894,7 @@ export const register: Register = (on, options) => {
       <Box key="help" height={1} backgroundColor={C.bar} paddingX={1}>
         {hovRow !== null
           ? <Text color={C.text} wrap="truncate-end"><Text bold color={FG[hovRow.state]}>{hovRow.project}　</Text>{fullItem(hovRow.full)}</Text>
-          : <Text color={C.faint} wrap="truncate-end">{rich ? 'ⓘ 點選或 ↑↓ Enter 選取專案・右鍵或 m 開啟動作選單・游標停在標籤上看說明' : 'ⓘ 點專案名稱即可選取'}</Text>}
+          : <Text color={C.faint} wrap="truncate-end">{!rich ? 'ⓘ 點專案名稱即可選取' : width >= 74 ? 'ⓘ 點選或 ↑↓ Enter 選取專案・右鍵或 m 開啟動作選單・游標停在標籤上看說明' : width >= 46 ? 'ⓘ ↑↓ Enter 選取・m 動作選單・停在標籤看說明' : 'ⓘ ↑↓ Enter 選取・m 選單'}</Text>}
         {Object.keys(HELP).map(id => (
           <Box key={'tip-' + id} position="absolute" top={0} left={0} width="100%" height={1} paddingX={1}
             backgroundColor={C.bar} display="none" hover={{ scope: 'help-' + id, display: 'flex' }}>
@@ -2154,13 +2168,26 @@ export const register: Register = (on, options) => {
       </Box>
     }
     // The card's 執行者 section: what the project's latest executor session was last doing.
+    const DIGEST_LABEL: Record<string, string> = { 執行者: '工作', 最後活動: '活動', 最後動作: '工具', 最後一句: '回覆' }
     const digestView = (p: Project, prefix: string) => {
       if (demo) return null
       const d = digests[p.statusPath]
       const lines = !d || d.phase === 'loading' ? ['執行者：讀取中…'] : d.phase === 'none' ? ['執行者：無紀錄']
         : d.phase === 'error' ? [`執行者：無法讀取（${d.error ?? '原因不明'}）`] : d.lines ?? []
+      // Same label grid as the card fields; the prompt keeps the long `最後活動：` form.
       return <Box key={prefix + 'digest'} flexDirection="column" marginTop={1}>
-        {lines.map((line, i) => <Text key={prefix + 'digest-' + i} color={C.dim} wrap="wrap">{line}</Text>)}
+        {lines.map((line, i) => {
+          const cut = line.indexOf('：')
+          const head = cut < 0 ? '' : line.slice(0, cut)
+          let value = cut < 0 ? line : line.slice(cut + 1)
+          const label = DIGEST_LABEL[head] ?? (i ? '' : '工作')
+          if (head === '最後活動') value = value.replace(/^.*（(\d+|\?) 分鐘前）$/, (_, m) => m === '?' ? '時間不明' : `${m} 分鐘前`)
+          if (head === '最後一句' && displayWidth(value) > 160) value = '…' + [...value].slice(-80).join('')
+          return <Box key={prefix + 'digest-' + i} gap={2}>
+            <Box width={6} flexShrink={0}><Text color={C.dim}>{label}</Text></Box>
+            <Box flexGrow={1} flexShrink={1}><Text color={i === 0 && d?.phase === 'error' ? C.red : i === 0 ? C.text : C.dim} wrap="wrap">{value}</Text></Box>
+          </Box>
+        })}
       </Box>
     }
     const verificationView = (p: Project) => {
@@ -2274,7 +2301,7 @@ export const register: Register = (on, options) => {
               )}
             </Box>
             {/* Who, then what: the project name carries the weight, the step reads as body text. */}
-            <Text color={C.text} wrap={detail ? 'wrap' : 'truncate-end'}>{n === null ? <Text color={C.dim}>目前沒有需要處理的項目</Text>
+            <Text color={C.text} wrap="wrap">{n === null ? <Text color={C.dim}>目前沒有需要處理的項目</Text>
               : n.includes('・') ? [<Text key="nw" bold color={C.strong}>{n.slice(0, n.indexOf('・'))}</Text>, <Text key="ns" color={C.faint}>{'　'}</Text>, <Text key="nx">{n.slice(n.indexOf('・') + 1)}</Text>] : n}</Text>
           </Box>
         </Box>
@@ -2314,6 +2341,7 @@ export const register: Register = (on, options) => {
               {rich && (() => {
                 const st = list.find(r => r.full === menuProject.name)?.state ?? 'NOCARD'
                 const keys = actionKinds(menuProject, st).filter(kind => HOTKEY_OF[kind]).map(kind => `${HOTKEY_OF[kind]} ${actionLabel(kind, menuProject).replace(/^\S+\s*/, '')}`)
+                if (hasAsk(menuProject) && parseAsk(menuProject.ask).some(d => d.options.length)) keys.unshift('1–9 選選項')
                 if (menuProject.pr) keys.push('p 開啟 PR')
                 if (menuProject.git) keys.push('f Git 檔案')
                 return <Text key="m-keys" color={C.faint} wrap="wrap">{`快捷鍵　${[...keys, 'Esc 關閉'].join('・')}`}</Text>
@@ -2417,7 +2445,7 @@ export const register: Register = (on, options) => {
               if (ctx !== null) out.push(meterRow('ctx', tool(), { id: 'ctx', label: '上下文', used: ctx, hint: ctx >= ROTATE_PERCENT ? '建議換新主控台' : '' }))
               for (const l of limits) {
                 const pace = s.demo ? null : limitPace(l.kind, l.percent, l.resetsAt, now)
-                out.push(meterRow('lim' + l.kind, tool(), { id: 'limit_' + l.kind, label: limitName(l.kind), used: l.percent, hint: '', note: resetText(l.resetsAt, now), pace: pace && !pace.lasts ? pace : null }))
+                out.push(meterRow('lim' + l.kind, tool(), { id: 'limit_' + l.kind, label: limitName(l.kind), used: l.percent, hint: '', note: resetText(l.resetsAt, now, width < 64), pace: pace && !pace.lasts ? pace : null }))
               }
               if (paneCache) {
                 const warn = paneCache.view.warm && paneCache.view.leftMs <= CACHE_WARN_MS
@@ -2444,7 +2472,7 @@ export const register: Register = (on, options) => {
                 const tool = () => { const t = first ? 'Codex' : ''; first = false; return t }
                 const out: any[] = []
                 for (const l of s.codexQuota?.limits ?? []) {
-                  out.push(meterRow('cq' + l.label, tool(), { id: 'codex_quota', label: l.label === 'Codex 週' ? '本週' : l.label.replace('Codex ', ''), used: l.percent, hint: '', note: resetText(l.resetsAt, now) }))
+                  out.push(meterRow('cq' + l.label, tool(), { id: 'codex_quota', label: l.label === 'Codex 週' ? '本週' : l.label.replace('Codex ', ''), used: l.percent, hint: '', note: resetText(l.resetsAt, now, width < 64) }))
                 }
                 if (s.codexQuota?.credits) out.push(usageRow('cq-credits', tool(), '餘額', 'codex_quota', <Text color={C.text}>{`${s.codexQuota.credits} credits`}</Text>))
                 return out
