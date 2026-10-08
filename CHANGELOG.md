@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.18.1
+
+- **The sync model control says what it is.** Beneath the pane title it reads `同步模型 haiku ▾` instead of `同步 haiku ▾`, adds `新 session` when a sync will start a new session, and its choices line names the executor they are for (`同步模型（claude）`), since Claude and Codex each keep their own sync model and switching the global executor shows the other one.
+
 ## 0.18.0
 
 - **A cheaper model for 同步 STATUS, if you want one.** A sync only writes the CARD and its history, so `dispatch.json` can now give it its own model and effort, per executor (`"sync": { "claude": { "model": "haiku" }, "codex": { "model": "luna" } }`), globally or per project. Nothing is set by default, and names are free text, so an account without those models keeps syncing exactly as before. Set it from the pane's new `同步` control or `/console sync-model [claude|codex] <name>`, `/console sync-effort`, `/console sync-session`.

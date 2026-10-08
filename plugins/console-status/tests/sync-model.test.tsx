@@ -143,3 +143,16 @@ test('/console sync-model, sync-effort and sync-session write dispatch.json and 
   const bad = await $.command.run({ command: 'console', args: 'sync-session sometimes' } as any) as any
   expect(String(bad?.text ?? bad)).toContain('設定未儲存')
 })
+
+test('the pane names the sync model, whose executor it belongs to, and when it runs in a new session', { options: { ...OPTIONS.options, autoSync: 'off' } }, async ($, on) => {
+  const h = harness(on, WORK(), T('2030-01-05T10:00:00Z'), { executor: 'claude', sync: { claude: { model: 'haiku' } } })
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ type: 'Text', text: '同步模型' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: '新 session' })).toBeTruthy()
+  await ui.press({ key: 'dispatch-sync' })
+  expect(await ui.find({ type: 'Text', text: '同步模型（claude）' })).toBeTruthy()
+  await ui.press({ key: 'dispatch-sync-sonnet' })
+  expect(JSON.parse(h.files['C:/Users/example/.claude/handoffs/dispatch.json']!).sync).toEqual({ claude: { model: 'sonnet' } })
+  await ui.unmount()
+})
