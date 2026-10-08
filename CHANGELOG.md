@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.1
+
+- **Every rate-limit window the host reports is drawn, and a per-model one is named after its model.** The usage pane kept only the first two windows from `session.usage()`, and the label matched `seven` before `opus`, so a weekly window scoped to one model (`seven_day_opus`, `seven_day_sonnet`, or a `seven_day_fable` should the host send one) was cut off or shown as a second `本週`. Each window now has its own row: `5 小時`, `本週`, `Fable 週`, `Opus 週`, `Sonnet 週`, and a gateway's `spend_limit` as `花費上限`. A model name without a known spelling is shown as sent (`mythos 週`), and a kind that is not a window keeps its full name instead of being swallowed. The label column widens to fit. Each row has its own hover help, naming the model for a per-model window. Demo mode shows one per-model weekly row (`Fable 週`).
+- Note: Claude Code 2.1.292 hands plugins only `five_hour`, `seven_day` and, behind a gateway, `spend_limit`; its per-model windows are not exposed through `session.usage()`, so a Fable row appears once the host reports one.
+
 ## 0.9.0
 
 - **Executor, model and effort are picked from a list.** Each press on a control under the pane title used to move to the next value, so reaching `max` from `low` meant pressing through every level and writing each one to `dispatch.json` on the way, and the model never came back to `預設`. A press now spreads the choices out on the next line (`模型  [預設]  fable  opus  sonnet  ✕`), with the current value in brackets. Pressing one saves it and closes the line; the current value, `✕` or the label again closes it without writing. `預設` hands the choice back to the executor. Efforts follow the chosen model. A model typed with `/console model <name>` is listed while it is chosen. Without a readable Codex model cache, the line says to use `/console model <name>` instead of showing a toast.
