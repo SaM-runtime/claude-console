@@ -331,6 +331,8 @@ claude plugin install paste-preview@paste-preview
 
 0.11.0 起 Git 那一行的未提交行數，參考 arasovic 的 [claude-code-mods](https://github.com/arasovic/claude-code-mods) 裡的 change-ledger（MIT 授權），它在 session 改過的檔案旁顯示 `git diff --numstat`；stash 數量參考 [jarrodwatts](https://github.com/jarrodwatts) 的 [claude-hud](https://github.com/jarrodwatts/claude-hud) 的 git 檔案統計（MIT 授權）。同上，程式碼都是 console-status 自己寫的。感謝 jarrodwatts。
 
+0.13.0 起面板的區段標題（名稱、延伸到邊緣的細線、右側數字）參考 [jesseduffield](https://github.com/jesseduffield) 的 [lazygit](https://github.com/jesseduffield/lazygit) 的面板標題（MIT 授權），只借外觀，沒有用到它的程式碼。感謝 jesseduffield。
+
 ## 限制
 
 - 內附探測：Windows 用 PowerShell 腳本，macOS 與 Linux 用 `sh` 腳本（Linux 已有測試與模擬過期 broker 驗證，但未經日常使用）。在這兩個平台上，若 broker 的 `codex app-server` 啟動時間早於 Codex CLI 最近一次升級，會判定為 STALE。

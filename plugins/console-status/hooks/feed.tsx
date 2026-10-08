@@ -9,7 +9,7 @@ export function feedBody(props: FeedProps, now: number, elements: any, animate: 
   const { Box, Text } = elements
   return <Box flexDirection="column">{props.events.map((ev, i) => <Text key={'ev' + i} wrap="truncate-end">
     <Text color={props.dim}>{new Date(ev.at).toTimeString().slice(0, 5)}　</Text>
-    <Text color={ev.color}>● </Text>
+    <Text color={ev.color}>• </Text>
     <Text color={animate && recent(ev.at, now) ? props.bright : props.normal}>{ev.text}</Text>
   </Text>)}</Box>
 }
