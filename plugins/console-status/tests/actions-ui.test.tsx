@@ -37,6 +37,8 @@ function fixture(on: any) {
   })
   on('fs.write', (_: any, e: any) => { data.files[fixturePath(e.path)] = e.text; return { value: undefined } })
   on('process.run', async (_: any, e: any) => {
+    // Codex dispatch first asks whether there is a thread to resume; these tests count only the dispatch itself.
+    if (e.argv.includes('task-resume-candidate')) return { value: { exitCode: 0, stdout: '{"available":true}', stderr: '' } }
     if (e.argv[0] === 'claude') { if (data.agentsDelay) await clock.sleep(data.agentsDelay); return { value: result(0, '[]') } }
     if (e.argv.includes('-File')) return { value: result(0, 'OK codex=0.0.0-test') }
     // Git and PR probes run on every refresh; these tests count only the actions' own commands.

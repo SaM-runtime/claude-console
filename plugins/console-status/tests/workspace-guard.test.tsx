@@ -32,6 +32,8 @@ function fixture(on: any, source: 'claude' | 'codex') {
   on('fs.write', (_: any, e: any) => { files[fixturePath(e.path)] = e.text; return { value: undefined } })
   on('fs.list', (_: any, e: any) => ({ value: fixturePath(e.path) === 'D:/State' ? [{ name: 'Project Alpha-hash', kind: 'dir' }] : [] }))
   on('process.run', (_: any, e: any) => {
+    // Codex dispatch first asks whether there is a thread to resume; these tests count only the dispatch itself.
+    if (e.argv.includes('task-resume-candidate')) return { value: { exitCode: 0, stdout: '{"available":true}', stderr: '' } }
     if (e.argv.includes('--bg') || e.argv[0] === 'node') launches.push(e)
     return { value: { exitCode: 0, stdout: e.argv[1] === 'agents' ? JSON.stringify(agents) : e.argv[0] === 'node' ? '{"jobId":"new-job"}' : 'OK', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })

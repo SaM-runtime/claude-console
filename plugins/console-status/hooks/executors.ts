@@ -1,4 +1,5 @@
 import type { Job } from './logic'
+import { terminalLines } from './terminal'
 import { isActiveJob } from './logic'
 import { readJobs } from './jobs'
 import { dispatchKind } from './actions'
@@ -109,12 +110,17 @@ const rootKey = (value: string) => {
   return /^(?:[a-z]:\/|\/\/)/i.test(normalized) ? normalized.toLowerCase() : normalized
 }
 const iso = (value: number) => new Date(value).toISOString()
-const cleanLine = (value: string) => value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').trim()
+const cleanLine = (value: string) => terminalLines(value).join(' ').trim()
 
-export function codexArgs(root: string, prompt: string, config: Pick<ExecutorConfig, 'companionScript'>, opts: DispatchOptions): string[] {
+/**
+ * `resume`: whether the companion has a thread to continue. `--resume-last` with none fails at once
+ * ("No previous Codex task thread was found"), so a repository's first Codex job, and an independent
+ * review (`fresh`), start a new thread with `--fresh`.
+ */
+export function codexArgs(root: string, prompt: string, config: Pick<ExecutorConfig, 'companionScript'>, opts: DispatchOptions, resume = true): string[] {
   if (!config.companionScript) throw new Error('Codex executor requires companionScript.')
   return [
-    'node', config.companionScript, 'task', '--background', '--write', '--resume-last', '--cwd', slash(root), '--json',
+    'node', config.companionScript, 'task', '--background', '--write', opts.fresh || !resume ? '--fresh' : '--resume-last', '--cwd', slash(root), '--json',
     ...(opts.model ? ['--model', opts.model] : []),
     ...(opts.effort ? ['--effort', opts.effort] : []),
     prompt,
@@ -133,7 +139,7 @@ export function claudeArgs(_root: string, prompt: string, opts: DispatchOptions,
 }
 
 function lastMeaningfulLine(text: string): string {
-  const lines = text.split(/\r?\n/).map(cleanLine).filter(line => line && !/^[-=─*`]+$/.test(line))
+  const lines = terminalLines(text).map(line => line.trim()).filter(line => line && !/^[-=─*`]+$/.test(line))
   return (lines.pop() ?? '').replace(/^\[[^\]]*\]\s*/, '').slice(0, 80)
 }
 
@@ -381,6 +387,21 @@ function asJob(value: ClaudeJob): ExecutorJob {
   }
 }
 
+/**
+ * Asks the companion whether this repository has a Codex thread to resume. Only a clear
+ * `available: false` starts a new thread; a probe that fails or says nothing keeps `--resume-last`.
+ */
+export async function codexHasThread(deps: Pick<ExecutorDeps, 'run'>, config: Pick<ExecutorConfig, 'companionScript'>, root: string): Promise<boolean> {
+  if (!config.companionScript) return true
+  const probe = await deps.run(['node', config.companionScript, 'task-resume-candidate', '--cwd', root, '--json'], { cwd: root, timeoutMs: 15_000 }).catch(() => null)
+  if (!probe || probe.exitCode !== 0) return true
+  try {
+    return (JSON.parse(probe.stdout) as { available?: unknown }).available !== false
+  } catch {
+    return true
+  }
+}
+
 function createCodex(deps: ExecutorDeps, config: ExecutorConfig): Executor {
   return {
     async listJobs(root) {
@@ -392,7 +413,8 @@ function createCodex(deps: ExecutorDeps, config: ExecutorConfig): Executor {
     },
     async dispatch(root, prompt, opts) {
       const normalized = slash(root)
-      const result = await deps.run(codexArgs(normalized, prompt, config, opts), { cwd: normalized, timeoutMs: 60_000 })
+      const resume = opts.fresh ? false : await codexHasThread(deps, config, normalized)
+      const result = await deps.run(codexArgs(normalized, prompt, config, opts, resume), { cwd: normalized, timeoutMs: 60_000 })
       if (result.exitCode !== 0) throw new Error(lastMeaningfulLine(`${result.stdout}\n${result.stderr}`) || `Codex dispatch failed (exit ${result.exitCode}).`)
       const id = parseCompanionId(result.stdout)
       if (!id) throw new Error('Codex dispatch did not return a job id.')

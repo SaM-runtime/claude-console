@@ -30,7 +30,7 @@ import { commandPreview, dangerReason, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction } from '../types'
-import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
+import { parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody, METER } from './battery'
@@ -67,6 +67,7 @@ const menuFor = atom({ plugin: 'console-status', key: 'menuFor' } as const, null
 /** The project (statusPath) whose Git file view is open, and the views read so far. */
 const gitOpen = atom({ plugin: 'console-status', key: 'gitOpen' } as const, null)
 const gitViews = atom({ plugin: 'console-status', key: 'gitViews' } as const, {})
+const decisionPicks = atom({ plugin: 'console-status', key: 'decisionPicks' } as const, {})
 /** Which dispatch setting has its choices spread out under the pane header, if any. */
 const dispatchPicker = atom({ plugin: 'console-status', key: 'dispatchPicker' } as const, null)
 const pendingActions = atom({ plugin: 'console-status', key: 'pendingActions' } as const, {})
@@ -1580,7 +1581,8 @@ export const register: Register = (on, options) => {
       )
     }
     const below = await nextHook(e).catch(() => null)
-    return isEmptyTree(below) ? mine : <Box flexDirection="column" width={columns}>{mine}{below}</Box>
+    // The engine refuses its own node under a Box that sets a width; the rows above set their own.
+    return isEmptyTree(below) ? mine : <Box flexDirection="column">{mine}{below}</Box>
   })
 
   // Rows drawn by the Client module report presses, right-clicks and keys here.
@@ -1652,6 +1654,7 @@ export const register: Register = (on, options) => {
     const menu = await read($, menuFor)
     const openGit = demo ? null : await read($, gitOpen)
     const gitViewMap = demo ? {} : await read($, gitViews)
+    const picks = await read($, decisionPicks)
     const refreshing = await read($, isRefreshing)
     const pending = await read($, pendingActions)
     const confirmations = await read($, continueConfirmations)
@@ -1884,29 +1887,55 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     }
-    // Each decision on its own line, its options one per line underneath, nothing truncated.
+    // Each decision is a numbered block; every option is its own pressable row, the picked one lit.
+    // The primary button fills the composer with the answer (`1A 2B`) instead of typing it by hand.
     const decisionView = (p: Project, prefix: string) => {
       if (!hasAsk(p)) return null
       const decisions = parseAsk(p.ask)
-      const numbered = decisions.length > 1
+      // Picks belong to this ask: a rewritten 等使用者 starts with none, so a stale key never lights.
+      const pickKey = p.statusPath + '\n' + p.ask
+      const mine = picks[pickKey] ?? {}
+      const dropPicks = (values: Record<string, Record<string, string>>) =>
+        Object.fromEntries(Object.entries(values).filter(([k]) => k !== p.statusPath && !k.startsWith(p.statusPath + '\n')))
+      const pickable = decisions.some(d => d.options.length)
+      const answer = decisionAnswer(decisions, mine)
       return (
         <Box key={prefix + 'ask'} flexDirection="column">
           {decisions.map((d, i) => (
             <Box key={prefix + 'ask-' + i} flexDirection="column" marginTop={i ? 1 : 0}>
-              {d.title !== '' && (
-                <Box gap={1}>
-                  {numbered && <Box width={3} flexShrink={0}><Text bold color={C.amber}>{`${i + 1}.`}</Text></Box>}
-                  <Box flexGrow={1} flexShrink={1}><Text color={C.amber} wrap="wrap">{d.title}</Text></Box>
-                </Box>
-              )}
-              {d.options.map(o => (
-                <Box key={prefix + 'ask-' + i + '-' + o.key} gap={1} paddingLeft={numbered ? 4 : 2}>
-                  <Box width={3} flexShrink={0}><Text bold color={C.strong}>{/^[①-⑨]$/.test(o.key) ? o.key : o.key + ')'}</Text></Box>
-                  <Box flexGrow={1} flexShrink={1}><Text color={C.text} wrap="wrap">{o.text}</Text></Box>
-                </Box>
-              ))}
+              <Text bold color={C.amber} wrap="wrap">{decisions.length > 1 ? `決策 ${i + 1}　` : ''}{d.title || '請選擇'}</Text>
+              {d.options.length
+                ? d.options.map(o => {
+                    const isPicked = mine[String(i)] === o.key
+                    const other = mine[String(i)] !== undefined && !isPicked
+                    return (
+                      <Box key={prefix + 'opt-row-' + i + '-' + o.key} paddingLeft={2}>
+                        <Button key={prefix + 'opt-' + i + '-' + o.key} plain dimColor={other}
+                          label={`${isPicked ? '●' : '○'} ${/^[①-⑨]$/.test(o.key) ? o.key : o.key + ')'} ${o.text}`}
+                          onPress={() => void update($, decisionPicks, values => {
+                            const current = { ...(values[pickKey] ?? {}) }
+                            if (current[String(i)] === o.key) delete current[String(i)]
+                            else current[String(i)] = o.key
+                            return { ...dropPicks(values), [pickKey]: current }
+                          })} />
+                      </Box>
+                    )
+                  })
+                : <Box paddingLeft={2}><Text color={C.dim}>（沒有選項，送出後在輸入框補上回覆）</Text></Box>}
             </Box>
           ))}
+          <Box marginTop={1} gap={2}>
+            <Button key={prefix + 'ask-submit'} variant="primary" label={pickable ? `✎ 填入決策：${answer}` : '✎ 填入決策'}
+              onPress={() => void (async () => {
+                const filled = await $.prompt.fill({ text: `「${p.name}」決策：${answer}`, mode: 'replace' })
+                if (!filled.isFilled) { await actionNotice($, `${p.name}：輸入框無法預填，請直接輸入「${p.name}」決策：${answer}`, false); return }
+                // The pane stays open with the picks lit; Esc hands the keys back to the filled composer.
+                await update($, selected, () => p.name)
+                await actionNotice($, `${p.name}：決策已填入輸入框，按 Esc 回到輸入框後 Enter 送出`, true)
+              })()} />
+            {Object.keys(mine).length > 0 && <Button key={prefix + 'ask-clear'} plain dimColor label="清除選擇"
+              onPress={() => void update($, decisionPicks, dropPicks)} />}
+          </Box>
         </Box>
       )
     }
@@ -1955,12 +1984,21 @@ export const register: Register = (on, options) => {
     }
     /** What a person needs to decide the next move: what is running (and its last output), then the CARD. */
     const projectInfo = (p: Project, prefix: string, opts: { state?: boolean } = {}) => {
-      const field = (label: string, value: string, color: string) => value ? (
-        <Box key={prefix + label} gap={2}>
-          <Box width={6} flexShrink={0}><Text color={C.dim}>{label}</Text></Box>
-          <Box flexGrow={1} flexShrink={1}><Text color={color} wrap="wrap">{value}</Text></Box>
-        </Box>
-      ) : null
+      // A value made of `；` clauses lists one clause per line instead of one dense paragraph.
+      const field = (label: string, value: string, color: string) => {
+        if (!value) return null
+        const clauses = splitClauses(value)
+        return (
+          <Box key={prefix + label} gap={2}>
+            <Box width={6} flexShrink={0}><Text color={C.dim}>{label}</Text></Box>
+            <Box flexGrow={1} flexShrink={1} flexDirection="column">
+              {clauses.length > 1
+                ? clauses.map((clause, i) => <Box key={prefix + label + '-' + i} gap={1}><Box width={1} flexShrink={0}><Text color={C.dim}>·</Text></Box><Box flexGrow={1} flexShrink={1}><Text color={color} wrap="wrap">{clause}</Text></Box></Box>)
+                : <Text color={color} wrap="wrap">{value}</Text>}
+            </Box>
+          </Box>
+        )
+      }
       const running = p.jobs.filter(j => j.kind === 'running')
       return <Box flexDirection="column" marginTop={1}>
         {running.map(j => {
@@ -2062,7 +2100,7 @@ export const register: Register = (on, options) => {
             <Box flexShrink={0}><Text color={C.faint}>{`更新於 ${time}`}</Text></Box>
           </Box>
           <Box columnGap={1} flexWrap="wrap">
-            <Text color={C.dim}>派工</Text>
+            <Text color={C.dim}>全域派工</Text>
             <Box hover={{ scope: 'help-dispatch_executor' }}>
               <Button key="dispatch-executor" plain label={dispatch.settings.executor} onPress={() => togglePicker('executor')} />
               <Text color={picker === 'executor' ? C.blue : C.faint}>{picker === 'executor' ? '▴' : '▾'}</Text>
@@ -2079,6 +2117,14 @@ export const register: Register = (on, options) => {
               <Button key="dispatch-effort" plain label={dispatch.settings.effort || '預設'} onPress={() => togglePicker('effort')} />
               <Text color={picker === 'effort' ? C.blue : C.faint}>{picker === 'effort' ? '▴' : '▾'}</Text>
             </Box>
+            {(() => {
+              // These controls set the global default; a selected project may dispatch elsewhere (registry or pane override).
+              const p = sel === null ? null : s.projects.find(x => x.name === sel)
+              if (!p) return null
+              const eff = effectiveDispatch(dispatch.settings, projectRoot(p.statusPath), p.registryExecutor)
+              if (eff.executor === dispatch.settings.executor) return null
+              return <Text key="dispatch-selected" color={C.amber} wrap="truncate-end">{`　${p.name} 實際派工：${eff.executor}（${SOURCE_LABEL[eff.source]}）`}</Text>
+            })()}
           </Box>
           {picker && <Box key="dispatch-picker" columnGap={1} flexWrap="wrap">
             <Text color={C.dim}>{PICKER_LABEL[picker]}</Text>
@@ -2100,7 +2146,12 @@ export const register: Register = (on, options) => {
               <Text color={C.dim}>/console mode console 切回主控台</Text>
             </Box>
             {pipelineLine(here.pipeline, PIPE, ui, 'pm-pipeline')}
-            {here.project.next.trim() && !here.pipeline.note.includes(here.project.next.trim()) && <Text color={C.text} wrap="wrap"><Text color={C.dim}>下一步　</Text>{here.project.next}</Text>}
+            {here.project.next.trim() && !here.pipeline.note.includes(here.project.next.trim()) && (
+              <Box flexDirection="column">
+                <Text color={C.dim}>下一步</Text>
+                {splitClauses(here.project.next).map((clause, i) => <Text key={'pm-next-' + i} color={C.text} wrap="wrap">{`· ${clause}`}</Text>)}
+              </Box>
+            )}
             {projectActions(here.project, 'pm-')}
             {verificationView(here.project)}
           </Box>

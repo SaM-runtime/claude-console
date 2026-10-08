@@ -35,6 +35,8 @@ function fixture(on: any, opts: Fixture = {}) {
   const lists: Record<string, { name: string; kind: string }[]> = { 'D:/State': [{ name: 'Project Alpha-hash', kind: 'dir' }], ...opts.lists }
   on('fs.list', (_: any, e: any) => ({ value: lists[fixturePath(e.path)] ?? [] }))
   on('process.run', (_: any, e: any) => {
+    // Codex dispatch first asks whether there is a thread to resume; these tests count only the dispatch itself.
+    if (e.argv.includes('task-resume-candidate')) return { value: { exitCode: 0, stdout: '{"available":true}', stderr: '' } }
     const argv: string[] = [...e.argv]
     let stdout = ''
     if (argv.some(arg => /codex-preflight\.(ps1|sh)$/.test(arg))) { probes.push(argv); stdout = typeof opts.preflight === 'function' ? opts.preflight(argv) : opts.preflight ?? 'OK codex=0.0.0-test companion=OK' }
@@ -216,5 +218,16 @@ test('a configured companion reported MISSING is replaced by the installed one w
   await ui.press({ key: 'detail-Project Alpha-continue' })
   await ui.press({ key: 'detail-Project Alpha-continue' })
   expect(h.launches[0]!.slice(0, 2)).toEqual(['node', `${cache}/2.0.0/scripts/codex-companion.mjs`])
+  await ui.unmount()
+})
+
+test('the header names its controls global and says when the selected project dispatches elsewhere', { options: BASE }, async ($, on) => {
+  fixture(on, { registry: `## STATUS 卡位置\n| Project | STATUS path | Executor |\n| --- | --- | --- |\n| Project Alpha | \`${STATUS}\` | codex |` })
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ type: 'Text', text: /^全域派工$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /實際派工/ })).toBeUndefined()
+  await ui.press({ key: 'sel-Project Alpha' })
+  expect((await ui.find({ type: 'Text', text: /實際派工/ }))?.text).toBe('　Project Alpha 實際派工：codex（登錄表）')
   await ui.unmount()
 })

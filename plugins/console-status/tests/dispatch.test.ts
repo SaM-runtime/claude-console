@@ -145,6 +145,8 @@ test('row sync trigger reads latest file and omits each empty dispatch flag inde
   on('session.usage', () => ({ value: null }))
   on('session.id', () => ({ value: 'fixture-session' }))
   on('process.run', (_, e) => {
+    // Codex dispatch first asks whether there is a thread to resume; these tests count only the dispatch itself.
+    if (e.argv.includes('task-resume-candidate')) return { value: { exitCode: 0, stdout: '{"available":true}', stderr: '' } }
     if (e.argv[0] !== 'node') return { value: { exitCode: 0, stdout: e.argv[0] === 'claude' ? '[]' : 'OK codex=0.0.0-test', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     dispatched = [...e.argv]
     // The sync itself never needs syncing; leave other finished work behind so the next round offers sync again.

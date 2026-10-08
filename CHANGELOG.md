@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.1
+
+- **Decision options are pressed, not typed.** Each option under 待決 is its own row (`○ A) 深色主題`); a press lights it (`●`) and dims the others of that decision, a second press clears it. The primary button reads the answer as it stands (`✎ 填入決策：1B 2-1`) and fills the composer with `「專案」決策：1B 2-1`; a lettered key follows its number (`1B`), a numbered one is set apart (`2-1`), and a decision without options is left as `3：` to finish by hand. `清除選擇` drops the picks. Filling leaves the pane open with the picks lit (Esc hands the keys to the composer); picks belong to the ask and are dropped when 等使用者 changes. When the composer cannot be prefilled, the pane says what to type instead.
+- **A repository's first Codex job starts.** Every Codex dispatch passed `--resume-last`, and the companion fails at once when the repository has no Codex thread yet (`No previous Codex task thread was found for this repository.`), so the first continue on such a project failed, its row turned 待同步, and every sync failed the same way. The console now asks the companion first (`task-resume-candidate`): with no thread it starts one with `--fresh`; a probe that fails keeps `--resume-last`. An independent review also starts fresh on Codex now, as it already did on Claude.
+- **The header says its dispatch controls are global.** The row under the title reads `全域派工`, and with a project selected whose executor comes from the registry or a pane override it adds `<project> 實際派工：codex（登錄表）`, so a project set to Codex no longer looks like it dispatches to Claude.
+- **A running Claude job no longer blanks the pane.** `claude logs` replays a terminal, and its last line kept cursor save/restore (`ESC 7`/`ESC 8`), carriage returns and OSC links: only CSI sequences were stripped, so the job's line put a control character in a text child and the engine drew its own empty pane instead (`a text child holds a control character`). Job lines and verification output now drop every escape sequence and control character, and a bare carriage return starts a new line.
+- **The band draws with the engine's row beneath it.** The band wrapped the engine's own row in a Box with a `width`, which the engine refuses (`engine node under a Box with prop "width"`); the wrapper no longer sets one.
+- **Long CARD fields list one clause per line.** 狀態, 關卡 and 下一步 in the project card, and 下一步 in project mode, are split on top-level `；` like decisions (bracketed commands stay whole), so a dense paragraph reads as a list.
+
 ## 0.13.0
 
 - **One visual system for the pane.** Every section (專案, 動態, 用量) opens the same way: its name, a hairline to the right edge, its figures at the end, so the separate rule lines are gone and each section is one row shorter. Section names are the strongest text after the next step; tool names in 用量 step down a level so they no longer outweigh the section titles.

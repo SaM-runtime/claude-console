@@ -13,10 +13,14 @@ function harness(initial: Record<string, string> = {}) {
   const calls: { argv: readonly string[]; init?: { cwd?: string; timeoutMs?: number } }[] = []
   const writes: { path: string; text: string }[] = []
   const replies: RunResult[] = []
+  const probes: (readonly string[])[] = []
+  const probeReplies: RunResult[] = []
   return {
-    files, calls, writes, replies,
+    files, calls, writes, replies, probes, probeReplies,
     deps: {
       run: async (argv: readonly string[], init?: { cwd?: string; timeoutMs?: number }) => {
+        // The resume probe answers from its own list, so replies and calls stay the dispatch's.
+        if (argv.includes('task-resume-candidate')) { probes.push(argv); return probeReplies.shift() ?? { exitCode: 0, stdout: '{"available":true}', stderr: '' } }
         calls.push({ argv, init })
         return replies.shift() ?? { exitCode: 0, stdout: '', stderr: '' }
       },
@@ -152,6 +156,11 @@ test('claude jobs map blocked to running and stamp completion only when done is 
   h.replies.push({ exitCode: 0, stdout: 'waiting\nlatest output\n', stderr: '' })
   expect(await executor.lastLine(jobs[0])).toBe('latest output')
   expect(h.calls[1].argv).toEqual(['claude', 'logs', 'blocked01'])
+  // `claude logs` replays a terminal: cursor save/restore, carriage returns, OSC links, bells.
+  h.replies.push({ exitCode: 0, stdout: 'old\x1b7\x1b8\r\x1b[2Kmiddle\rlast \x1b]8;;https://x.test\x07link\x1b]8;;\x07 \x1b(Bdone\x07\n', stderr: '' })
+  const line = await executor.lastLine(jobs[0])
+  expect(line).toBe('last link done')
+  expect(/[\x00-\x1f\x7f]/.test(line)).toBe(false)
 })
 
 test('ambiguous claude launch is not guessed or silently retried', async () => {
@@ -396,4 +405,32 @@ test('the shared agents query also matches an agent inside a project worktree', 
   ]), stderr: '' })
   const executor = createExecutor('claude', { ...h.deps, agents: sharedAgents(h.deps.run) }, { companionScript: '', companionStateRoots: [], claudeSessionsPath: 'D:/claude.json' })
   expect((await executor.listJobs('D:/Project Alpha')).map(job => [job.id, job.status])).toEqual([['wt-launch', 'completed']])
+})
+
+test('codex starts a new thread when the companion has none to resume, and for an independent review', async () => {
+  const h = harness({})
+  const config = { companionScript: 'D:/companion.mjs', companionStateRoots: ['D:/State'], claudeSessionsPath: 'D:/claude.json' }
+  const executor = createExecutor('codex', h.deps, config)
+  h.probeReplies.push({ exitCode: 0, stdout: '{"available":false,"candidate":null}', stderr: '' })
+  h.replies.push({ exitCode: 0, stdout: '{"jobId":"first"}', stderr: '' })
+  await executor.dispatch('D:/New Repo', 'start', {})
+  expect(h.probes[0]).toEqual(['node', 'D:/companion.mjs', 'task-resume-candidate', '--cwd', 'D:/New Repo', '--json'])
+  expect(h.calls[0].argv.includes('--fresh')).toBe(true)
+  expect(h.calls[0].argv.includes('--resume-last')).toBe(false)
+
+  h.replies.push({ exitCode: 0, stdout: '{"jobId":"again"}', stderr: '' })
+  await executor.dispatch('D:/New Repo', 'next', {})
+  expect(h.calls[1].argv.includes('--resume-last')).toBe(true)
+
+  // A probe that fails keeps the old behaviour rather than dropping the thread.
+  h.probeReplies.push({ exitCode: 1, stdout: '', stderr: 'Unknown subcommand' })
+  h.replies.push({ exitCode: 0, stdout: '{"jobId":"old-companion"}', stderr: '' })
+  await executor.dispatch('D:/New Repo', 'next', {})
+  expect(h.calls[2].argv.includes('--resume-last')).toBe(true)
+
+  const probesBefore = h.probes.length
+  h.replies.push({ exitCode: 0, stdout: '{"jobId":"review"}', stderr: '' })
+  await executor.dispatch('D:/New Repo', 'review', { fresh: true })
+  expect(h.probes.length).toBe(probesBefore)
+  expect(h.calls[3].argv.includes('--fresh')).toBe(true)
 })
