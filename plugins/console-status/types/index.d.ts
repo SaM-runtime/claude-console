@@ -107,7 +107,7 @@ declare module 'claude-code' {
       isRefreshing: boolean
       hovered: string | null
       menuFor: string | null
-      /** statusPath → decision index → the option key picked in the pane, before it is sent. */
+      /** `statusPath\nask` → decision index → the option key picked in the pane; kept after filling, dropped when the ask changes. */
       decisionPicks: Record<string, DecisionPicks>
       dispatchPicker: 'executor' | 'model' | 'effort' | null
       selected: string | null

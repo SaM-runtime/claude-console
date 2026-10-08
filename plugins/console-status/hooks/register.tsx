@@ -1768,7 +1768,11 @@ export const register: Register = (on, options) => {
     const decisionView = (p: Project, prefix: string) => {
       if (!hasAsk(p)) return null
       const decisions = parseAsk(p.ask)
-      const mine = picks[p.statusPath] ?? {}
+      // Picks belong to this ask: a rewritten 等使用者 starts with none, so a stale key never lights.
+      const pickKey = p.statusPath + '\n' + p.ask
+      const mine = picks[pickKey] ?? {}
+      const dropPicks = (values: Record<string, Record<string, string>>) =>
+        Object.fromEntries(Object.entries(values).filter(([k]) => k !== p.statusPath && !k.startsWith(p.statusPath + '\n')))
       const pickable = decisions.some(d => d.options.length)
       const answer = decisionAnswer(decisions, mine)
       return (
@@ -1785,10 +1789,10 @@ export const register: Register = (on, options) => {
                         <Button key={prefix + 'opt-' + i + '-' + o.key} plain dimColor={other}
                           label={`${isPicked ? '●' : '○'} ${/^[①-⑨]$/.test(o.key) ? o.key : o.key + ')'} ${o.text}`}
                           onPress={() => void update($, decisionPicks, values => {
-                            const current = { ...(values[p.statusPath] ?? {}) }
+                            const current = { ...(values[pickKey] ?? {}) }
                             if (current[String(i)] === o.key) delete current[String(i)]
                             else current[String(i)] = o.key
-                            return { ...values, [p.statusPath]: current }
+                            return { ...dropPicks(values), [pickKey]: current }
                           })} />
                       </Box>
                     )
@@ -1801,14 +1805,12 @@ export const register: Register = (on, options) => {
               onPress={() => void (async () => {
                 const filled = await $.prompt.fill({ text: `「${p.name}」決策：${answer}`, mode: 'replace' })
                 if (!filled.isFilled) { await actionNotice($, `${p.name}：輸入框無法預填，請直接輸入「${p.name}」決策：${answer}`, false); return }
-                await update($, decisionPicks, values => { const next = { ...values }; delete next[p.statusPath]; return next })
+                // The pane stays open with the picks lit; Esc hands the keys back to the filled composer.
                 await update($, selected, () => p.name)
-                await $.ui.close({ id: PANE }).catch(() => {})
-                await update($, isPaneOpen, () => false)
-                await actionNotice($, `${p.name}：決策已填入輸入框，確認後送出`, true)
+                await actionNotice($, `${p.name}：決策已填入輸入框，按 Esc 回到輸入框後 Enter 送出`, true)
               })()} />
             {Object.keys(mine).length > 0 && <Button key={prefix + 'ask-clear'} plain dimColor label="清除選擇"
-              onPress={() => void update($, decisionPicks, values => { const next = { ...values }; delete next[p.statusPath]; return next })} />}
+              onPress={() => void update($, decisionPicks, dropPicks)} />}
           </Box>
         </Box>
       )

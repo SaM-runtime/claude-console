@@ -67,7 +67,8 @@ test('decision options are pressable rows and the primary button fills the compo
   on('env.get', () => ({ value: '/home/example' }))
   on('fs.read', () => ({ value: JSON.stringify({ executor: 'claude' }) }))
   on('ui.open', () => ({ value: {} }))
-  on('ui.close', () => ({ value: undefined } as any))
+  const closes: string[] = []
+  on('ui.close', (_: any, e: any) => { closes.push(e.id); return { value: undefined } as any })
   on('prompt.fill', (_: any, e: any) => { fills.push(e.text); return { isFilled: true } })
   await $.command.run({ command: 'console', args: 'demo' } as any)
   const ui = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
@@ -80,5 +81,11 @@ test('decision options are pressable rows and the primary button fills the compo
   expect((await ui.find({ key: 'sel-ask-submit' }))?.props.label).toBe('✎ 填入決策：1B 2-1')
   await ui.press({ key: 'sel-ask-submit' })
   expect(fills).toEqual(['「Project-Alpha」決策：1B 2-1'])
+  // The pane stays open and keeps the picks lit after filling.
+  expect(closes).toEqual([])
+  expect((await ui.find({ key: 'sel-opt-0-B' }))?.props.label).toBe('● B) 淺色主題')
+  expect((await ui.find({ key: 'sel-ask-submit' }))?.props.label).toBe('✎ 填入決策：1B 2-1')
+  await ui.press({ key: 'sel-ask-clear' })
+  expect((await ui.find({ key: 'sel-opt-0-B' }))?.props.label).toBe('○ B) 淺色主題')
   await ui.unmount()
 })

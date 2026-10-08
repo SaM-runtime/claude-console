@@ -2,7 +2,7 @@
 
 ## 0.9.5
 
-- **Decision options are pressed, not typed.** Each option under 待決 is its own row (`○ A) 深色主題`); a press lights it (`●`) and dims the others of that decision, a second press clears it. The primary button reads the answer as it stands (`✎ 填入決策：1B 2-1`) and fills the composer with `「專案」決策：1B 2-1`; a lettered key follows its number (`1B`), a numbered one is set apart (`2-1`), and a decision without options is left as `3：` to finish by hand. `清除選擇` drops the picks. Picks are kept per project until the answer is filled. When the composer cannot be prefilled, the pane says what to type instead.
+- **Decision options are pressed, not typed.** Each option under 待決 is its own row (`○ A) 深色主題`); a press lights it (`●`) and dims the others of that decision, a second press clears it. The primary button reads the answer as it stands (`✎ 填入決策：1B 2-1`) and fills the composer with `「專案」決策：1B 2-1`; a lettered key follows its number (`1B`), a numbered one is set apart (`2-1`), and a decision without options is left as `3：` to finish by hand. `清除選擇` drops the picks. Filling leaves the pane open with the picks lit (Esc hands the keys to the composer); picks belong to the ask and are dropped when 等使用者 changes. When the composer cannot be prefilled, the pane says what to type instead.
 - **Long CARD fields list one clause per line.** 狀態, 關卡 and 下一步 in the project card, and 下一步 in project mode, are split on top-level `；` like decisions (bracketed commands stay whole), so a dense paragraph reads as a list.
 
 ## 0.9.4
