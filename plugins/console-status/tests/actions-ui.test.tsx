@@ -169,6 +169,20 @@ test('decision fills the composer without spending a prompt and attaches selecti
   await ui.unmount()
 })
 
+test('a decision sent from the Tab suggestion, without selecting the row, still carries the project context', OPTIONS, async ($, on) => {
+  const { data } = fixture(on)
+  data.extra = '- 等使用者：Choose colour'
+  const submissions: any[] = []
+  on('prompt.submit', (_, e) => { submissions.push(e); return { text: e.text, context: e.context } })
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  expect(data.state.selected ?? null).toBe(null)
+  await $.prompt.submit({ text: '「Project Alpha」決策：blue' } as any)
+  expect(submissions[0].context.join('\n').includes(STATUS)).toBe(true)
+  // Another project's name, or no decision open, carries nothing.
+  await $.prompt.submit({ text: '「Nope」決策：blue' } as any)
+  expect(submissions[1].context ?? []).toEqual([])
+})
+
 test('release review submits context to Claude and cannot start a release process', OPTIONS, async ($, on) => {
   const { data } = fixture(on)
   data.extra = '- 關卡：release：Inspect evidence'

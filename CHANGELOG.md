@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.1
+
+- **A decision sent from the Tab suggestion carries its project.** ✎ 做決定 selects the project, so the prompt it fills goes out with the project's context (STATUS path, CARD, Git, executor digest). Taking the 0.17.0 Tab suggestion `「<project>」決策：` selected nothing, so the console got the answer without knowing where the project lives. A prompt that starts with `「<project>」決策：` for a project with a decision open now carries that project's context as if its row were selected.
+
 ## 0.17.0
 
 - **Reply to an executor from the console.** A Claude executor that finished its turn on a question to you (`執行者在等你回覆`) used to need you to switch to that session and attach. Its row now offers `↩ 回覆執行者` (key `r` in the action menu, and the primary button of the 下一步 card): it fills the composer with `/console reply <project> `, you write the answer and press Enter, and the console resumes the session that asked (the same `--bg --resume` a sync of that row already used) with your words as the prompt, plus the CARD rules a continue carries. The reply counts as work, so its result is synced like a continue's. A session waiting on a permission prompt still needs attaching. The row reads `執行者在等你回覆：↩ 回覆或同步`.

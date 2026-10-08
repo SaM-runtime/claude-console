@@ -10,7 +10,7 @@ import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, askingSession, commandTarget, replyPrompt, suggestedPrompt, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
+import { actionKinds, actionLabel, askingSession, commandTarget, decisionProject, replyPrompt, suggestedPrompt, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -1372,9 +1372,10 @@ export const register: Register = (on, options) => {
         e = { ...e, context: [...(e.context ?? []), progressContext(here.project, here.pipeline)] }
       }
     }
-    const selectedProject = await read($, selected)
-    if (!selectedProject || selectionClaim !== null) return next(e)
     const selection = await read($, snapshot)
+    // A decision taken from the Tab suggestion names its project without the row being selected.
+    const selectedProject = await read($, selected) ?? (selection ? decisionProject(selection.projects, e.text ?? '')?.name : undefined) ?? null
+    if (!selectedProject || selectionClaim !== null) return next(e)
     const base = selectionContext(selection, selectedProject)
     if (!base) return next(e)
     selectionClaim = selectedProject
