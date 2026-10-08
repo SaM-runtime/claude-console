@@ -1750,7 +1750,7 @@ export const register: Register = (on, options) => {
     dispatch_model: '派工模型：點一下展開可選模型，再點一個選定並存入 dispatch.json；影響後續觸發的派工。「預設」交給執行器決定；也可用 /console model <name> 自由輸入。',
     project_executor: '專案執行者：點一下選定此專案的覆寫（沿用、claude、codex、manual），存入 dispatch.json 的 projects。優先序：面板覆寫 > 登錄表 Executor 欄 > 全域。manual 代表面板不派工，只做 CARD、驗證與關卡。',
     fallback: 'Codex 不可用（額度低於門檻、broker 過期或找不到 companion）時，codexFallback=ask 不會派工；按此改由 Claude 執行同一個提示，任務會標記 codex→claude。',
-    dispatch_sync: '同步模型：同步 STATUS 只寫 CARD 與歷程，可指定較便宜的模型（例如 Claude 的 haiku、Codex 的 luna，依你的帳號有的模型）。「同派工」＝用上面的派工模型。Claude 設了同步模型後會開新的小 session，只讀 STATUS、git 與執行者摘要；啟動失敗或沒寫回時會提醒並改回原本的模型。/console sync-model 可自由輸入，/console sync-session 改 session 做法。',
+    dispatch_sync: '同步模型（目前全域執行者的；claude 和 codex 各自一份）：同步 STATUS 只寫 CARD 與歷程，可指定較便宜的模型（例如 Claude 的 haiku、Codex 的 luna，依你的帳號有的模型）。「同派工」＝用上面的派工模型。Claude 設了同步模型後會開新的小 session，只讀 STATUS、git 與執行者摘要；啟動失敗或沒寫回時會提醒並改回原本的模型。/console sync-model 可自由輸入，/console sync-session 改 session 做法。',
     dispatch_effort: '派工 effort：點一下展開模型支援的推理強度，再點一個選定並儲存；也可用 /console effort <level>。切換模型時不支援的 effort 會清空。',
     ACTION: '需決策：專案 STATUS 卡片的「等使用者」欄有內容，代表該專案有業務決策需由使用者拍板。',
     GATE: '待審核：STATUS 的 spec／review 關卡送交主控台判斷；release 只整理可否上線與理由，最後由你決定，不會自動上線。',
@@ -2447,11 +2447,12 @@ export const register: Register = (on, options) => {
               <Text color={picker === 'effort' ? C.blue : C.faint}>{picker === 'effort' ? '▴' : '▾'}</Text>
             </Box>
             <Text color={C.faint}>·</Text>
-            <Text color={C.dim}>同步</Text>
+            <Text color={C.dim}>同步模型</Text>
             <Box hover={{ scope: 'help-dispatch_sync' }}>
               <Button key="dispatch-sync" plain label={pickerValue('sync') || '同派工'} onPress={() => togglePicker('sync')} />
               <Text color={picker === 'sync' ? C.blue : C.faint}>{picker === 'sync' ? '▴' : '▾'}</Text>
             </Box>
+            {syncDispatch(dispatch.settings, '', dispatch.settings.executor, {}).fresh && <Text key="dispatch-sync-fresh" color={C.dim}>新 session</Text>}
             {(() => {
               // These controls set the global default; a selected project may dispatch elsewhere (registry or pane override).
               const p = sel === null ? null : s.projects.find(x => x.name === sel)
@@ -2462,7 +2463,7 @@ export const register: Register = (on, options) => {
             })()}
           </Box>
           {picker && <Box key="dispatch-picker" columnGap={1} flexWrap="wrap">
-            <Text color={C.dim}>{PICKER_LABEL[picker]}</Text>
+            <Text color={C.dim}>{picker === 'sync' ? `同步模型（${dispatch.settings.executor}）` : PICKER_LABEL[picker]}</Text>
             {pickerChoices(picker).map(value => {
               const chosen = pickerValue(picker) === value
               const label = value || (picker === 'sync' ? '同派工' : '預設')

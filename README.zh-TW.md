@@ -172,7 +172,7 @@ Model 與 effort 依相同順序。專案執行者與全域不同時，不沿用
 - 模型名稱是自由文字，照你的帳號有的填。空白欄位沿用一般派工的模型或強度；專案的 `sync` 欄位優先於全域。
 - `session`：`fresh` 開一個新的小 session，讀 STATUS.md、`git log`／`git status` 與執行者摘要，並只寫這些看得到的事實。`resume` 照舊接續專案的 session。不設時，Claude 有同步模型就用 `fresh`（便宜模型接續長 session 會用新模型的價格重寫整段快取），Codex 維持 `resume`，因為下一次繼續的 `--resume-last` 會接到 fresh 同步的 thread，而不是工作的 thread。執行者停下來問你的那一列，同步一律接續那個 session。
 - 用同步模型時都會提醒：接受通知寫 `（用 haiku・新 session）`，同步列寫 `claude（haiku・新 session） 寫回中`。同步模型啟動失敗時，主控台立刻改用原本的模型再同步一次並告訴你；用它的同步失敗或沒寫回 CARD 時，也會跳提醒。兩種情況之後的同步都改用原本的模型，直到你重新設定同步模型。
-- 面板標題下的 `同步` 控制選全域執行者的同步模型（`同派工` 為清除）。`/console sync-model [claude|codex] <名稱>`、`/console sync-effort [claude|codex] <強度>`、`/console sync-session fresh|resume` 設定相同欄位；`""` 清除，只輸入 `/console sync-model` 會列出目前設定。
+- 面板標題下的 `同步模型` 控制選全域執行者的同步模型（`同派工` 為清除）；同步會開新 session 時旁邊標 `新 session`，展開的選項列會寫明是哪個執行者的，例如 `同步模型（claude）`。`/console sync-model [claude|codex] <名稱>`、`/console sync-effort [claude|codex] <強度>`、`/console sync-session fresh|resume` 設定相同欄位；`""` 清除，只輸入 `/console sync-model` 會列出目前設定。
 
 ### executor: claude
 
