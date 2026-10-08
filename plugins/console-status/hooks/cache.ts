@@ -49,7 +49,8 @@ export function priceOverride(value: unknown): number | null {
  * one-hour TTL; one that reads almost nothing after a 5–60 minute gap on the same model is on five.
  */
 export function learnTtl(prev: CacheClock | null, startedAt: number, model: string, cacheRead: number): CacheTtl | null {
-  if (!prev || prev.model !== model || prev.tokens < CACHE_MIN_TOKENS) return null
+  // After a compaction nothing of the context was cached, so a cold read proves nothing about the TTL.
+  if (!prev || prev.compacted || prev.model !== model || prev.tokens < CACHE_MIN_TOKENS) return null
   const gap = startedAt - prev.at
   if (gap <= TTL_MS['5m'] + 15_000 || gap >= TTL_MS['1h'] - 60_000) return null
   if (cacheRead >= prev.tokens * 0.5) return '1h'
@@ -72,21 +73,35 @@ export function leftText(ms: number): string {
   return minutes >= 60 ? `${Math.floor(minutes / 60)}h` : `${minutes}m`
 }
 
-export type CacheView = { warm: boolean; leftMs: number; coldForMs: number; cost: number | null; ttl: CacheTtl }
+export type CacheView = { warm: boolean; leftMs: number; coldForMs: number; cost: number | null; ttl: CacheTtl; compacted?: true }
 
 /** Where the clock stands at `now`; null while a turn runs (it refreshes the cache) or the context is small. */
 export function cacheView(clock: CacheClock | null | undefined, now: number, busy: boolean, override: number | null): CacheView | null {
   if (!clock || busy || clock.tokens < CACHE_MIN_TOKENS) return null
   const ttl = clock.ttl
+  // A compacted conversation has nothing cached yet: the next prompt writes only the summary, whatever the clock.
+  if (clock.compacted) return { warm: false, leftMs: 0, coldForMs: Math.max(0, now - clock.compacted.at), cost: rewriteCost(clock.tokens, clock.model, ttl, override), ttl, compacted: true }
   const left = clock.at + TTL_MS[ttl] - now
   return { warm: left > 0, leftMs: Math.max(0, left), coldForMs: Math.max(0, -left), cost: rewriteCost(clock.tokens, clock.model, ttl, override), ttl }
 }
 
-/** The band chip: `快取 4m` while warm, `快取已冷 $0.90` once cold. */
+/** The band chip: `快取 4m` while warm, `快取已冷 $0.90` once cold, `已壓縮 $0.12` after a compaction. */
 export function cacheChip(view: CacheView, compact: boolean): { text: string; tone: 'green' | 'amber' | 'red' } {
+  if (view.compacted) return { text: `${compact ? '⧗壓' : '已壓縮'}${view.cost === null ? '' : ` ${usd(view.cost)}`}`, tone: 'green' }
   if (view.warm) return { text: compact ? `⧗${leftText(view.leftMs)}` : `快取 ${leftText(view.leftMs)}`, tone: view.leftMs <= CACHE_WARN_MS ? 'amber' : 'green' }
   const cost = view.cost === null ? '' : ` ${usd(view.cost)}`
   return { text: compact ? `⧗冷${cost}` : `快取已冷${cost}`, tone: 'red' }
+}
+
+/**
+ * The clock after the main conversation was compacted (by `/compact`, at the threshold, or by Claude Code
+ * while idle before the cache expired): its size is the summary's, and nothing of it is cached yet.
+ * Null when the size afterwards is unknown, so no stale figure stays up.
+ */
+export function compactedClock(prev: CacheClock | null, at: number, before: number | undefined, after: number | undefined): CacheClock | null {
+  if (!prev || typeof after !== 'number' || !Number.isFinite(after)) return null
+  const { hit: _hit, compacted: _was, ...rest } = prev
+  return { ...rest, at, tokens: after, compacted: { at, ...(typeof before === 'number' && Number.isFinite(before) ? { before } : {}) } }
 }
 
 /** The one-line toast before the cache goes cold, and the one when a prompt goes out on a cold cache. */
@@ -114,10 +129,11 @@ export function transcriptCache(text: string): TranscriptCache | null {
     if (!line.startsWith('{')) continue
     try { rows.push(JSON.parse(line)) } catch { /* a cut first line of a tail */ }
   }
-  const main = rows.filter(r => r && !r.isSidechain && typeof r.timestamp === 'string' && (r.type === 'assistant' || r.type === 'user'))
+  const main = rows.filter(r => r && !r.isSidechain && typeof r.timestamp === 'string' && (r.type === 'assistant' || r.type === 'user' || (r.type === 'system' && r.subtype === 'compact_boundary')))
   let last = -1
   for (let i = main.length - 1; i >= 0; i--) if (main[i].type === 'assistant' && main[i].message?.usage) { last = i; break }
-  if (last < 0) return null
+  // A compaction after the last response leaves its usage describing a context that is gone.
+  if (last < 0 || main.slice(last + 1).some(r => r.type === 'system')) return null
   const msg = main[last].message
   const u = msg.usage
   const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : 0

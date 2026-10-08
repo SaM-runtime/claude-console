@@ -21,7 +21,7 @@ import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
 import { FETCH_STALE_MS, agoText, commitLine, fileGroups, fileKind, gitBadge, gitFilesArgs, gitLine, gitLogArgs, gitNumstatArgs, gitProbeMode, gitShowArgs, gitSignature, gitStatusArgs, linesText, parseGitFiles, parseGitLog, parseGitShow, parseGitStatus, parseNumstat, parseNumstatFiles, parsePrView, prLine, prViewArgs } from './git'
 import type { PrInfo, CacheClock, GitCommit, GitDetail, GitInfo, UpdateInfo } from '../types'
-import { CACHE_WARN_MS, cacheChip, cacheTtlOption, cacheView, cacheWarning, hitRate, hitText, leftText, learnTtl, priceOverride, tokensText, transcriptCache, transcriptPathFor, ttlLabel, usd } from './cache'
+import { CACHE_WARN_MS, cacheChip, compactedClock, cacheTtlOption, cacheView, cacheWarning, hitRate, hitText, leftText, learnTtl, priceOverride, tokensText, transcriptCache, transcriptPathFor, ttlLabel, usd } from './cache'
 import { limitPace } from './pace'
 import { LOOP_NOTE, LoopMemory, loopKey, loopMode } from './loop'
 import type { TtlSource } from './cache'
@@ -1323,7 +1323,7 @@ export const register: Register = (on, options) => {
       // A prompt on a cold cache re-writes the whole context: say so, never hold the prompt.
       const clock = await read($, cacheClock).catch(() => null)
       const view = clock ? cacheView(clock, await $.clock.now(), false, priceOverride((options as any).cacheWritePrice)) : null
-      if (clock && view && !view.warm) $.ui.toast(cacheWarning(clock, view), { timeoutMs: 8000 })
+      if (clock && view && !view.warm && !view.compacted) $.ui.toast(cacheWarning(clock, view), { timeoutMs: 8000 })
     }
     // Project mode: the pipeline position rides along with a prompt only when it changed.
     // A failure here must never hold the person's prompt back.
@@ -1385,6 +1385,22 @@ export const register: Register = (on, options) => {
       const hit = hitRate(u)
       await update($, cacheClock, () => ({ at: startedAt, tokens, model: u.model, ttl, source, ...(hit === null ? {} : { hit }) }) as CacheClock)
     }
+    return result
+  })
+
+  // A compaction of the main conversation (/compact, the threshold, or Claude Code's own while idle, before
+  // the cache expires) replaces the context the clock describes: the next prompt writes only the summary.
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId || e.trigger === 'precompute' || !result || !result.messages) return result
+    await Promise.resolve().then(async () => {
+      const at = await $.clock.now()
+      const prev = await read($, cacheClock)
+      await update($, cacheClock, () => compactedClock(prev, at, result.tokensBefore, result.tokensAfter))
+      if (consoleActive && typeof result.tokensBefore === 'number' && typeof result.tokensAfter === 'number') {
+        await update($, feedAtom, list => [{ at, text: `對話已壓縮：${tokensText(result.tokensBefore!)} → ${tokensText(result.tokensAfter!)} tokens`, tone: 'teal' } as const, ...list].slice(0, 20))
+      }
+    }).catch(() => {})
     return result
   })
 
@@ -2449,7 +2465,14 @@ export const register: Register = (on, options) => {
               }
               if (paneCache) {
                 const warn = paneCache.view.warm && paneCache.view.leftMs <= CACHE_WARN_MS
-                out.push(usageRow('cache', tool(), '快取', 'cache', <Box flexShrink={1}>
+                const was = paneCache.clock.compacted?.before
+                if (paneCache.view.compacted) out.push(usageRow('cache', tool(), '快取', 'cache', <Box flexShrink={1}>
+                  <Text color={C.green} wrap="truncate-end">
+                    {`已壓縮 ${leftText(Math.max(1000, paneCache.view.coldForMs))}前`}
+                    <Text color={C.dim}>{`　${was ? `${tokensText(was)} → ` : ''}${tokensText(paneCache.clock.tokens)} tokens${paneCache.view.cost === null ? '' : `・下則重寫約 ${usd(paneCache.view.cost)}`}`}</Text>
+                  </Text>
+                </Box>))
+                else out.push(usageRow('cache', tool(), '快取', 'cache', <Box flexShrink={1}>
                   <Text color={paneCache.view.warm ? (warn ? C.amber : C.green) : C.red} wrap="truncate-end" bold={warn} backgroundColor={warn ? C.amberBg : undefined}>
                     {paneCache.view.warm ? `${leftText(paneCache.view.leftMs)} 後過期（${ttlLabel(paneCache.view.ttl, paneCache.clock.source)}）` : `已冷 ${leftText(paneCache.view.coldForMs)}`}
                     <Text color={C.dim}>{`　${tokensText(paneCache.clock.tokens)} tokens${paneCache.view.cost === null ? '' : `・${paneCache.view.warm ? '冷了' : '下則'}重寫約 ${usd(paneCache.view.cost)}`}`}</Text>

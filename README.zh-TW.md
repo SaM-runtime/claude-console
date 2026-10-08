@@ -346,6 +346,8 @@ Bash 或 PowerShell 要執行無法復原的指令時，會先用 Claude Code �
 
 估算方式：最後一次請求的 context tokens × 模型 input 牌價 × 1.25（5 分鐘 TTL）或 × 2（1 小時）；使用 gateway 或議價時可設定 `cacheWritePrice`。`cacheTtl: auto` 用的是 API 實際採用的 TTL：每則回應的 `usage.cache_creation` 會把快取寫入分成 `ephemeral_5m_input_tokens` 與 `ephemeral_1h_input_tokens`，Claude Code 把它記在 session 記錄裡，主控台每回合結束後讀取（面板標示 `1h・實際`）。還沒看到有寫入快取的回應前先當 5 分鐘（`5m・預設`）；若閒置 5–60 分鐘後的請求仍讀到大部分 context，則推測為 1 小時（`推測`）。結果會跨 session 記住。訂閱方案下這些是依 API 價格換算的參考值，不是實際扣款。
 
+**壓縮（含 Claude Code 的閒置壓縮）。** Claude Code 自 2.1.286 起，在 1 小時快取下的長對話可能會在你離開時、快取過期前自動壓縮（記錄中顯示 `Compacted while idle, before the prompt cache expired`）。這是 Claude Code 自己分批開放的功能；Claude Code 本身 `settings.json` 裡的 `idleCompaction` 只能把它關掉（`false`），`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` 設定最小壓縮門檻（至少 100k，預設 200k）。主控台 session 經過任何一種壓縮（閒置壓縮、`/compact` 或達門檻的自動壓縮）後，原本的 context 與價格就不再適用：橫帶改顯示 `已壓縮 $0.12`（下一則提示寫入摘要的費用），不再倒數或顯示 `快取已冷`；面板顯示 `已壓縮 3m前　214k → 31k tokens・下則重寫約 $0.12`，動態記一筆 `對話已壓縮：214k → 31k tokens`，也不會跳冷快取提醒。下一則回應後重新開始倒數。主控台不包裝、也不修改這些 Claude Code 設定。
+
 ## Workflow
 
 [claude-console workflow](workflow/claude-console/SKILL.md) 定義主控台操作程序。日常讀取限於登錄表、CARD 與簡短的受管理工作摘要。
