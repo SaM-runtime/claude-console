@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.0
+
+A usability pass over the daily flows (read the next step, decide, check the project card) at the widths the pane is really used at.
+
+- **Decisions from the keyboard.** With a project's action menu open, a digit picks that option of the first decision still open (`2` then `1` reads `1B 2-1`; a decision without options is skipped, and a digit after the last one starts over), Backspace takes the last pick back. The menu's key list shows `1–9 選選項` when there is something to pick.
+- **做決定 keeps your picks.** The 下一步 card's `✎ 做決定` and the `d` key filled the composer with an empty `「專案」決策：`, dropping options already pressed in the card; they now carry the answer (`「專案」決策：1B 2-1`), and say `Enter 送出` when every decision is answered.
+- **A command in backticks is one clause.** `cd app; npm test` inside backticks in 下一步, 狀態 or 待決 was split into two lines at the half-width `;`; a backtick span now stays whole (an unclosed one ends at the line break).
+- **The next step is never cut.** The 下一步 card wrapped only in the detail view; in the plain view a narrow pane cut the step mid-option (`A) 深色主題 B)`). It now always wraps.
+- **Narrow panes keep what matters.** The key-hint strip shortens to fit (`ⓘ ↑↓ Enter 選取・m 動作選單・停在標籤看說明` under 74 columns, `ⓘ ↑↓ Enter 選取・m 選單` under 46) instead of losing its end, and under 64 columns a quota's reset reads as its countdown (`4時0分後重置`), which used to be cut off after the clock time.
+- **The 執行者 section sits on the card's label grid.** Its four lines read `工作` / `活動` / `工具` / `回覆` in the same label column as 狀態, 待決 and 下一步; 活動 shows `10 分鐘前` instead of the raw timestamp, a read error is red, and a long last reply keeps its last 80 characters. Prompts still carry the full `執行者摘要：` form.
+
 ## 0.14.0
 
 - **The console knows what an executor was last doing.** A prompt sent with a project selected now carries `執行者摘要：`, four lines about the project's latest executor session: launch name, kind and status; last activity; the last three tool calls; its last words. The session is the one the daemon recorded for the job (a resume copy runs in a session the plugin did not record), the plugin's own record only when the daemon has none. Only the transcript's last 64 KB is parsed (a transcript past 4 MiB is tailed by a small process), and an unchanged one is not read again. The panel's gate review and continue prompts carry it too; `執行者摘要：無紀錄` when there is no job or transcript, and a read that fails never holds a prompt back. A prompt waits for the digest at most two seconds: past that it carries the project's last digest (its 最後活動 time shows how old it is), or `執行者摘要：無法讀取（逾時）` when there is none, and the read goes on to serve the next prompt. An expanded card shows the same lines in a 執行者 section, read when the card opens.

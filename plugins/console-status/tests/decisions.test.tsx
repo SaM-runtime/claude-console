@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { askSummary, parseAsk, splitClauses } from '../hooks/logic'
+import { askSummary, parseAsk, pickDecision, splitClauses } from '../hooks/logic'
 
 test('asks split into decisions on top-level semicolons, keeping bracketed commands whole', () => {
   expect(parseAsk('套用 patch（cd ~/p && patch -p1 < a.patch; echo ok）；決定是否處理窄螢幕')).toEqual([
@@ -87,5 +87,58 @@ test('decision options are pressable rows and the primary button fills the compo
   expect((await ui.find({ key: 'sel-ask-submit' }))?.props.label).toBe('✎ 填入決策：1B 2-1')
   await ui.press({ key: 'sel-ask-clear' })
   expect((await ui.find({ key: 'sel-opt-0-B' }))?.props.label).toBe('○ B) 淺色主題')
+  await ui.unmount()
+})
+
+test('a command in backticks stays one clause even with a half-width semicolon', () => {
+  expect(splitClauses('跑 `cd app; npm test`；看結果')).toEqual(['跑 `cd app; npm test`', '看結果'])
+  expect(splitClauses('`a; b`\nc; d')).toEqual(['`a; b`', 'c', 'd'])
+  // An unclosed backtick ends at the line break, so later lines still split.
+  expect(splitClauses('跑 `npm test\n下一行; 再一行')).toEqual(['跑 `npm test', '下一行', '再一行'])
+})
+
+test('digits answer the decisions in order and Backspace takes the last one back', () => {
+  const decisions = parseAsk('選配色：A) 深色 B) 淺色；要不要上線；保留資料：1) 保留 2) 清除')
+  expect(pickDecision(decisions, {}, '2')).toEqual({ '0': 'B' })
+  // The decision without options is skipped.
+  expect(pickDecision(decisions, { '0': 'B' }, '1')).toEqual({ '0': 'B', '2': '1' })
+  // Once everything is answered, the next digit starts over.
+  expect(pickDecision(decisions, { '0': 'B', '2': '1' }, '1')).toEqual({ '0': 'A' })
+  expect(pickDecision(decisions, {}, '3')).toBeNull()
+  expect(pickDecision(decisions, { '0': 'B', '2': '1' }, 'backspace')).toEqual({ '0': 'B' })
+  expect(pickDecision(decisions, {}, 'backspace')).toBeNull()
+})
+
+test('in the action menu digits pick options and 做決定 carries them into the composer', async ($, on) => {
+  on('clock.now', () => ({ value: Date.parse('2030-01-05T12:00:00Z') }))
+  on('env.get', () => ({ value: '/home/example' }))
+  on('fs.read', () => ({ value: JSON.stringify({ executor: 'claude' }) }))
+  on('ui.open', () => ({ value: {} }))
+  await $.command.run({ command: 'console', args: 'demo' } as any)
+  const ui = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'terminal',
+    props: { bodyColumns: 60, scroll: { offset: 0, total: 0, visible: 0 } } } as any)
+  await ui.post({ menu: 'Project-Alpha' }, { in: 'rows' } as any)
+  expect(await ui.find({ type: 'Text', text: /1–9 選選項/ })).toBeDefined()
+  await ui.post({ key: '2' }, { in: 'rows' } as any)
+  await ui.post({ key: '1' }, { in: 'rows' } as any)
+  expect((await ui.find({ key: 'm-info-opt-0-B' }))?.props.label).toBe('● B) 淺色主題')
+  expect((await ui.find({ key: 'm-info-ask-submit' }))?.props.label).toBe('✎ 填入決策：1B 2-1')
+  await ui.post({ key: 'backspace' }, { in: 'rows' } as any)
+  expect((await ui.find({ key: 'm-info-ask-submit' }))?.props.label).toBe('✎ 填入決策：1B 2：')
+  await ui.unmount()
+})
+
+test('a narrow pane keeps the next step whole, a key hint that fits and the reset countdown', async ($, on) => {
+  on('clock.now', () => ({ value: Date.parse('2030-01-05T12:00:00Z') }))
+  on('env.get', () => ({ value: '/home/example' }))
+  on('fs.read', () => ({ value: JSON.stringify({ executor: 'claude' }) }))
+  on('ui.open', () => ({ value: {} }))
+  await $.command.run({ command: 'console', args: 'demo' } as any)
+  const ui = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'terminal',
+    props: { bodyColumns: 50, scroll: { offset: 0, total: 0, visible: 0 } } } as any)
+  expect(await ui.find({ type: 'Text', text: /^ⓘ ↑↓ Enter 選取・m 動作選單/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\d+時\d+分後重置/ })).toBeDefined()
+  const next = await ui.find({ type: 'Text', text: /B\) 淺色主題/ })
+  expect(next?.props.wrap).toBe('wrap')
   await ui.unmount()
 })

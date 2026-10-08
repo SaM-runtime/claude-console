@@ -71,13 +71,15 @@ test('(e) an expanded card shows the executor\'s four lines, reading first, and 
   await ui.press({ key: 'sel-Project Alpha' })
   await ui.press({ key: 'detail' })
   await clock.settle()
-  expect(await ui.find({ type: 'Text', text: '執行者：讀取中…' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '讀取中…' })).toBeDefined()
   await clock.advance(1000)
   // The daemon's session (sess-alpha-daemon), not the plugin's (sess-alpha-plugin).
-  expect(await ui.find({ type: 'Text', text: '執行者：console-alpha · continue · completed/idle' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '最後活動：2030-01-05T11:50:00Z （10 分鐘前）' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '最後動作：Bash: npm test' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '最後一句：Alpha 完成。' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'console-alpha · continue · completed/idle' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '10 分鐘前' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Bash: npm test' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Alpha 完成。' })).toBeDefined()
+  // The four lines sit on the card's label grid.
+  for (const label of ['工作', '活動', '工具', '回覆']) expect(await ui.find({ type: 'Text', text: label })).toBeDefined()
   expect(logReads(data, ALPHA_LOG)).toBe(1)
 
   data.slow = 0
@@ -124,7 +126,7 @@ test('(f) a collapsed card, or another project, does not read files it does not 
   await clock.settle()
   expect(logReads(data, BETA_LOG)).toBe(1)
   expect(logReads(data, ALPHA_LOG)).toBe(2)
-  expect(await ui.find({ type: 'Text', text: '最後動作：Bash: git status' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Bash: git status' })).toBeDefined()
   await ui.unmount()
 })
 

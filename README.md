@@ -197,7 +197,7 @@ Set `關卡` to `無`, `spec：…`, `review：…`, or `release：…`. Unknown
 
 ## Project actions
 
-The right-click menu (or `m` on the keyboard for the row under the cursor; Esc closes it) and expanded project cards expose the same actions. The menu shows the project's state and pipeline, what is running with its elapsed time and latest output line, and the CARD's decision, gate and next step. A dispatch that is blocked by running work is stated as `派工鎖定：…` instead of a disabled button. Mobile uses card Buttons. Every trigger shows an immediate toast, shows elapsed seconds and rejects duplicate activation while running, then writes its result to the activity feed.
+The right-click menu (or `m` on the keyboard for the row under the cursor; Esc closes it) and expanded project cards expose the same actions. With the menu open, digit keys answer the pending decisions in order (`2` then `1` reads `1B 2-1`) and Backspace takes the last pick back; 做決定 and `d` fill the composer with the picks made so far. The menu shows the project's state and pipeline, what is running with its elapsed time and latest output line, and the CARD's decision, gate and next step. A dispatch that is blocked by running work is stated as `派工鎖定：…` instead of a disabled button. Mobile uses card Buttons. Every trigger shows an immediate toast, shows elapsed seconds and rejects duplicate activation while running, then writes its result to the activity feed.
 
 | Action | Availability | Behavior |
 | --- | --- | --- |
