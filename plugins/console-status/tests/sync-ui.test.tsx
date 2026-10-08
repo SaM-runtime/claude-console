@@ -19,7 +19,7 @@ const job = (id: string, prompt: string, status: string, startedAt: string, comp
   ({ id, jobClass: 'task', status, startedAt, ...(completedAt ? { completedAt } : {}), request: { prompt } })
 const CONTINUE = '依 STATUS CARD 的下一步繼續；遵守任務骨架；結束時更新 CARD（含關卡欄）\nSTATUS：x'
 
-function harness(on: any, jobs: any[], cardMs: number) {
+function harness(on: any, jobs: any[], cardMs: number, statusMtime?: number) {
   const clock = mock.clock(on, { now: T('2030-01-05T12:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:/Users/example', LOCALAPPDATA: 'D:/Local' })
   const files: Record<string, string> = {
@@ -29,6 +29,12 @@ function harness(on: any, jobs: any[], cardMs: number) {
     'C:/Users/example/.claude/handoffs/claude-sessions.json': '{"version":1,"roots":{}}',
   }
   const state = { jobs }
+  const mtimes: Record<string, number> = statusMtime === undefined ? {} : { [STATUS]: statusMtime }
+  on('fs.stat', (_: any, e: any) => {
+    const path = fixturePath(e.path)
+    if (!(path in mtimes)) throw Object.assign(new Error(`ENOENT ${path}`), { code: 'ENOENT' })
+    return { value: { size: (files[path] ?? '').length, mtimeMs: mtimes[path] } }
+  })
   const launches: string[][] = []
   const toasts: string[] = []
   on('fs.read', (_: any, e: any) => {
@@ -51,7 +57,7 @@ function harness(on: any, jobs: any[], cardMs: number) {
   on('session.id', () => ({ value: 'console-session' }))
   on('ui.open', () => ({ value: {} }))
   on('ui.toast', (_: any, e: any) => { toasts.push(String(e.text ?? JSON.stringify(e))); return { value: undefined } })
-  return { clock, files, state, launches, toasts }
+  return { clock, files, state, launches, toasts, mtimes }
 }
 
 test('a Codex continue that wrote the CARD is not 待同步 and nothing is auto-synced', OPTIONS, async ($, on) => {
@@ -119,4 +125,42 @@ test('autoSync off leaves 待同步 for the person', { options: { ...OPTIONS.opt
   const band = await $.ui.mount(BAND)
   expect(await band.find({ type: 'Text', text: /↻ 待同步 1/ })).toBeTruthy()
   await band.unmount()
+})
+
+test('a sync whose 更新 is a guessed or UTC time still lands: the STATUS file was written after it started', OPTIONS, async ($, on) => {
+  // The CARD was last written at 10:00 and has no newer write: 待同步, so one sync goes out.
+  const h = harness(on, [job('work-1', CONTINUE, 'completed', '2030-01-05T11:00:00Z', '2030-01-05T11:30:00Z')], T('2030-01-05T10:00:00Z'), T('2030-01-05T10:00:00Z'))
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  expect(h.launches.length).toBe(1)
+  const prompt = h.launches[0]!.at(-1)!
+  // The sync is told which rev counts and to take the time from the clock instead of guessing it.
+  expect(prompt.includes('以這次讀到的 rev 為準')).toBe(true)
+  expect(prompt.includes('Get-Date')).toBe(true)
+  // The executor writes the CARD at 12:00:40 but stamps 更新 with a time it guessed, an hour behind.
+  h.files[STATUS] = card(T('2030-01-05T11:00:00Z'))
+  h.mtimes[STATUS] = T('2030-01-05T12:00:40Z')
+  h.state.jobs = h.state.jobs.map((item: any) => item.id === 'sync-1' ? { ...item, status: 'completed', completedAt: '2030-01-05T12:01:00Z' } : item)
+  await h.clock.advance(60_000)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'detail' })
+  expect(await ui.find({ type: 'Text', text: '● 派工 ─ ● 執行 ─ ● 寫回 STATUS' })).toBeTruthy()
+  const band = await $.ui.mount(BAND)
+  expect(await band.find({ type: 'Text', text: /↻ 待同步 0/ })).toBeTruthy()
+  expect(h.launches.length).toBe(1)
+  await ui.unmount()
+  await band.unmount()
+})
+
+test('a sync Codex lists without its prompt is still known as a sync, so it is never synced again', OPTIONS, async ($, on) => {
+  const h = harness(on, [job('work-1', CONTINUE, 'completed', '2030-01-05T11:00:00Z', '2030-01-05T11:30:00Z')], T('2030-01-05T10:00:00Z'))
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  expect(h.launches.length).toBe(1)
+  // The state file drops the request; the sync writes nothing and finishes.
+  h.state.jobs = h.state.jobs.map((item: any) => item.id === 'sync-1' ? { id: 'sync-1', jobClass: 'task', status: 'completed', startedAt: item.startedAt, completedAt: '2030-01-05T12:01:00Z' } : item)
+  await h.clock.advance(60_000)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  await h.clock.advance(60_000)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  expect(h.launches.length).toBe(1)
 })

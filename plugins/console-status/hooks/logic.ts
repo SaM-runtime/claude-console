@@ -67,11 +67,24 @@ export function parseGate(value?: string): Gate | null {
   return { kind: match[1].toLowerCase() as Gate['kind'], detail: match[2].trim() }
 }
 
-/** Local time of the CARD's 更新 field in ms, or null. */
+/**
+ * The CARD's 更新 field in ms, or null. Executors write it by hand: `2030-01-05 12:00`, but also
+ * `2030/1/5 9:05`, with seconds, or as an instant with a zone (`2030-01-05T04:00:00Z`, `+08:00`).
+ * A zone is honoured; without one it is local time.
+ */
 export function cardTime(updated: string): number | null {
-  const m = updated.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/)
+  const m = updated.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T]+|\s*T\s*)(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?\s*(Z|[+-]\d{2}:?\d{2})?/i)
   if (!m) return null
-  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime()
+  const [y, mo, d, h, mi, sec] = [+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +(m[6] ?? 0)]
+  const zone = m[7]
+  if (!zone) return new Date(y, mo, d, h, mi, sec).getTime()
+  const offset = /^z$/i.test(zone) ? 0 : (zone[0] === '-' ? -1 : 1) * (+zone.slice(1, 3) * 60 + +zone.slice(-2))
+  return Date.UTC(y, mo, d, h, mi, sec) - offset * 60_000
+}
+
+/** The job a CARD names in its 更新 field (`· job <id>`, as the STATUS template asks), or ''. */
+export function cardJob(updated: string): string {
+  return updated.match(/\bjob\s+[`"]?([\w:.-]{4,})/i)?.[1] ?? ''
 }
 
 /** Project root that owns a STATUS path (`.console/STATUS.md` → repo root). */
@@ -96,7 +109,18 @@ export function cardWrittenSince(cardMs: number | null, startedAt: string | unde
   return cardMs !== null && !Number.isNaN(start) && cardMs >= Math.floor(start / 60_000) * 60_000
 }
 
-export function jobFlags(jobs: Job[], cardMs: number | null): JobFlag[] {
+/** The CARD names this job as the one that wrote it (the id, its native id, or a launch id ending in it). */
+function namedByCard(job: Job, named: string): boolean {
+  if (!named) return false
+  const ids = [job.id, job.nativeId ?? ''].filter(Boolean)
+  return ids.some(id => id === named || (named.length >= 6 && (id.endsWith(`:${named}`) || id.startsWith(`${named}:`))))
+}
+
+/**
+ * `cardMs`: when the CARD was last written, the later of its 更新 and the STATUS file's modification time;
+ * `named`: the job its 更新 names. Either way a finished job the CARD was written after (or by) is synced.
+ */
+export function jobFlags(jobs: Job[], cardMs: number | null, named = ''): JobFlag[] {
   const flags: JobFlag[] = []
   for (const j of jobs) {
     const summary = (j.summary ?? '').slice(0, 60)
@@ -107,7 +131,7 @@ export function jobFlags(jobs: Job[], cardMs: number | null): JobFlag[] {
     if (j.jobClass !== 'task') continue
     // A finished sync's output is the CARD itself: whether or not it changed it, the sync is not new work.
     if (j.kind === 'sync' && j.status === 'completed') continue
-    if (j.status === 'completed' && cardWrittenSince(cardMs, j.startedAt ?? j.createdAt)) continue
+    if (j.status === 'completed' && (cardWrittenSince(cardMs, j.startedAt ?? j.createdAt) || namedByCard(j, named))) continue
     const t = Date.parse(j.completedAt ?? j.createdAt ?? '')
     // A Claude job whose turn ended on a question to the user (the agent went idle while blocked).
     const asks = j.status === 'completed' && (j.phase ?? '').startsWith('idle: 等你回覆')
@@ -125,10 +149,17 @@ export function verifyNote(line: string): string {
   return quoted ? rest.trim() : ''
 }
 
-export function buildProject(row: RegistryRow, cardText: string | null, jobs: Job[], now: number): Project {
+/**
+ * `statusMtime`: when STATUS.md was last written, by the clock that also stamps the jobs. The 更新 text is
+ * written by an executor that may guess the time, write UTC or keep an old value, so the file's own
+ * time decides whether a job's result reached the CARD whenever it is later.
+ */
+export function buildProject(row: RegistryRow, cardText: string | null, jobs: Job[], now: number, statusMtime?: number): Project {
   const card = cardText === null ? null : parseCard(cardText)
   const updated = card?.['更新'] ?? ''
   const ms = cardTime(updated)
+  const mtime = card !== null && typeof statusMtime === 'number' && Number.isFinite(statusMtime) && statusMtime > 0 ? statusMtime : null
+  const written = ms === null ? mtime : mtime === null ? ms : Math.max(ms, mtime)
   return {
     name: row.name,
     statusPath: row.statusPath,
@@ -141,7 +172,8 @@ export function buildProject(row: RegistryRow, cardText: string | null, jobs: Jo
     verifyNote: verifyNote(card?.['驗證'] ?? ''),
     updated,
     isStale: ms !== null && now - ms > STALE_DAYS * 86400000,
-    jobs: jobFlags(jobs, ms),
+    jobs: jobFlags(jobs, written, cardJob(updated)),
+    ...(mtime !== null ? { statusMtime: mtime } : {}),
     tasks: jobTasks(jobs),
   }
 }

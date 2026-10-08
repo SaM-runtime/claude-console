@@ -83,8 +83,21 @@ export function dispatchKind(prompt: string | undefined): 'sync' | 'continue' | 
  * the one read now (a resumed session remembers older ones), a review gate waits for a finished review, and a
  * turn that reaches a gate or a decision ends instead of waiting on a question nobody is attached to see.
  */
+const REV_RULE = '開始前先重讀 CARD，以這次讀到的 rev 為準；寫入前再重讀一次，只有這兩次不同才停下回報（不要跟記憶裡更早的 rev 比）。'
+/** 更新 is how the console knows the CARD was written: a guessed or UTC time can read as older than the job. */
+const TIME_RULE = '更新欄寫現在的本機時間：先執行 date（Windows 用 Get-Date）取得，不要猜；格式 YYYY-MM-DD HH:MM · rev <n+1> · job <這次的工作 id，若知道>。'
+/**
+ * A sync resumes the project's session, which remembers an older rev: without the rule it saw a "conflict" and
+ * stopped without writing. With nothing new to record it still writes, so the console sees the sync land.
+ */
+const SYNC_RULES = [
+  REV_RULE,
+  TIME_RULE,
+  '沒有新結果也要寫回：更新時間與 rev，並在歷程記一行「同步：沒有新結果」。',
+]
 const CONTINUE_RULES = [
-  '開始前先重讀 CARD，以這次讀到的 rev 為準；寫入前再重讀一次，只有這兩次不同才停下回報（不要跟記憶裡更早的 rev 比）。',
+  REV_RULE,
+  TIME_RULE,
   '驗收綠、獨立審核還沒跑完：關卡留 無，下一步寫審核任務；審核跑完才設 review。',
   '審核任務的下一步以 .task/review-<name>.md 路徑開頭（才會開新 session）；修正工作以動詞開頭（例如「依 .task/review-x.md 的意見修正」）。',
   '到關卡或需要使用者決定時，把它寫進 CARD（等使用者／關卡）後結束這一輪，不要提問等待。',
@@ -92,7 +105,7 @@ const CONTINUE_RULES = [
 
 export function dispatchPrompt(project: Project, kind: 'sync' | 'continue'): string {
   const instruction = kind === 'sync' ? SYNC_INSTRUCTION : CONTINUE_INSTRUCTION
-  const rules = kind === 'continue' ? `\n${CONTINUE_RULES.join('\n')}` : ''
+  const rules = `\n${(kind === 'continue' ? CONTINUE_RULES : SYNC_RULES).join('\n')}`
   return `${instruction}\nSTATUS：${project.statusPath}\n只在此專案授權的本機範圍作業。不得執行正式環境變更或 release；需要上線時填入 release 關卡，交主控台整理後由使用者決定。${rules}`
 }
 

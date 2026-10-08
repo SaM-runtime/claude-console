@@ -24,6 +24,8 @@ export type Project = {
   isStale: boolean
   jobs: JobFlag[]
   tasks?: ExecutorTask[]
+  /** When STATUS.md was last written (file time), when the console could read it. */
+  statusMtime?: number
   /** `git status` of the project root; absent when it is not a repository or `gitProbe` is off. */
   git?: GitInfo
   /** The pull request of the current branch (`gh pr view`); absent without gh, a PR or `gitProbe: on`. */
