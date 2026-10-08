@@ -212,6 +212,15 @@ export function suggestedPrompt(s: Snapshot, pending: Record<string, unknown> = 
   return null
 }
 
+/**
+ * The project a decision prompt names (`「<project>」決策：…`, as ✎ 做決定 and the Tab suggestion write it) when it
+ * has a decision open, so a decision sent without selecting the row still carries that project's context.
+ */
+export function decisionProject<P extends Project>(projects: P[], text: string): P | undefined {
+  const named = text.trimStart().match(/^「([^」]+)」決策：/)?.[1]
+  return named ? projects.find(p => p.name === named && hasAsk(p)) : undefined
+}
+
 /** The actions a `/console <action> <project>` command can start; verify keeps its own second-press check. */
 export const COMMAND_ACTIONS = ['verify', 'sync', 'continue', 'reply', 'gate'] as const
 
