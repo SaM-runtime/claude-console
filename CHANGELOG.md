@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.0
+
+- **A cheaper model for 同步 STATUS, if you want one.** A sync only writes the CARD and its history, so `dispatch.json` can now give it its own model and effort, per executor (`"sync": { "claude": { "model": "haiku" }, "codex": { "model": "luna" } }`), globally or per project. Nothing is set by default, and names are free text, so an account without those models keeps syncing exactly as before. Set it from the pane's new `同步` control or `/console sync-model [claude|codex] <name>`, `/console sync-effort`, `/console sync-session`.
+- **A Claude sync on its own model runs in a new small session.** Resuming the project's long session on another model would re-cache all of it at that model's price, so the sync starts fresh, reads STATUS.md, git and the executor digest, and is told to write only what they show. Codex keeps resuming unless `"session": "fresh"` is set, since its next `--resume-last` would otherwise land on the sync's thread. `"session": "resume"` keeps the old way.
+- **It tells you, and falls back by itself.** The accepted notice and the 同步 line name the sync model (`（用 haiku・新 session）`). A sync model that fails to launch is retried at once with the normal model; one whose sync fails or writes nothing raises a toast. Either way, later syncs use the normal model until you set the sync model again.
+- `haiku` is offered among the Claude model choices.
+
 ## 0.17.1
 
 - **A decision sent from the Tab suggestion carries its project.** ✎ 做決定 selects the project, so the prompt it fills goes out with the project's context (STATUS path, CARD, Git, executor digest). Taking the 0.17.0 Tab suggestion `「<project>」決策：` selected nothing, so the console got the answer without knowing where the project lives. A prompt that starts with `「<project>」決策：` for a project with a decision open now carries that project's context as if its row were selected.

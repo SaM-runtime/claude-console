@@ -70,13 +70,13 @@ const elapsed = (ms: number) => {
 
 /** What the sync is doing, in words, after the step marks. */
 export function syncStatus(track: SyncProgress, now: number): string {
-  const who = track.executor ?? '執行者'
+  const who = `${track.executor ?? '執行者'}${track.model ? `（${track.model}${track.fresh ? '・新 session' : ''}）` : track.fresh ? '（新 session）' : ''}`
   const auto = track.auto ? '自動同步・' : ''
   switch (track.stage) {
     case 'dispatch': return `${auto}正在派工給 ${who}…（${elapsed(now - track.at)}）`
     case 'running': return `${auto}${who} 寫回中${track.phase ? `（${track.phase}）` : ''}・${elapsed(now - track.at)}`
     case 'done': return `${auto}已寫回 STATUS，用時 ${elapsed((track.endedAt ?? now) - track.at)}`
-    case 'unchanged': return `${auto}${who} 已結束，但 CARD 的「更新」沒有變：結果可能沒寫回，請開啟 STATUS 檢查或再同步一次`
+    case 'unchanged': return `${auto}${who} 已結束，但 CARD 的「更新」沒有變：結果可能沒寫回，請開啟 STATUS 檢查或再同步一次${track.model ? `（之後的同步改回原本的模型）` : ''}`
     case 'dispatch-failed': return `${auto}派工失敗：${track.detail ?? '原因不明'}`
     case 'run-failed': return `${auto}${track.detail ?? '同步工作失敗'}，請檢查任務`
   }

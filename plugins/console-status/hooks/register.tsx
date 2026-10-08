@@ -6,11 +6,11 @@ import type { Register, PluginOptions } from 'claude-code'
 import { resolveConfig, resolveFallbackOptions, legacyDispatchPath, activationMode, suggestNextMode } from './config'
 import type { ConsoleConfig } from './config'
 import { codexHealth, isActiveJob } from './logic'
-import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles, effectiveDispatch, setProjectOverride, executorSignature, projectOverride } from './dispatch'
+import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles, effectiveDispatch, setProjectOverride, executorSignature, projectOverride, syncDispatch, setSyncSetting } from './dispatch'
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, askingSession, commandTarget, decisionProject, replyPrompt, suggestedPrompt, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
+import { actionKinds, actionLabel, askingSession, commandTarget, decisionProject, replyPrompt, suggestedPrompt, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, freshSyncPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -50,7 +50,9 @@ const isEmptyTree = (node: any): boolean =>
   node === null || node === undefined || node === false || node === '' ||
   ((node.type === 'Box' || node.type === 'Text') && (node.children ?? []).every(isEmptyTree))
 type GlobalField = 'executor' | 'model' | 'effort'
-const PICKER_LABEL: Record<GlobalField, string> = { executor: '派工', model: '模型', effort: '強度' }
+/** The pane's pickers: the global dispatch fields, and the sync model for the global executor. */
+type PickerField = GlobalField | 'sync'
+const PICKER_LABEL: Record<PickerField, string> = { executor: '派工', model: '模型', effort: '強度', sync: '同步模型' }
 const SOURCE_LABEL: Record<string, string> = { pane: '面板覆寫', registry: '登錄表', global: '全域' }
 const TICK_MS = 60_000
 const SLOW_MS = 5 * 60_000
@@ -104,6 +106,30 @@ const AUTO_SYNCED_KEY = 'autoSynced'
 const AUTO_SYNCED_MAX = 200
 /** The same, for this process: holds even when the store refuses a write. */
 const autoSynced = new Set<string>()
+/**
+ * Sync models (`executor:model|effort`) that failed to launch, failed, or wrote nothing: later syncs use the normal model
+ * until the sync setting is changed. In `$.store`, mirrored here for when the store refuses a write.
+ */
+const SYNC_MODEL_FAILED_KEY = 'syncModelFailed'
+const syncModelFailed = new Map<string, string>()
+async function failedSyncModels($: any): Promise<Map<string, string>> {
+  const stored: unknown = await Promise.resolve().then(() => $.store.get(SYNC_MODEL_FAILED_KEY)).catch(() => null)
+  const all = new Map(syncModelFailed)
+  if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+    for (const [key, reason] of Object.entries(stored as Record<string, unknown>)) if (typeof reason === 'string') all.set(key, reason)
+  }
+  return all
+}
+async function markSyncModelFailed($: any, key: string, reason: string) {
+  syncModelFailed.set(key, reason)
+  const all = await failedSyncModels($)
+  await Promise.resolve().then(() => $.store.set(SYNC_MODEL_FAILED_KEY, Object.fromEntries([...all].slice(-20)))).catch(() => {})
+}
+async function clearSyncModelFailures($: any) {
+  syncModelFailed.clear()
+  await Promise.resolve().then(() => $.store.set(SYNC_MODEL_FAILED_KEY, {})).catch(() => {})
+}
+const syncModelLabel = (key: string) => key.replace(/^[^:]*:/, '').replace(/\|$/, '').replace('|', ' · ')
 /** While a job or a sync is under way the console looks every 20 s instead of every minute. */
 const FAST_TICK_MS = 20_000
 /**
@@ -331,7 +357,7 @@ function renderDispatch($: any, options: PluginOptions, key: string) {
 }
 
 /** One project's override, serialized with the global settings writes. */
-async function changeProjectDispatch($: any, config: ConsoleConfig, root: string, field: keyof ProjectOverride, value: string): Promise<DispatchSettings> {
+async function changeProjectDispatch($: any, config: ConsoleConfig, root: string, field: Exclude<keyof ProjectOverride, 'sync'>, value: string): Promise<DispatchSettings> {
   const previous = settingsWrite
   let release = () => {}
   settingsWrite = new Promise<void>(resolve => { release = resolve })
@@ -352,6 +378,35 @@ async function changeDispatch($: any, config: ConsoleConfig, field: GlobalField,
   settingsWrite = new Promise<void>(resolve => { release = resolve })
   await previous
   try { return await saveDispatch($, config, field, value) } finally { release() }
+}
+
+/** One sync setting, serialized with the other settings writes. */
+async function changeSync($: any, config: ConsoleConfig, field: 'model' | 'effort' | 'session', value: string, executor: 'claude' | 'codex'): Promise<DispatchSettings> {
+  const previous = settingsWrite
+  let release = () => {}
+  settingsWrite = new Promise<void>(resolve => { release = resolve })
+  await previous
+  try {
+    const { settings } = await readDispatch($, config)
+    const updated = setSyncSetting(settings, field, value, executor)
+    await $.fs.write(config.dispatchSettingsPath, JSON.stringify(updated, null, 2) + '\n')
+    return updated
+  } finally { release() }
+}
+
+/** The sync settings in words, with how to change them. */
+function syncSettingsText(settings: DispatchSettings): string {
+  const side = (executor: 'claude' | 'codex') => {
+    const own = settings.sync?.[executor]
+    return own?.model || own?.effort ? [own.model, own.effort].filter(Boolean).join(' · ') : '同一般派工'
+  }
+  const session = settings.sync?.session ?? '自動'
+  return [
+    `同步模型：claude ${side('claude')}｜codex ${side('codex')}｜session ${session}`,
+    '設定：/console sync-model [claude|codex] <模型>，/console sync-effort [claude|codex] <強度>（不寫執行者＝目前的全域執行者）',
+    '/console sync-session fresh|resume（自動＝Claude 有同步模型時開新 session，Codex 接續原本的 session）',
+    '模型名稱照你的帳號可用的填（例如 haiku、luna）；用 "" 清除，回到一般派工的模型。同步模型啟動失敗或沒寫回時，會提醒並改回原本的模型。',
+  ].join('\n')
 }
 
 async function saveDispatch($: any, config: ConsoleConfig, field: GlobalField, value?: string): Promise<DispatchSettings> {
@@ -789,11 +844,37 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       const asked = (kind === 'sync' || kind === 'reply') && chosen === 'claude' ? askingSession(p) : undefined
       if (kind === 'reply' && !asked) throw new Error('找不到等你回覆的執行者 session；請更新面板。')
       if (asked) dispatchOpts = { ...dispatchOpts, resumeSession: asked }
+      // A sync may have its own (cheaper) model and run in a new small session; a row that asked keeps its session.
+      // A sync model that failed before is skipped, and one that will not launch falls back to the normal model now.
+      let syncPlan: { model: string; modelKey: string; fresh: boolean } | null = null
+      let normalOpts: DispatchOptions | null = null
+      if (kind === 'sync' && !asked) {
+        const plan = syncDispatch(settings, root, chosen, dispatchOpts)
+        const modelKey = `${chosen}:${plan.model}|${plan.effort}`
+        const failed = plan.custom ? (await failedSyncModels($)).get(modelKey) : undefined
+        if (plan.custom && !failed) { normalOpts = dispatchOpts; dispatchOpts = { ...dispatchOpts, model: plan.model, effort: plan.effort } }
+        if (plan.fresh) dispatchOpts = { ...dispatchOpts, fresh: true }
+        syncPlan = { model: plan.custom && !failed ? plan.model || plan.effort : '', modelKey: plan.custom && !failed ? modelKey : '', fresh: plan.fresh }
+        if (failed) $.ui.toast(`${name}：同步模型 ${syncModelLabel(modelKey)} 上次${failed}，這次改用原本的模型。改好設定後用 /console sync-model 重新指定。`, { timeoutMs: 8000 })
+      }
       const executor = createExecutor(chosen, deps, execConfig)
-      // A continue carries what the executor was last doing, so a fresh session knows where it stopped.
+      // A continue carries what the executor was last doing, so a fresh session knows where it stopped; so does a fresh sync.
       const prompt = kind === 'reply' ? replyPrompt(p, request.text ?? '')
-        : kind === 'continue' ? `${dispatchPrompt(p, kind)}\n${await digestBlock($, options, p)}` : dispatchPrompt(p, dispatchKindOf)
-      const job = await executor.dispatch(root, prompt, dispatchOpts)
+        : kind === 'continue' ? `${dispatchPrompt(p, kind)}\n${await digestBlock($, options, p)}`
+        : syncPlan?.fresh ? freshSyncPrompt(p, await digestBlock($, options, p)) : dispatchPrompt(p, dispatchKindOf)
+      let job: ExecutorJob
+      try {
+        job = await executor.dispatch(root, prompt, dispatchOpts)
+      } catch (error) {
+        if (!normalOpts || !syncPlan) throw error
+        // The account may not have this model: say so, remember it, and sync with the normal model instead.
+        const why = error instanceof Error ? error.message : String(error)
+        await markSyncModelFailed($, syncPlan.modelKey, '無法啟動')
+        $.ui.toast(`${name}：同步模型 ${syncPlan.model} 無法啟動（${why}），改用原本的模型同步；之後的同步也先用原本的模型。`, { timeoutMs: 8000 })
+        dispatchOpts = { ...normalOpts, ...(dispatchOpts.fresh ? { fresh: true } : {}) }
+        syncPlan = { ...syncPlan, model: '', modelKey: '' }
+        job = await executor.dispatch(root, prompt, dispatchOpts)
+      }
       await update($, fallbackOffers, values => { if (!values[statusPath]) return values; const next = { ...values }; delete next[statusPath]; return next })
       if (isActiveJob(job)) unpublishedLaunches.set(`${workspaceKey(root)}:${jobKey(job)}`, { root: workspaceKey(root), job })
       const acceptedAt = await $.clock.now()
@@ -809,10 +890,15 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       } : item) }, acceptedAt) : value)
       if (kind === 'sync') {
         await update($, syncProgress, values => values[statusPath]?.stage !== 'dispatch' ? values
-          : { ...values, [statusPath]: { ...values[statusPath]!, stage: 'running', executor: chosen, jobId: id, phase: 'queued' } })
+          : { ...values, [statusPath]: {
+            ...values[statusPath]!, stage: 'running', executor: chosen, jobId: id, phase: 'queued',
+            ...(syncPlan?.model ? { model: syncPlan.model, modelKey: syncPlan.modelKey } : {}),
+            ...(syncPlan?.fresh ? { fresh: true } : {}),
+          } })
         void scheduleFastTick($, options)
       }
-      const fallbackNote = dispatchOpts.fallbackFrom ? `（Codex 改由 Claude：${dispatchOpts.fallbackReason}）` : ''
+      const fallbackNote = (dispatchOpts.fallbackFrom ? `（Codex 改由 Claude：${dispatchOpts.fallbackReason}）` : '')
+        + (syncPlan?.model || syncPlan?.fresh ? `（${[syncPlan.model && `用 ${syncPlan.model}`, syncPlan.fresh && '新 session'].filter(Boolean).join('・')}）` : '')
       await actionNotice($, `${name}：${chosen} 已接受${kind === 'sync' ? '同步 STATUS' : kind === 'reply' ? '你的回覆' : '繼續下一步'}${fallbackNote}，等待執行結果`, true)
     } else if (kind === 'decide') {
       // Options already picked in the pane go into the draft, so the CTA and `d` never drop them.
@@ -954,7 +1040,14 @@ async function advanceSyncs($: any, options: PluginOptions) {
     }
     return next
   })
-  for (const { name, track } of ended) await actionNotice($, `${name}：${syncStatus(track, s.at)}`, track.stage === 'done')
+  for (const { name, track } of ended) {
+    await actionNotice($, `${name}：${syncStatus(track, s.at)}`, track.stage === 'done')
+    // A cheap sync model that failed or wrote nothing is not used again until the setting changes.
+    if (track.modelKey && (track.stage === 'unchanged' || track.stage === 'run-failed')) {
+      await markSyncModelFailed($, track.modelKey, track.stage === 'unchanged' ? '沒寫回 STATUS' : '同步失敗')
+      $.ui.toast(`${name}：用 ${track.model} 同步${track.stage === 'unchanged' ? '沒寫回 STATUS' : '失敗'}，之後的同步改回原本的模型（/console sync-model 可重新指定）。`, { timeoutMs: 10_000 })
+    }
+  }
   await scheduleFastTick($, options)
 }
 
@@ -1533,6 +1626,27 @@ export const register: Register = (on, options) => {
         return { text }
       } catch (error) { return { text: `設定未儲存：${error instanceof Error ? error.message : String(error)}` } }
     }
+    // Sync's own model/effort (per executor) and session: open text, since accounts differ in the models they have.
+    const syncSetting = arg.match(/^sync-(model|effort|session)(?:\s+([\s\S]*))?$/)
+    if (syncSetting) {
+      const field = syncSetting[1] as 'model' | 'effort' | 'session'
+      const { config } = await paths($, options)
+      try {
+        const words = (syncSetting[2] ?? '').trim()
+        const { settings } = await readDispatch($, config)
+        if (!words) return { text: syncSettingsText(settings) }
+        const named = words.match(/^(claude|codex)(?:\s+([\s\S]*))?$/)
+        const executor = field !== 'session' && named ? named[1] as 'claude' | 'codex' : settings.executor
+        const raw = (field !== 'session' && named ? named[2] ?? '""' : words).trim()
+        const value = raw === '""' ? '' : raw
+        const saved = await changeSync($, config, field, value, executor)
+        await clearSyncModelFailures($)
+        await update($, dispatchRevision, v => v + 1)
+        const text = syncSettingsText(saved)
+        $.ui.toast(text.split('\n')[0]!)
+        return { text }
+      } catch (error) { return { text: `設定未儲存：${error instanceof Error ? error.message : String(error)}` } }
+    }
     const setting = arg.match(/^(executor|model|effort)(?:\s+([\s\S]*))?$/)
     if (setting) {
       const field = setting[1] as GlobalField
@@ -1549,7 +1663,7 @@ export const register: Register = (on, options) => {
           return { text }
         }
         const { settings, models } = await readDispatch($, config)
-        return { text: `目前：${settings.executor} · ${settings.model || '預設'} · ${settings.effort || '預設'}\nexecutor：claude, codex\nmodel：${models.length ? models.map(m => m.model).join(', ') : '快取不可用；使用 /console model <name>'}\neffort：${effortOptions(settings.executor, models, settings.model).join(', ')}\n以 /console model "" 或 /console effort "" 恢復執行者預設。` }
+        return { text: `目前：${settings.executor} · ${settings.model || '預設'} · ${settings.effort || '預設'}\nexecutor：claude, codex\nmodel：${models.length ? models.map(m => m.model).join(', ') : '快取不可用；使用 /console model <name>'}\neffort：${effortOptions(settings.executor, models, settings.model).join(', ')}\n以 /console model "" 或 /console effort "" 恢復執行者預設。\n${syncSettingsText(settings).split('\n')[0]}（/console sync-model 查看設定方式）` }
       } catch (error) { return { text: `設定未儲存：${error instanceof Error ? error.message : String(error)}` } }
     }
     const act = arg.match(new RegExp(`^(${COMMAND_ACTIONS.join('|')})(?:\\s+([\\s\\S]*))?$`))
@@ -1636,11 +1750,12 @@ export const register: Register = (on, options) => {
     dispatch_model: '派工模型：點一下展開可選模型，再點一個選定並存入 dispatch.json；影響後續觸發的派工。「預設」交給執行器決定；也可用 /console model <name> 自由輸入。',
     project_executor: '專案執行者：點一下選定此專案的覆寫（沿用、claude、codex、manual），存入 dispatch.json 的 projects。優先序：面板覆寫 > 登錄表 Executor 欄 > 全域。manual 代表面板不派工，只做 CARD、驗證與關卡。',
     fallback: 'Codex 不可用（額度低於門檻、broker 過期或找不到 companion）時，codexFallback=ask 不會派工；按此改由 Claude 執行同一個提示，任務會標記 codex→claude。',
+    dispatch_sync: '同步模型：同步 STATUS 只寫 CARD 與歷程，可指定較便宜的模型（例如 Claude 的 haiku、Codex 的 luna，依你的帳號有的模型）。「同派工」＝用上面的派工模型。Claude 設了同步模型後會開新的小 session，只讀 STATUS、git 與執行者摘要；啟動失敗或沒寫回時會提醒並改回原本的模型。/console sync-model 可自由輸入，/console sync-session 改 session 做法。',
     dispatch_effort: '派工 effort：點一下展開模型支援的推理強度，再點一個選定並儲存；也可用 /console effort <level>。切換模型時不支援的 effort 會清空。',
     ACTION: '需決策：專案 STATUS 卡片的「等使用者」欄有內容，代表該專案有業務決策需由使用者拍板。',
     GATE: '待審核：STATUS 的 spec／review 關卡送交主控台判斷；release 只整理可否上線與理由，最後由你決定，不會自動上線。',
     action_verify: '執行 CARD 驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。新的或被修改過的指令會先完整顯示，10 秒內再按一次才執行。只應填入本機驗證，不可填正式環境操作。',
-    action_sync: '直接請所選執行者將最近結果同步回 STATUS CARD 與歷程，使用派工模型設定與該執行者額度。',
+    action_sync: '直接請所選執行者將最近結果同步回 STATUS CARD 與歷程，使用同步模型（沒設定時用派工模型）與該執行者額度。',
     git: 'Git：✕衝突 合併衝突　CI✕ PR 的檢查失敗　●n 未提交／未追蹤檔案　↑n 未推送　↓n 落後上游　CI… 檢查進行中　✓ 乾淨。git 每次更新讀取（不鎖 index），PR 與 CI 透過 gh 每 5 分鐘讀取，CI 進行中時每分鐘。gitProbe 選項可改為 git 或 off。',
     cache: '主控台的 prompt 快取：最後一次請求後 5 分鐘（或 1 小時）內送出會讀快取；過期後下一則提示要把整段 context 重寫進快取，費用約為 input 價格的 1.25 倍（1 小時 TTL 為 2 倍）。TTL 由 cacheTtl 設定，auto 讀取 session 記錄裡 API 回報的實際 TTL（cache_creation 的 5m／1h 分項）。「上次命中」是上一個請求的 input 有多少比例由快取供應，偏低代表快取失效或剛冷啟動。',
     pipeline: '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線。● 完成　◉ 執行中　◆ 等待（主控台、使用者或同步）　✕ 驗證失敗　○ 未到。由 CARD、執行者工作與最近一次驗證推得。',
@@ -1846,8 +1961,19 @@ export const register: Register = (on, options) => {
       ? { config: demoContext?.config ?? resolveConfig(options, '', '', '/tmp'), dispatch: demoContext?.dispatch ?? { settings: { executor: s.executor ?? 'claude', model: '', effort: '' }, models: [] } }
       : await renderDispatch($, options, `${revision}|${s.at}`)
     const picker = await read($, dispatchPicker)
-    const togglePicker = (field: GlobalField) => void update($, dispatchPicker, v => (v === field ? null : field))
-    const choose = async (field: GlobalField, value: string) => {
+    const togglePicker = (field: PickerField) => void update($, dispatchPicker, v => (v === field ? null : field))
+    const choose = async (field: PickerField, value: string) => {
+      if (field === 'sync') {
+        try {
+          const saved = await changeSync($, config, 'model', value, dispatch.settings.executor)
+          await clearSyncModelFailures($)
+          await update($, dispatchPicker, () => null)
+          if (await demoEnabled($)) demoContext = { config, dispatch: await readDispatch($, config) }
+          await update($, dispatchRevision, v => v + 1)
+          $.ui.toast(syncSettingsText(saved).split('\n')[0]!)
+        } catch (error) { $.ui.toast(`設定未儲存：${error instanceof Error ? error.message : String(error)}`) }
+        return
+      }
       try {
         const saved = await changeDispatch($, config, field, value)
         await update($, dispatchPicker, () => null)
@@ -1878,8 +2004,13 @@ export const register: Register = (on, options) => {
       } catch (error) { $.ui.toast(`設定未儲存：${error instanceof Error ? error.message : String(error)}`) }
     }
     // '' is the executor's own default; a model set by /console model stays listed while it is chosen.
-    const pickerChoices = (field: GlobalField): string[] => {
-      const current = dispatch.settings[field] ?? ''
+    const pickerValue = (field: PickerField): string => field === 'sync' ? dispatch.settings.sync?.[dispatch.settings.executor]?.model ?? '' : dispatch.settings[field] ?? ''
+    const pickerChoices = (field: PickerField): string[] => {
+      const current = pickerValue(field)
+      if (field === 'sync') {
+        const values = ['', ...dispatch.models.map(m => m.model)]
+        return values.includes(current) ? values : [...values, current]
+      }
       const values = field === 'executor' ? ['claude', 'codex']
         : field === 'model' ? ['', ...dispatch.models.map(m => m.model)]
         : ['', ...effortOptions(dispatch.settings.executor, dispatch.models, dispatch.settings.model)]
@@ -2315,6 +2446,12 @@ export const register: Register = (on, options) => {
               <Button key="dispatch-effort" plain label={dispatch.settings.effort || '預設'} onPress={() => togglePicker('effort')} />
               <Text color={picker === 'effort' ? C.blue : C.faint}>{picker === 'effort' ? '▴' : '▾'}</Text>
             </Box>
+            <Text color={C.faint}>·</Text>
+            <Text color={C.dim}>同步</Text>
+            <Box hover={{ scope: 'help-dispatch_sync' }}>
+              <Button key="dispatch-sync" plain label={pickerValue('sync') || '同派工'} onPress={() => togglePicker('sync')} />
+              <Text color={picker === 'sync' ? C.blue : C.faint}>{picker === 'sync' ? '▴' : '▾'}</Text>
+            </Box>
             {(() => {
               // These controls set the global default; a selected project may dispatch elsewhere (registry or pane override).
               const p = sel === null ? null : s.projects.find(x => x.name === sel)
@@ -2327,12 +2464,13 @@ export const register: Register = (on, options) => {
           {picker && <Box key="dispatch-picker" columnGap={1} flexWrap="wrap">
             <Text color={C.dim}>{PICKER_LABEL[picker]}</Text>
             {pickerChoices(picker).map(value => {
-              const chosen = (dispatch.settings[picker] ?? '') === value
-              const label = value || '預設'
+              const chosen = pickerValue(picker) === value
+              const label = value || (picker === 'sync' ? '同派工' : '預設')
               return <Button key={`dispatch-${picker}-${value || 'default'}`} plain dimColor={!chosen}
                 label={chosen ? `[${label}]` : label} onPress={() => { if (chosen) togglePicker(picker); else void choose(picker, value) }} />
             })}
             {picker === 'model' && !dispatch.models.length && <Text color={C.dim}>模型快取讀不到；用 /console model &lt;name&gt; 輸入</Text>}
+            {picker === 'sync' && <Text color={C.dim}>{dispatch.models.length ? '清單沒有的模型：/console sync-model <name>' : '模型快取讀不到；用 /console sync-model <name> 輸入'}</Text>}
             <Button key="dispatch-picker-close" plain dimColor label="✕" onPress={() => togglePicker(picker)} />
           </Box>}
         </Box>

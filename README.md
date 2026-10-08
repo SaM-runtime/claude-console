@@ -157,6 +157,23 @@ Commands show or set the same values:
 
 Use `/console model ""` or `/console effort ""` to restore the selected executor's default. A missing, malformed, or unreadable file falls back to `executor`, `defaultModel`, and `defaultEffort`.
 
+### Sync model
+
+同步 STATUS only writes the CARD and its history, so it can run on a cheaper model than the work itself. Nothing is set by default: until you choose one, a sync uses the same model and session as any other dispatch. Set it per executor, because Claude and Codex accounts have different models:
+
+```json
+{
+  "executor": "claude", "model": "opus", "effort": "high",
+  "sync": { "claude": { "model": "haiku" }, "codex": { "model": "luna", "effort": "low" }, "session": "fresh" },
+  "projects": { "D:/Work/Beta": { "sync": { "session": "resume" } } }
+}
+```
+
+- Model names are free text: write whatever your account offers. A blank field falls back to the normal dispatch's model or effort, and a project's `sync` fields win over the global ones.
+- `session`: `fresh` starts a new small session that reads STATUS.md, `git log`/`git status` and the executor digest, and is told to write only what those show. `resume` continues the project's session, as before. Left out, a Claude sync with its own model goes `fresh` (a cheap model resuming the long session would re-cache all of it at the new model's price), and Codex stays on `resume`, because the next continue's `--resume-last` would pick up a fresh sync's thread instead of the work's. A row whose executor stopped to ask always resumes that session.
+- Every sync on its own model says so: the accepted notice reads `（用 haiku・新 session）` and the 同步 line `claude（haiku・新 session） 寫回中`. If the sync model fails to launch, the console syncs again at once with the normal model and tells you; if a sync on it fails or ends without writing the CARD, a toast says so. In both cases later syncs use the normal model until you set the sync model again.
+- The pane's `同步` control beneath the title picks the sync model of the global executor (`同派工` clears it). `/console sync-model [claude|codex] <name>`, `/console sync-effort [claude|codex] <level>` and `/console sync-session fresh|resume` set the same fields; `""` clears one, and `/console sync-model` alone shows them.
+
 ### executor: claude
 
 This is the default. It uses native Claude Code background agents and does not require Codex Companion or a Codex account.
@@ -167,7 +184,7 @@ The mod keeps a project-to-session mapping and the latest 20 managed job records
 
 The sessions file is mod-owned state. Malformed content fails closed instead of discarding the saved session identity. Writes are serialized inside one mod process, so keep one console process as its writer; simultaneous writes from separate processes are not guaranteed atomic. Claude dispatch adds no permission-bypass flag and inherits the normal Claude Code permission flow. A background agent that finished its turn on a question is answered from the console with `↩ 回覆執行者` (see [Project actions](#project-actions)); attach to one that waits on a permission prompt to handle the approval.
 
-Model Buttons offer the CLI aliases `fable`, `opus`, and `sonnet`; `/console model <name>` also accepts a free-form value. Effort options are `low`, `medium`, `high`, `xhigh`, and `max`. Empty values leave both choices to Claude Code.
+Model Buttons offer the CLI aliases `fable`, `opus`, `sonnet` and `haiku`; `/console model <name>` also accepts a free-form value. Effort options are `low`, `medium`, `high`, `xhigh`, and `max`. Empty values leave both choices to Claude Code.
 
 Claude Code's [agent view](https://code.claude.com/docs/en/agent-view) is the upstream interface for inspecting and controlling background agents. The [CLI reference](https://code.claude.com/docs/en/cli-reference) owns current command and flag behavior; this mod stores only the managed session identity needed to continue a project.
 
@@ -280,6 +297,8 @@ A dispatch shows RUNNING optimistically until managed state is refreshed. Accept
 | `/console executor [claude|codex]` | Show or choose the executor |
 | `/console model [name]` | Show choices or set a model |
 | `/console effort [level]` | Show choices or set effort |
+| `/console sync-model\|sync-effort [claude\|codex] [value]` | Show or set the sync's own model or effort ([Sync model](#sync-model)) |
+| `/console sync-session [fresh\|resume]` | Show or set whether a sync runs in a new session |
 | `/console project` | List each project's effective executor, model, and effort |
 | `/console project executor\|model\|effort <value\|inherit> <name>` | Set or clear one project's override |
 | `/console mode [auto\|console\|project]` | Show or choose project mode for this session |

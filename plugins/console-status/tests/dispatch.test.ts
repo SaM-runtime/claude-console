@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { parseSettings, parseModels, nextOption, effortOptions, modelOptions } from '../hooks/dispatch'
+import { parseSettings, parseModels, nextOption, effortOptions, modelOptions, syncDispatch, setSyncSetting } from '../hooks/dispatch'
 import { resolveConfig } from '../hooks/config'
 import { fixturePath } from './fixture-path'
 
@@ -49,7 +49,7 @@ test('fictional cache preserves model and effort order, ignores malformed and du
   const models = parseModels(JSON.stringify({ models: [null, {}, { slug: 'fiction-alpha', supported_reasoning_levels: [{ effort: 'high' }, { effort: 'max' }, null] }, { slug: 'fiction-beta' }, { slug: 'fiction-alpha' }] }))
   expect(models).toEqual([{ model: 'fiction-alpha', efforts: ['high', 'max'] }, { model: 'fiction-beta', efforts: [] }])
   expect(modelOptions('codex', models)).toEqual(models)
-  expect(modelOptions('claude', models).map(option => option.model)).toEqual(['fable', 'opus', 'sonnet'])
+  expect(modelOptions('claude', models).map(option => option.model)).toEqual(['fable', 'opus', 'sonnet', 'haiku'])
   expect(effortOptions('codex', models, 'fiction-alpha')).toEqual(['high', 'max'])
   expect(effortOptions('codex', models, 'unknown')).toEqual(['low', 'medium', 'high', 'xhigh'])
   expect(effortOptions('claude', models, 'opus')).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
@@ -183,4 +183,33 @@ test('path overrides expand home and roots preserve priority without changing pr
   expect(config.modelsCachePath).toBe('/home/example/models.json')
   expect(parseSettings(null, { executor: config.executor, model: config.defaultModel, effort: config.defaultEffort })).toEqual({ executor: 'codex', model: 'fiction-default', effort: 'low' })
   expect(resolveConfig({ companionStateRoots: '{' }, '/home/example', '', '/tmp').companionStateRoots).toEqual(['/home/example/.claude/plugins/data/codex-openai-codex/state', '/tmp/codex-companion'])
+})
+
+test('a sync uses its own model per executor, project over global, and Claude goes to a fresh session by default', () => {
+  const defaults = { executor: 'claude' as const, model: '', effort: '' }
+  const settings = parseSettings(JSON.stringify({
+    executor: 'claude', model: 'opus', effort: 'high',
+    sync: { claude: { model: 'haiku' }, codex: { model: 'luna', effort: 'low' }, session: 'bogus' },
+    projects: { 'D:/Beta': { sync: { claude: { effort: 'low' }, session: 'resume' } } },
+  }), defaults)
+  expect(settings.sync).toEqual({ claude: { model: 'haiku' }, codex: { model: 'luna', effort: 'low' } })
+  const base = { model: 'opus', effort: 'high' }
+  expect(syncDispatch(settings, 'D:/Alpha', 'claude', base)).toEqual({ model: 'haiku', effort: 'high', fresh: true, custom: true })
+  // Codex keeps resuming unless told: a fresh thread would become the one the next continue resumes.
+  expect(syncDispatch(settings, 'D:/Alpha', 'codex', {})).toEqual({ model: 'luna', effort: 'low', fresh: false, custom: true })
+  expect(syncDispatch(settings, 'd:/beta/', 'claude', base)).toEqual({ model: 'haiku', effort: 'low', fresh: false, custom: true })
+  // Nothing set: exactly the normal dispatch.
+  expect(syncDispatch(parseSettings('{}', defaults), 'D:/Alpha', 'claude', base)).toEqual({ model: 'opus', effort: 'high', fresh: false, custom: false })
+  expect(syncDispatch({ ...defaults, sync: { session: 'fresh' } }, 'D:/Alpha', 'codex', {})).toEqual({ model: '', effort: '', fresh: true, custom: false })
+})
+
+test('sync settings are set and cleared field by field, leaving no empty objects', () => {
+  let settings: any = { executor: 'codex', model: '', effort: '' }
+  settings = setSyncSetting(settings, 'model', 'luna')
+  settings = setSyncSetting(settings, 'model', 'haiku', 'claude')
+  settings = setSyncSetting(settings, 'session', 'fresh')
+  expect(settings.sync).toEqual({ codex: { model: 'luna' }, claude: { model: 'haiku' }, session: 'fresh' })
+  expect(() => setSyncSetting(settings, 'session', 'later')).toThrow()
+  settings = setSyncSetting(setSyncSetting(setSyncSetting(settings, 'model', ''), 'model', '', 'claude'), 'session', '')
+  expect('sync' in settings).toBe(false)
 })

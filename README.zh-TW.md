@@ -157,6 +157,23 @@ Model 與 effort 依相同順序。專案執行者與全域不同時，不沿用
 
 `/console model ""`、`/console effort ""` 會恢復所選執行器的預設。檔案不存在、損壞或無法讀取時，使用 `executor`、`defaultModel`、`defaultEffort`。
 
+### 同步模型
+
+同步 STATUS 只寫 CARD 與歷程，可以用比實作便宜的模型。預設什麼都不設：沒選之前，同步跟其他派工用一樣的模型與 session。依執行者分開設定，因為 Claude 和 Codex 帳號的模型不同：
+
+```json
+{
+  "executor": "claude", "model": "opus", "effort": "high",
+  "sync": { "claude": { "model": "haiku" }, "codex": { "model": "luna", "effort": "low" }, "session": "fresh" },
+  "projects": { "D:/Work/Beta": { "sync": { "session": "resume" } } }
+}
+```
+
+- 模型名稱是自由文字，照你的帳號有的填。空白欄位沿用一般派工的模型或強度；專案的 `sync` 欄位優先於全域。
+- `session`：`fresh` 開一個新的小 session，讀 STATUS.md、`git log`／`git status` 與執行者摘要，並只寫這些看得到的事實。`resume` 照舊接續專案的 session。不設時，Claude 有同步模型就用 `fresh`（便宜模型接續長 session 會用新模型的價格重寫整段快取），Codex 維持 `resume`，因為下一次繼續的 `--resume-last` 會接到 fresh 同步的 thread，而不是工作的 thread。執行者停下來問你的那一列，同步一律接續那個 session。
+- 用同步模型時都會提醒：接受通知寫 `（用 haiku・新 session）`，同步列寫 `claude（haiku・新 session） 寫回中`。同步模型啟動失敗時，主控台立刻改用原本的模型再同步一次並告訴你；用它的同步失敗或沒寫回 CARD 時，也會跳提醒。兩種情況之後的同步都改用原本的模型，直到你重新設定同步模型。
+- 面板標題下的 `同步` 控制選全域執行者的同步模型（`同派工` 為清除）。`/console sync-model [claude|codex] <名稱>`、`/console sync-effort [claude|codex] <強度>`、`/console sync-session fresh|resume` 設定相同欄位；`""` 清除，只輸入 `/console sync-model` 會列出目前設定。
+
 ### executor: claude
 
 這是預設執行器，使用 Claude Code 原生背景 agent，不需要 Codex Companion 或 Codex 帳號。
@@ -167,7 +184,7 @@ Mod 會在 `claudeSessionsPath` 保存專案與 session 的對應，以及每個
 
 Session 檔是 mod 自有狀態。內容損壞時會 fail closed，不會丟棄已保存的 session 身分。同一 mod process 內的寫入會序列化，因此請只讓一個主控台 process 寫入；不同 process 同時寫入不保證 atomic。Claude 派工不加入略過權限的旗標，沿用一般 Claude Code 權限流程。背景 agent 做完一輪停在提問時，用 `↩ 回覆執行者` 在主控台回覆即可（見[專案動作](#專案動作)）；停在權限提示（等待批准）的仍要在 Claude Code attach 該 agent 處理。
 
-模型 Button 提供 CLI 已觀察到的 alias：`fable`、`opus`、`sonnet`；`/console model <name>` 也接受自由輸入。Effort 為 `low`、`medium`、`high`、`xhigh`、`max`。空值交給 Claude Code 決定。
+模型 Button 提供 CLI 已觀察到的 alias：`fable`、`opus`、`sonnet`、`haiku`；`/console model <name>` 也接受自由輸入。Effort 為 `low`、`medium`、`high`、`xhigh`、`max`。空值交給 Claude Code 決定。
 
 Claude Code 官方 [agent view](https://code.claude.com/docs/en/agent-view) 是背景 agent 的檢視與控制介面；旗標的現行定義以 [CLI reference](https://code.claude.com/docs/en/cli-reference) 為準。此 mod 只保存延續專案所需的受管理 session 身分。
 
@@ -279,6 +296,8 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | `/console executor [claude|codex]` | 顯示或選擇執行器 |
 | `/console model [name]` | 顯示選項或指定模型 |
 | `/console effort [level]` | 顯示選項或指定 effort |
+| `/console sync-model\|sync-effort [claude\|codex] [值]` | 顯示或設定同步專用的模型或強度（[同步模型](#同步模型)） |
+| `/console sync-session [fresh\|resume]` | 顯示或設定同步是否開新 session |
 | `/console project` | 列出每個專案實際生效的執行者、model、effort |
 | `/console project executor\|model\|effort <值\|inherit> <名稱>` | 設定或清除單一專案的覆寫 |
 | `/console mode [auto\|console\|project]` | 顯示或選擇此 session 的專案模式 |
