@@ -21,7 +21,9 @@ import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
 import { gitBadge, gitLine, gitProbeMode, gitStatusArgs, parseGitStatus, parsePrView, prLine, prViewArgs } from './git'
 import type { PrInfo, CacheClock, UpdateInfo } from '../types'
-import { CACHE_WARN_MS, cacheChip, cacheTtlOption, cacheView, cacheWarning, leftText, learnTtl, priceOverride, tokensText, transcriptCache, transcriptPathFor, ttlLabel, usd } from './cache'
+import { CACHE_WARN_MS, cacheChip, cacheTtlOption, cacheView, cacheWarning, hitRate, hitText, leftText, learnTtl, priceOverride, tokensText, transcriptCache, transcriptPathFor, ttlLabel, usd } from './cache'
+import { limitPace } from './pace'
+import { LOOP_NOTE, LoopMemory, loopKey, loopMode } from './loop'
 import type { TtlSource } from './cache'
 import type { CacheTtl } from './cache'
 import { commandPreview, dangerReason, guardMode } from './guard'
@@ -101,6 +103,8 @@ let cacheWarnedFor = -1
 let cacheTimer: { cancel(): void } | undefined
 /** When the countdown last redrew: every 15 s, every second in the last minute. */
 let cacheDrawnAt = 0
+/** Failed tool calls, for the loop guard; a new session forgets them. */
+const loops = new LoopMemory()
 /** This session's transcript, as a classic hook names it (or as Claude Code lays it out, until one does). */
 let transcriptPath: string | null = null
 let updateTimer: { cancel(): void } | undefined
@@ -867,10 +871,40 @@ async function syncCacheFromTranscript($: any, options: PluginOptions, seed: boo
   if (!clock) {
     if (!seed || await read($, isTurnRunning)) return
     const { ttl, source } = found.ttl && auto ? { ttl: found.ttl, source: 'usage' as const } : await cacheTtlFor($, options, null)
-    await update($, cacheClock, value => value ?? ({ at: found.at, tokens: found.tokens, model: found.model, ttl, source }) as CacheClock)
+    await update($, cacheClock, value => value ?? ({ at: found.at, tokens: found.tokens, model: found.model, ttl, source, ...(found.hit === undefined ? {} : { hit: found.hit }) }) as CacheClock)
   } else if (found.ttl && auto && (clock.ttl !== found.ttl || clock.source !== 'usage')) {
     await update($, cacheClock, value => value ? ({ ...value, ttl: found.ttl!, source: 'usage' }) as CacheClock : value)
   }
+}
+
+// Loop guard: the second identical failure in a row tells the model not to try a third time.
+async function loopCheck($: any, e: any, result: any) {
+  if (!result || result.deny !== undefined) return result
+  if (!loops.record(loopKey(e), result.isError ? String(result.text ?? '') : null)) return result
+  $.ui.toast(`重複失敗護欄：${e.tool} 以相同參數第二次失敗，已提醒 Claude 換個做法`, { timeoutMs: 6000 })
+  return { ...result, context: [...(result.context ?? []), LOOP_NOTE] }
+}
+
+/** Command guard: the answer for a refused command, or null to run it. */
+async function commandGuard($: any, options: PluginOptions, e: any): Promise<{ deny: string } | null> {
+  // PowerShell is the Windows shell tool where a build offers it.
+  const tool: string = e.tool
+  if (tool !== 'Bash' && tool !== 'PowerShell') return null
+  const mode = guardMode((options as any).commandGuard)
+  const command = String((e as any).command ?? '')
+  const reason = mode === 'off' ? null : dangerReason(command)
+  if (!reason) return null
+  const preview = commandPreview(command)
+  let allowed = false
+  if (mode === 'ask') {
+    const answer = await $.ui.ask(`指令護欄：${reason}。\n${preview}\n要執行這個指令嗎？`, { header: '指令護欄', options: ['執行一次', '拒絕'] }).catch(() => '')
+    allowed = answer === '執行一次'
+  }
+  const at = await $.clock.now()
+  await update($, feedAtom, list => [{ at, text: `指令護欄${allowed ? '放行' : '攔下'}：${reason}`, tone: allowed ? 'amber' : 'red' } as const, ...list].slice(0, 20))
+  if (allowed) return null
+  $.ui.toast(`指令護欄攔下：${reason}`, { timeoutMs: 6000 })
+  return { deny: `console-status 指令護欄攔下這個指令（${reason}）${mode === 'deny' ? '：commandGuard 設為 deny' : '：使用者沒有同意'}。不要換個寫法重試同樣的效果；改用可復原的做法，或請使用者自己執行。` }
 }
 
 /** Redraws the countdown and warns once, shortly before the cache goes cold. */
@@ -1067,6 +1101,7 @@ async function stopConsole($: any) {
 
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
+    loops.clear()
     sessionCwd = typeof e.cwd === 'string' ? e.cwd.replace(/\\/g, '/') : null
     sessionStartCwd = typeof e.cwd === 'string' ? e.cwd : null
     lastProgress = ''
@@ -1164,7 +1199,8 @@ export const register: Register = (on, options) => {
       const tokens = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens + u.output_tokens
       const prev = await read($, cacheClock)
       const { ttl, source } = await cacheTtlFor($, options, learnTtl(prev, startedAt, u.model, u.cache_read_input_tokens))
-      await update($, cacheClock, () => ({ at: startedAt, tokens, model: u.model, ttl, source }) as CacheClock)
+      const hit = hitRate(u)
+      await update($, cacheClock, () => ({ at: startedAt, tokens, model: u.model, ttl, source, ...(hit === null ? {} : { hit }) }) as CacheClock)
     }
     return result
   })
@@ -1179,24 +1215,10 @@ export const register: Register = (on, options) => {
 
   // Command guard: an irreversible shell command asks first, whatever the permission mode allows.
   on('tool.call', async ($, e, next) => {
-    // PowerShell is the Windows shell tool where a build offers it.
-    const tool: string = e.tool
-    if (tool !== 'Bash' && tool !== 'PowerShell') return next(e)
-    const mode = guardMode((options as any).commandGuard)
-    const command = String((e as any).command ?? '')
-    const reason = mode === 'off' ? null : dangerReason(command)
-    if (!reason) return next(e)
-    const preview = commandPreview(command)
-    let allowed = false
-    if (mode === 'ask') {
-      const answer = await $.ui.ask(`指令護欄：${reason}。\n${preview}\n要執行這個指令嗎？`, { header: '指令護欄', options: ['執行一次', '拒絕'] }).catch(() => '')
-      allowed = answer === '執行一次'
-    }
-    const at = await $.clock.now()
-    await update($, feedAtom, list => [{ at, text: `指令護欄${allowed ? '放行' : '攔下'}：${reason}`, tone: allowed ? 'amber' : 'red' } as const, ...list].slice(0, 20))
-    if (allowed) return next(e)
-    $.ui.toast(`指令護欄攔下：${reason}`, { timeoutMs: 6000 })
-    return { deny: `console-status 指令護欄攔下這個指令（${reason}）${mode === 'deny' ? '：commandGuard 設為 deny' : '：使用者沒有同意'}。不要換個寫法重試同樣的效果；改用可復原的做法，或請使用者自己執行。` }
+    const guarded = await commandGuard($, options, e)
+    if (guarded) return guarded
+    const result: any = await next(e)
+    return loopMode((options as any).loopGuard) === 'on' ? loopCheck($, e, result) : result
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -1370,7 +1392,7 @@ export const register: Register = (on, options) => {
     action_verify: '執行 CARD 驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。新的或被修改過的指令會先完整顯示，10 秒內再按一次才執行。只應填入本機驗證，不可填正式環境操作。',
     action_sync: '直接請所選執行者將最近結果同步回 STATUS CARD 與歷程，使用派工模型設定與該執行者額度。',
     git: 'Git：✕衝突 合併衝突　CI✕ PR 的檢查失敗　●n 未提交／未追蹤檔案　↑n 未推送　↓n 落後上游　CI… 檢查進行中　✓ 乾淨。git 每次更新讀取（不鎖 index），PR 與 CI 透過 gh 每 5 分鐘讀取，CI 進行中時每分鐘。gitProbe 選項可改為 git 或 off。',
-    cache: '主控台的 prompt 快取：最後一次請求後 5 分鐘（或 1 小時）內送出會讀快取；過期後下一則提示要把整段 context 重寫進快取，費用約為 input 價格的 1.25 倍（1 小時 TTL 為 2 倍）。TTL 由 cacheTtl 設定，auto 讀取 session 記錄裡 API 回報的實際 TTL（cache_creation 的 5m／1h 分項）。',
+    cache: '主控台的 prompt 快取：最後一次請求後 5 分鐘（或 1 小時）內送出會讀快取；過期後下一則提示要把整段 context 重寫進快取，費用約為 input 價格的 1.25 倍（1 小時 TTL 為 2 倍）。TTL 由 cacheTtl 設定，auto 讀取 session 記錄裡 API 回報的實際 TTL（cache_creation 的 5m／1h 分項）。「上次命中」是上一個請求的 input 有多少比例由快取供應，偏低代表快取失效或剛冷啟動。',
     pipeline: '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線。● 完成　◉ 執行中　◆ 等待（主控台、使用者或同步）　✕ 驗證失敗　○ 未到。由 CARD、執行者工作與最近一次驗證推得。',
     action_continue: '6 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
@@ -1688,14 +1710,14 @@ export const register: Register = (on, options) => {
       </Box>
     )
     // A remaining-amount meter that fills from the left; amber when low, red when nearly out.
-    const meterRow = (key: string, tool: string, { id, label, used, hint, note }: { id: string; label: string; used: number; hint: string; note?: string }) => {
+    const meterRow = (key: string, tool: string, { id, label, used, hint, note, pace }: { id: string; label: string; used: number; hint: string; note?: string; pace?: { text: string; tone: 'amber' | 'red' } | null }) => {
       // Context goes low where rotation is advised (half used), red at 30% left.
       const b = id === 'ctx' ? battery(used, 10, 100 - ROTATE_PERCENT, 30) : battery(used, 10)
       const tone = b.tone === 'red' ? C.red : b.tone === 'low' ? C.orange : C.green
       return usageRow(key, tool, label, id, [
         <Box key={key + '-meter'} flexShrink={0}>{rich ? <ui.Client key={'battery-' + id + '-' + label} module="./battery.tsx" width={METER + 5} height={1} props={{ percent: b.left, tone }} /> : batteryBody(b.left, tone, ui)}</Box>,
         hint !== '' ? <Box key={key + '-hint'} flexShrink={0}><Text color={C.red}>{hint}</Text></Box> : null,
-        note ? <Box key={key + '-note'} flexShrink={1}><Text color={C.dim} wrap="truncate-end">{note}</Text></Box> : null,
+        note || pace ? <Box key={key + '-note'} flexShrink={1}><Text color={C.dim} wrap="truncate-end">{note}{pace ? <Text color={pace.tone === 'red' ? C.red : C.amber}>{`${note ? '・' : ''}${pace.text}`}</Text> : null}</Text></Box> : null,
       ])
     }
     const target = nextProject(s)
@@ -2060,13 +2082,17 @@ export const register: Register = (on, options) => {
               const tool = () => { const t = first ? 'Claude' : ''; first = false; return t }
               const out: any[] = []
               if (ctx !== null) out.push(meterRow('ctx', tool(), { id: 'ctx', label: '上下文', used: ctx, hint: ctx >= ROTATE_PERCENT ? '建議換新主控台' : '' }))
-              for (const l of limits) out.push(meterRow('lim' + l.kind, tool(), { id: 'limit_' + l.kind, label: limitName(l.kind), used: l.percent, hint: '', note: resetText(l.resetsAt, now) }))
+              for (const l of limits) {
+                const pace = s.demo ? null : limitPace(l.kind, l.percent, l.resetsAt, now)
+                out.push(meterRow('lim' + l.kind, tool(), { id: 'limit_' + l.kind, label: limitName(l.kind), used: l.percent, hint: '', note: resetText(l.resetsAt, now), pace: pace && !pace.lasts ? pace : null }))
+              }
               if (paneCache) {
                 const warn = paneCache.view.warm && paneCache.view.leftMs <= CACHE_WARN_MS
                 out.push(usageRow('cache', tool(), '快取', 'cache', <Box flexShrink={1}>
                   <Text color={paneCache.view.warm ? (warn ? C.amber : C.green) : C.red} wrap="truncate-end" bold={warn} backgroundColor={warn ? C.amberBg : undefined}>
                     {paneCache.view.warm ? `${leftText(paneCache.view.leftMs)} 後過期（${ttlLabel(paneCache.view.ttl, paneCache.clock.source)}）` : `已冷 ${leftText(paneCache.view.coldForMs)}`}
                     <Text color={C.dim}>{`　${tokensText(paneCache.clock.tokens)} tokens${paneCache.view.cost === null ? '' : `・${paneCache.view.warm ? '冷了' : '下則'}重寫約 ${usd(paneCache.view.cost)}`}`}</Text>
+                    {typeof paneCache.clock.hit === 'number' ? (() => { const hit = hitText(paneCache.clock.hit); return <Text color={hit.tone === 'red' ? C.red : hit.tone === 'amber' ? C.amber : C.dim}>{`・上次${hit.text}`}</Text> })() : null}
                   </Text>
                 </Box>))
               }

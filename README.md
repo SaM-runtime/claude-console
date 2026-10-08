@@ -72,6 +72,7 @@ Marketplace management is covered by the official [plugin marketplace documentat
 | `codexMinQuotaPercent` | Codex quota (percent remaining) below which the fallback applies | `10` |
 | `gitProbe` | `on`: each project's Git state (branch, uncommitted, unpushed) plus its pull request and CI checks through `gh`; `git`: local Git only; `off`: neither (see [Git, PR and CI](#git-pr-and-ci)) | `on` |
 | `commandGuard` | `ask`: an irreversible shell command asks you first (see [Command guard](#command-guard)); `deny`: refuse them; `off`: no guard | `ask` |
+| `loopGuard` | `on`: a tool call that fails twice with the same arguments and the same error tells the model not to try a third time (see [Loop guard](#loop-guard)); `off`: no note | `on` |
 | `cacheHint` | `on`: show the console's prompt-cache countdown and re-write cost (see [Prompt cache and cost](#prompt-cache-and-cost)); `off`: hide | `on` |
 | `cacheTtl` | `auto` (the TTL the API reports in the session transcript's usage; 5 minutes until one is seen), `5m` or `1h` | `auto` |
 | `cacheWritePrice` | USD per million cache-write tokens for the estimate; empty uses the model's list price | Empty |
@@ -291,9 +292,17 @@ It covers recursive deletes (`rm -r`, `Remove-Item -Recurse`, `rd /s`) except bu
 
 The guard runs in every session where the plugin is enabled, background executors included: a background agent that hits it waits for an answer like any other question (attach to it), and one with no one to ask is refused. Set `commandGuard` to `deny` to refuse without asking, or `off` to turn it off.
 
+## Loop guard
+
+When a tool call fails twice in a row with the same tool, the same arguments (its `description` aside) and the same error, in the same loop (the main thread or one subagent), the second error carries a note only the model reads: do not try a third time as is; re-read the error, change approach or ask the user. A toast says the note went out. It goes out once per pair; a success forgets the call, so a new pair sends it again. An error naming a time, a date or a random id is never matched, and only the last error is kept, so A, B, A sends nothing. A new session forgets every call. `loopGuard: off` turns it off.
+
+## Usage pace
+
+Beside each Claude rate-limit meter (5 hours, the week, a per-model window), the pane checks the average rate since that window opened: when it would run out before the reset, the reset time is followed by `照目前速度約 2 小時 13 分後用完`, amber, red inside the last hour. A window used for less than ten minutes, unused or already empty shows nothing extra.
+
 ## Prompt cache and cost
 
-The console session's prompt cache lasts five minutes (or an hour) from the start of its last request. After that, the next prompt re-writes the whole context at the cache-write price. The band shows `快取 4m` while the cache is warm (the last minute counts in seconds, highlighted: `快取 45s`) and `快取已冷 $0.90` once it is cold; a toast warns a minute before it expires and again when a prompt goes out on a cold cache. The pane's Claude frame shows the same line with the context size, and `本次花費`, this session's cost at API list prices. After an install or `/reload-plugins` the countdown resumes from the last response in the session transcript; when the transcript cannot be read, the pane shows `下一則回應後開始倒數` until the next response. The band chip is hidden while a turn runs (the pane says `回應中，結束後重新倒數`) and when the context is under 20k tokens.
+The console session's prompt cache lasts five minutes (or an hour) from the start of its last request. After that, the next prompt re-writes the whole context at the cache-write price. The band shows `快取 4m` while the cache is warm (the last minute counts in seconds, highlighted: `快取 45s`) and `快取已冷 $0.90` once it is cold; a toast warns a minute before it expires and again when a prompt goes out on a cold cache. The pane's Claude frame shows the same line with the context size and `上次命中 92%`, the share of the last request's input the cache served (amber under 70%, red under 30%: the cache lapsed or was just rebuilt), and `本次花費`, this session's cost at API list prices. After an install or `/reload-plugins` the countdown resumes from the last response in the session transcript; when the transcript cannot be read, the pane shows `下一則回應後開始倒數` until the next response. The band chip is hidden while a turn runs (the pane says `回應中，結束後重新倒數`) and when the context is under 20k tokens.
 
 The estimate is the context tokens of the last request times the model's input list price times 1.25 (five-minute TTL) or 2 (one hour); set `cacheWritePrice` for other rates (a gateway, negotiated pricing). With `cacheTtl: auto` the TTL is the one the API actually used: each response's `usage.cache_creation` splits its cache writes into `ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`, and Claude Code records it in the session transcript, which the console reads after each turn (the pane marks it `1h・實際`). Until a response that wrote to the cache is seen, it is five minutes (`5m・預設`), or one hour once a request after a 5–60 minute idle gap still reads most of the context (`推測`); either is remembered across sessions. On a subscription plan these are API-price equivalents, not charges.
 
@@ -311,6 +320,13 @@ claude plugin install paste-preview@paste-preview
 ```
 
 Thanks to alan890104 for paste-preview.
+
+Three features since 0.10.0 take their idea from mods in other people's repositories. console-status contains none of their code; each is its own implementation:
+
+- The usage meters' pace (`照目前速度約 2 小時 13 分後用完`) follows session-meter's “whether the current pace lasts until the reset”, and the loop guard follows loop-guard's “no third try of the same failing call”, both in [claude-code-mods](https://github.com/arasovic/claude-code-mods) by [arasovic](https://github.com/arasovic) (MIT License).
+- The cache hit rate beside the cache clock follows cache-clock in [claude-code-mods](https://github.com/hamzafer/claude-code-mods) by [hamzafer](https://github.com/hamzafer) (MIT License).
+
+Thanks to arasovic and hamzafer.
 
 ## Limitations
 

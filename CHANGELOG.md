@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0
+
+- **Usage pace.** Each Claude rate-limit meter in the pane checks the average rate since its window opened; when that rate runs the window out before it resets, the reset time is followed by `照目前速度約 2 小時 13 分後用完` (amber, red inside the last hour). Idea from session-meter in arasovic/claude-code-mods (MIT).
+- **Cache hit rate.** The pane's cache line adds `上次命中 92%`, the share of the last request's input the cache served (amber under 70%, red under 30%). Idea from cache-clock in hamzafer/claude-code-mods (MIT).
+- **Loop guard.** A tool call that fails twice in a row with the same arguments and the same error gets a note only the model reads, telling it not to try a third time, and a toast. `loopGuard`: `on` / `off`. Idea from loop-guard in arasovic/claude-code-mods (MIT).
+- The README credits the three sources under “Works with other plugins”; none of their code is included.
+
 ## 0.9.4
 
 - **Waiting sessions are listed as what they wait for.** Every `claude agents` entry with `state: blocked` was shown as `等待批准`, though none of them was at a permission prompt: on 2026-10-07 the pane listed nine, five retired by the daemon and four executors that had finished a turn on a question. Now `status: waiting` is `等待批准`, `status: idle` with `state: blocked` is `停在提問`, and any other blocked session stays `等待輸入`.

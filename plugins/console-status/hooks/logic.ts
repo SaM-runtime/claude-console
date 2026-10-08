@@ -653,6 +653,11 @@ export function limitName(kind: string): string {
 
 /** Hover help for a usage row, naming the model when the window is scoped to one. */
 export function limitHelp(kind: string): string {
+  const base = limitHelpBase(kind)
+  return parseLimitKind(kind) ? `${base}照這個視窗開始以來的平均速度會撐不到重置時，後面會標出約多久後用完。` : base
+}
+
+function limitHelpBase(kind: string): string {
   const parsed = parseLimitKind(kind)
   const model = limitModel(kind)
   const name = limitName(kind)

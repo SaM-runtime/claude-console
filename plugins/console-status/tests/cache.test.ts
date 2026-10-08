@@ -67,7 +67,7 @@ test('the transcript tail gives the last main-thread response, timed from its re
     '{"type":"last-prompt"}',
   ].join('\n')
   // Nothing written by the last response: the TTL is the one its cache entry was written with.
-  expect(transcriptCache(text)).toEqual({ at: Date.parse('2030-01-01T00:01:00Z'), tokens: 110, model: 'm', ttl: '1h' })
+  expect(transcriptCache(text)).toEqual({ at: Date.parse('2030-01-01T00:01:00Z'), tokens: 110, hit: 100 / 101, model: 'm', ttl: '1h' })
   expect(transcriptCache(row({ type: 'assistant', timestamp: '2030-01-01T00:00:00Z', message: { id: 'a', model: 'm', usage: usage(30, 0) } }))?.ttl).toBe('5m')
   expect(transcriptCache('')).toBe(null)
   expect(transcriptPathFor('C:/Users/me/.claude/', 'D:\\Work\\K app', 'abc')).toBe('C:/Users/me/.claude/projects/D--Work-K-app/abc.jsonl')

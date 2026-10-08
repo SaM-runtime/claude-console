@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.9.4",
+  "version": "0.10.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -92,6 +92,12 @@
       "title": "Command guard",
       "description": "ask: an irreversible shell command (recursive delete, force push, hard reset, git clean, dropped tables, publish) asks you first, even when permissions would let it run. deny: always refuse them. off: no guard.",
       "default": "ask"
+    },
+    "loopGuard": {
+      "type": "string",
+      "title": "Loop guard",
+      "description": "on: a tool call that fails twice with the same arguments and the same error tells Claude not to try a third time. off: no note.",
+      "default": "on"
     },
     "cacheHint": {
       "type": "string",

@@ -25,6 +25,7 @@ function fixture(on: any, answer: string | null, transcripts: Record<string, str
       return { result: { questions: e.questions, answers: { [e.questions[0].question]: answer } } }
     }
     data.ran.push(e.command)
+    if (String(e.command).startsWith('fail')) return { isError: true, result: undefined, text: 'Exit code 1\nboom' }
     return { result: { stdout: 'ok', stderr: '', interrupted: false } }
   })
   return { data, clock, store }
@@ -92,7 +93,7 @@ test('the band counts the cache down, warns a minute before it goes cold and pri
   // While the turn runs the cache is being refreshed: no chip.
   expect(await band.find({ type: 'Text', text: /^快取/ })).toBeUndefined()
   await $.turn.complete({ turnId: 't', answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' } as any)
-  expect(data.state.cacheClock).toEqual({ at: clock.now(), tokens: 200_000, model: 'claude-opus-5-5', ttl: '5m', source: 'default' })
+  expect(data.state.cacheClock).toEqual({ at: clock.now(), tokens: 200_000, model: 'claude-opus-5-5', ttl: '5m', source: 'default', hit: 150_000 / 197_000 })
   await clock.advance(15_000)
   expect(await band.find({ type: 'Text', text: '快取 4m' })).toBeDefined()
   await clock.advance(4 * 60_000)
@@ -107,7 +108,7 @@ test('the band counts the cache down, warns a minute before it goes cold and pri
   expect(data.toasts.some(t => /^主控台快取已過期 1m：這則提示會重寫約 200k tokens/.test(t))).toBe(true)
   await band.unmount()
   const pane = await $.ui.mount(PANE)
-  expect(await pane.find({ type: 'Text', text: /^已冷 1m　200k tokens・下則重寫約 \$1\.00$/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /^已冷 1m　200k tokens・下則重寫約 \$1\.00・上次命中 76%$/ })).toBeDefined()
   await pane.unmount()
 })
 
@@ -148,6 +149,25 @@ test('after a turn the Stop hook names the transcript, and its usage replaces a 
   expect(data.state.cacheClock.ttl).toBe('5m')
   await ($ as any).classic.Stop({ hook_event_name: 'Stop', session_id: 's', transcript_path: 'E:/t/s.jsonl', cwd: 'D:/Console', stop_hook_active: false })
   await clock.settle()
-  expect(data.state.cacheClock).toEqual({ at: clock.now(), tokens: 200_000, model: 'claude-opus-5-5', ttl: '1h', source: 'usage' })
+  expect(data.state.cacheClock).toEqual({ at: clock.now(), tokens: 200_000, model: 'claude-opus-5-5', ttl: '1h', source: 'usage', hit: 150_000 / 197_000 })
   expect(store.cacheTtl).toEqual({ ttl: '1h', source: 'usage' })
+})
+
+test('loop guard: the second identical failure carries a note for the model and a toast; off sends none', OPTIONS, async ($, on) => {
+  const { data } = fixture(on, null)
+  const first: any = await $.tool.call({ tool: 'Bash', command: 'fail now' } as any)
+  expect(first.context ?? []).toEqual([])
+  const second: any = await $.tool.call({ tool: 'Bash', command: 'fail now', description: 'again' } as any)
+  expect(second.isError).toBe(true)
+  expect(second.context.at(-1)).toMatch(/重複失敗護欄.*不要第三次/)
+  expect(data.toasts.some(t => t.startsWith('重複失敗護欄：Bash'))).toBe(true)
+  const third: any = await $.tool.call({ tool: 'Bash', command: 'fail now' } as any)
+  expect(third.context ?? []).toEqual([])
+})
+
+test('loopGuard off adds no note', { options: { ...OPTIONS.options, loopGuard: 'off' } }, async ($, on) => {
+  fixture(on, null)
+  await $.tool.call({ tool: 'Bash', command: 'fail now' } as any)
+  const second: any = await $.tool.call({ tool: 'Bash', command: 'fail now' } as any)
+  expect(second.context ?? []).toEqual([])
 })
