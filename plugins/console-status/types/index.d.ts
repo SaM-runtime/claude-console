@@ -47,7 +47,8 @@ export type ActionKind = 'verify' | 'sync' | 'continue' | 'decide' | 'gate' | 'o
 export type ContinueConfirmation = { at: number; signature: string }
 export type VerificationResult = { command: string; at: number; ok: boolean; exitCode: number | null; lines: string[]; truncated: boolean }
 export type PendingAction = { kind: ActionKind; at: number }
-export type ReviewRequest = { text: string; projectName: string; at: number; turnId?: string }
+/** `gate` is the CARD 關卡 the review was submitted for; a CARD that moved past it ends the row's wait. */
+export type ReviewRequest = { text: string; projectName: string; at: number; turnId?: string; gate?: string }
 
 /** This plugin's installed version, the marketplace's latest, and an update in progress. */
 export type UpdateInfo = { current: string | null; latest: string | null; checkedAt: number; error?: string; phase: 'idle' | 'checking' | 'updating' | 'updated' | 'failed'; message?: string }
