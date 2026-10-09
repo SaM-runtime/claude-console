@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.19.0
+
+Fixes from the 2026-10-09 review of the dispatch flow.
+
+- **A Codex review is independent.** A continue whose 下一步 starts with a review task's path already ran a Claude review in a new session, but a Codex review resumed the work's own thread with `--resume-last`, so the code was reviewed with the context that wrote it. It now starts a new Codex thread (`--fresh`). The fix-up after it resumes the newest thread, the review's, which holds the findings; the work's progress is in STATUS, the task files and git. The skill no longer points to `codex-companion review`, which is read-only and cannot set the `review` gate.
+- **A review is not told the worker's conclusion.** A review continue carried the executor digest like any continue, so it opened with the work session's own last words (for example "tests all pass"). A review now gets no digest and is told to judge from the task file, its own run of the acceptance and the diff.
+- **The executor digest follows the executor that did the latest work.** It was read only from Claude's records. A Codex project showed `無紀錄`, and one that used to run on Claude showed that old Claude session as its latest, on the project card and in every prompt about it. When the latest task is Codex's, the digest names that job, its status and time, and says to go by STATUS and git. A Codex project whose latest task fell back to Claude still reads the Claude session.
+- **One rev rule everywhere.** 0.9.5 changed the continue and sync prompts to "the rev read when the turn starts counts; stop only if it changed before the write". The STATUS template's CARD rules and the project-mode system prompt still said to stop whenever rev differs from the one last read, the rule that made resumed sessions stop on a false conflict. Both now say the same as the prompts.
+
 ## 0.18.1
 
 - **The sync model control says what it is.** Beneath the pane title it reads `同步模型 haiku ▾` instead of `同步 haiku ▾`, adds `新 session` when a sync will start a new session, and its choices line names the executor they are for (`同步模型（claude）`), since Claude and Codex each keep their own sync model and switching the global executor shows the other one.

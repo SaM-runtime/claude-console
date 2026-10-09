@@ -149,6 +149,17 @@ export function freshSession(project: Project): boolean {
   return /^`?\.task[\\/]+review-[^\s）)`]*\.md/i.test(project.next.trim())
 }
 
+/**
+ * An independent review judges from its task file, the acceptance output and the diff. It gets no executor digest:
+ * the work session's own last words ("tests all pass") would anchor the verdict before the review has looked.
+ */
+const REVIEW_RULE = '這是獨立審核，在新的 session／thread 執行：只依審核任務檔、驗收指令的實際輸出與 diff 判斷，不參考執行者自己的結論；自己重跑驗收，不要沿用 CARD 或報告裡寫的結果。'
+
+/** A continue whose 下一步 is a review task: the continue prompt with the review rule, and no executor digest. */
+export function reviewPrompt(project: Project): string {
+  return `${dispatchPrompt(project, 'continue')}\n${REVIEW_RULE}`
+}
+
 /** The session of the newest finished job that stopped to ask the user: the one its row's sync must resume. */
 export function askingSession(project: Project): string | undefined {
   return project.jobs.filter(job => job.kind === 'newer' && job.asks && job.sessionId).pop()?.sessionId

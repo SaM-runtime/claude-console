@@ -77,11 +77,10 @@ A gate approval never substitutes for user authorization. Only the console clear
 ## Codex executor
 
 - Dispatch from a task file: `codex-companion task --background --write --resume-last --cwd <root> --prompt-file .task/<name>.md` plus `--model`/`--effort` when set.
-- One main thread per project: continue with `--resume-last`. Do not use `task --fresh` inside a project; resume picks the newest task, so a side task steals the main line.
-- Codex reviews Codex: after acceptance passes, dispatch an independent review:
-  - `codex-companion review --background --cwd <root> --scope working-tree --model <m>`
-  - `--scope branch --base <ref>` for a branch, or `adversarial-review` for a harder pass.
-  - The review subcommand has no `--effort`.
+- One main thread per project: continue with `--resume-last`. Do not start side tasks with `task --fresh`; resume picks the newest task, so a side task steals the main line.
+- Codex reviews Codex: after acceptance passes, the review task (`.task/review-*.md`, same contract as for Claude) runs in a new thread (`--fresh`), so it does not carry the work's context. The panel does this when `下一步` starts with the review task path.
+  - The fix-up after the review resumes the newest thread, which is the review's: it holds the findings. The work's progress is in STATUS, the task files and git, not in the old thread.
+  - `codex-companion review` / `adversarial-review` can add a read-only second opinion by hand. They cannot write the CARD, so their verdict does not set the `review` gate by itself.
   - An unfinished or failed review never counts as passed.
   - Non-git project: record the limitation in STATUS; do not initialize git.
 - Quota or broker trouble: the panel's `codexFallback` setting holds the dispatch (`ask`), sends it to Claude (`claude`, recorded as `fallbackFrom: codex`), or ignores it (`off`).
@@ -96,7 +95,7 @@ A gate approval never substitutes for user authorization. Only the console clear
 - Native background agents in the project root; the mod keeps one managed session per project and resumes it. When a resume comes back as a new session and the original is gone (retired by the daemon, or finished), the new one becomes the project's session.
 - A turn starts by re-reading the CARD; the rev it reads then is the one that counts. Stop only when the CARD changed again before the write, never because a rev remembered from an earlier turn differs.
 - At a gate or a decision, the executor writes it into the CARD (`關卡`, `等使用者`) and ends its turn. It never asks a question and waits: nobody is attached to answer, and a blocked agent drifts out of step with the console. Attach to a blocked agent only for a permission prompt.
-- Review: dispatch a separate review task (`.task/review-*.md`) with the same contract (acceptance output, diff named by the report). It starts in a fresh session, never resumes the project's, and its verdict goes to the `review` gate. Until it finishes, `關卡` stays `無` and `下一步` names the review task, so the panel can dispatch it. A review's `下一步` starts with its task path (`.task/review-x.md（…）`); work that follows a review starts with a verb (`依 .task/review-x.md 的意見修正`) and resumes the project's session.
+- Review: dispatch a separate review task (`.task/review-*.md`) with the same contract (acceptance output, diff named by the report). It starts in a fresh session, never resumes the project's, and its verdict goes to the `review` gate. It gets no executor digest: it judges from the task file, its own run of the acceptance and the diff, not from the worker's account. Until it finishes, `關卡` stays `無` and `下一步` names the review task, so the panel can dispatch it. A review's `下一步` starts with its task path (`.task/review-x.md（…）`); work that follows a review starts with a verb (`依 .task/review-x.md 的意見修正`) and resumes the project's session.
 
 ## Decisions
 

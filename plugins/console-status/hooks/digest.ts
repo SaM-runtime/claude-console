@@ -93,6 +93,32 @@ export function digestLines(job: DigestJob | null, daemon: DaemonRecord | null, 
   ]
 }
 
+export type DigestTask = { id: string; executor?: 'claude' | 'codex'; status: string; startedAt?: string; completedAt?: string }
+
+/**
+ * Which executor did the project's latest work, so the digest is read from that one's records. The Claude
+ * records stay after a project moves to Codex: read blindly, they would show an old session as the latest.
+ * `tasks` is the project's task list (running first, then finished newest first); with none, its executor decides.
+ */
+export function digestSource(executor: string | undefined, tasks: DigestTask[] | undefined): { kind: 'claude' } | { kind: 'codex'; task: DigestTask | null } {
+  const latest = tasks?.[0]
+  if (latest) return latest.executor === 'codex' ? { kind: 'codex', task: latest } : { kind: 'claude' }
+  return executor === 'codex' ? { kind: 'codex', task: null } : { kind: 'claude' }
+}
+
+/** A Codex job keeps no transcript the console can read: its four lines say what is known, and where to look instead. */
+export function codexDigestLines(task: DigestTask, now: number): string[] {
+  const at = task.completedAt || task.startedAt || ''
+  const ms = Date.parse(at)
+  const minutes = Number.isFinite(ms) ? Math.max(0, Math.floor((now - ms) / 60_000)) : null
+  return [
+    `執行者：${task.id} · codex · ${task.status || '?'}`,
+    at ? `最後活動：${at} （${minutes ?? '?'} 分鐘前）` : '最後活動：無',
+    '最後動作：無（Codex 不提供）',
+    '最後一句：無（Codex 沒有對話摘要，以 STATUS 與 git 為準）',
+  ]
+}
+
 /** The block a prompt carries: the four lines, or `執行者摘要：無紀錄`. */
 export function digestContext(lines: string[] | null): string {
   return lines ? `執行者摘要：\n${lines.join('\n')}` : DIGEST_NONE

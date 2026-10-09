@@ -128,7 +128,7 @@ export function projectModeSection(p: Pick<Project, 'name' | 'statusPath'>): str
     `【console-status 專案模式】這個工作階段位於已登錄專案「${p.name}」，STATUS：${p.statusPath}。`,
     '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線（claude-console workflow）。',
     '- 動工前先讀 STATUS 的 CARD 區塊（<!-- CARD --> 到 <!-- /CARD -->），只讀需要的部分。',
-    '- 完成一段工作就更新 CARD：寫入前重讀，rev 與上次讀到的不同就停下回報衝突、不覆寫；寫入 rev + 1、狀態、驗證（指令與實際結果）、下一步；更新欄寫現在的本機時間（先執行 date 或 Get-Date，不要猜）。',
+    '- 完成一段工作就更新 CARD：這次動工時讀到的 rev 為準，寫入前再重讀，只有這兩次讀到的不同才停下回報衝突、不覆寫（不要跟記憶裡更早的 rev 比）；寫入 rev + 1、狀態、驗證（指令與實際結果）、下一步；更新欄寫現在的本機時間（先執行 date 或 Get-Date，不要猜）。',
     '- 關卡欄只放一個值：無／spec：…／review：…／release：…。到關卡就停下並附上證據；不自行清除關卡，不執行 release 或任何正式環境變更。',
     '- 需要使用者拍板的事寫進「等使用者」，不要自行決定。',
   ].join('\n')
