@@ -312,9 +312,9 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | 上下文 | 內容 |
 | --- | --- |
 | 選取 | 專案、STATUS 路徑、狀態、需決策、關卡、下一步、執行者工作、Git 與 PR |
-| 執行者摘要（`執行者摘要：`） | 該專案最新執行者 session 的四行：`執行者：<launch name> · <kind> · <status>/<phase>`、`最後活動：<時間> （N 分鐘前）`、`最後動作：` 最後三個工具呼叫、`最後一句：` 最後一段文字（最多 400 字）；沒有 job 或找不到 transcript 時為 `執行者摘要：無紀錄` |
+| 執行者摘要（`執行者摘要：`） | 該專案最新執行者 session 的四行：`執行者：<launch name> · <kind> · <status>/<phase>`、`最後活動：<時間> （N 分鐘前）`、`最後動作：` 最後三個工具呼叫、`最後一句：` 最後一段文字（最多 400 字）；沒有 job 或找不到 transcript 時為 `執行者摘要：無紀錄`。專案最近的工作是 Codex 做的時候，因為 Codex 沒有主控台讀得到的 transcript，四行改寫那個 Codex 工作的 id、狀態與時間，並註明以 STATUS 與 git 為準；同一專案以前的 Claude session 不會被當成最新的顯示 |
 
-面板自己送出的審核關卡與繼續下一步提示也附執行者摘要。session 以 daemon 為該 job 記的為準（`~/.claude/jobs/<id>/state.json`），daemon 沒有才用外掛的紀錄；transcript 只解析最後 64 KB，未變更（mtime 與大小相同）就不重讀。
+面板自己送出的審核關卡與繼續下一步提示也附執行者摘要，獨立審核除外：下一步以審核任務路徑開頭的繼續，會在新的 session（Claude）或新的 thread（Codex `--fresh`）執行，且不附摘要，讓審核者依任務檔、自己重跑的驗收與 diff 判斷，而不是依執行者自己的結論。session 以 daemon 為該 job 記的為準（`~/.claude/jobs/<id>/state.json`），daemon 沒有才用外掛的紀錄；transcript 只解析最後 64 KB，未變更（mtime 與大小相同）就不重讀。
 
 ## Tab 接受下一步
 

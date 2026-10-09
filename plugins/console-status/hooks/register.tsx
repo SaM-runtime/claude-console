@@ -10,7 +10,7 @@ import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, askingSession, commandTarget, decisionProject, replyPrompt, suggestedPrompt, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, freshSyncPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
+import { actionKinds, actionLabel, askingSession, commandTarget, decisionProject, replyPrompt, reviewPrompt, suggestedPrompt, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, freshSyncPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -39,7 +39,7 @@ import { trackRowChanges } from './presentation'
 import { layoutBand } from './band'
 import { advanceSync, cardStamp, autoSyncJobs, autoSyncMode, bandSync, isSyncEnded, syncChip, syncStatus, syncStepsText } from './sync'
 import type { SyncProgress, ExecutorDigest } from '../types'
-import { DIGEST_NONE, DIGEST_TIMEOUT, PROMPT_DIGEST_MS, digestContext, loadDigest } from './digest'
+import { DIGEST_NONE, DIGEST_TIMEOUT, PROMPT_DIGEST_MS, codexDigestLines, digestContext, digestSource, loadDigest } from './digest'
 import type { DigestCache, DigestIo, DigestResult } from './digest'
 
 const dispatchRevision = atom({ plugin: 'console-status', key: 'dispatchRevision' } as const, 0)
@@ -274,6 +274,14 @@ async function paths($: any, options: PluginOptions) {
 /** One project's executor digest: from the cache while its transcript is unchanged; never throws. */
 async function projectDigest($: any, options: PluginOptions, p: Project): Promise<DigestResult> {
   try {
+    // A project whose latest work ran on Codex has no Claude transcript to read; an older Claude session is not its latest.
+    const source = digestSource(p.executor, p.tasks)
+    if (source.kind === 'codex') {
+      if (!source.task) return { kind: 'none' }
+      const lines = codexDigestLines(source.task, await $.clock.now())
+      lastDigests.set(p.statusPath, lines)
+      return { kind: 'ready', lines }
+    }
     const { home, config } = await paths($, options)
     const claudeDir = ((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || `${home}/.claude`).replace(/\\/g, '/')
     const root = projectRoot(p.statusPath)
@@ -838,7 +846,9 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
         await refresh($, options, true)
         throw new Error(reason)
       }
-      if (kind === 'continue' && chosen === 'claude' && freshSession(p)) dispatchOpts = { ...dispatchOpts, fresh: true }
+      // An independent review runs in a new session (Claude) or a new thread (Codex `--fresh`), never in the work's.
+      const review = kind === 'continue' && freshSession(p)
+      if (review) dispatchOpts = { ...dispatchOpts, fresh: true }
       // A sync of a row whose job stopped to ask resumes that job's session, which may be a review's rather than the project's.
       // A reply goes to that same session, with the person's words as the prompt.
       const asked = (kind === 'sync' || kind === 'reply') && chosen === 'claude' ? askingSession(p) : undefined
@@ -859,7 +869,9 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       }
       const executor = createExecutor(chosen, deps, execConfig)
       // A continue carries what the executor was last doing, so a fresh session knows where it stopped; so does a fresh sync.
+      // A review does not: it judges the work from the files, not from the worker's account of it.
       const prompt = kind === 'reply' ? replyPrompt(p, request.text ?? '')
+        : review ? reviewPrompt(p)
         : kind === 'continue' ? `${dispatchPrompt(p, kind)}\n${await digestBlock($, options, p)}`
         : syncPlan?.fresh ? freshSyncPrompt(p, await digestBlock($, options, p)) : dispatchPrompt(p, dispatchKindOf)
       let job: ExecutorJob

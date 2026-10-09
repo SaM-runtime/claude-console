@@ -313,9 +313,9 @@ What the selected project's prompt carries, so the console need not read files t
 | Context | Content |
 | --- | --- |
 | Selection | The project, its STATUS path, state, decision, gate, next step, executor jobs, Git and PR lines |
-| Executor digest (`執行者摘要：`) | Four lines about the project's latest executor session: `執行者：<launch name> · <kind> · <status>/<phase>`, `最後活動：<time> （N 分鐘前）`, `最後動作：` the last three tool calls, `最後一句：` its last words (up to 400 characters); `執行者摘要：無紀錄` when there is no job or transcript |
+| Executor digest (`執行者摘要：`) | Four lines about the project's latest executor session: `執行者：<launch name> · <kind> · <status>/<phase>`, `最後活動：<time> （N 分鐘前）`, `最後動作：` the last three tool calls, `最後一句：` its last words (up to 400 characters); `執行者摘要：無紀錄` when there is no job or transcript. When the project's latest work ran on Codex, which keeps no transcript the console can read, the four lines name that Codex job, its status and time, and say to go by STATUS and git; an older Claude session of the same project is not shown as its latest |
 
-The panel's own gate review and continue prompts carry the executor digest too. The session is the one the daemon recorded for the job (`~/.claude/jobs/<id>/state.json`), the plugin's record only when the daemon has none; only the transcript's last 64 KB is parsed, and an unchanged transcript (same mtime and size) is not read again.
+The panel's own gate review and continue prompts carry the executor digest too, except an independent review: a continue whose 下一步 starts with a review task's path runs in a new session (Claude) or a new thread (Codex `--fresh`) and gets no digest, so the reviewer judges from the task, its own run of the acceptance and the diff rather than from the worker's last words. The session is the one the daemon recorded for the job (`~/.claude/jobs/<id>/state.json`), the plugin's record only when the daemon has none; only the transcript's last 64 KB is parsed, and an unchanged transcript (same mtime and size) is not read again.
 
 ## Tab for the next step
 
