@@ -81,7 +81,7 @@ test('first snapshot is only the baseline; later changes toast once', () => {
 test('band summarises asks, context and rotation hint', () => {
   const text = bandText(snap('決定 A', { contextPercent: 62 }))
   expect(text.includes('等你 1')).toBe(true)
-  expect(text.includes('context 62%（建議換主控台）')).toBe(true)
+  expect(text.includes('上下文 62%（建議換主控台）')).toBe(true)
 })
 
 test('codex preflight: only brokers of registered projects count', () => {

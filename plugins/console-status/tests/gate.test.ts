@@ -57,7 +57,7 @@ test('buildProject keeps the raw gate and rows sort ACTION then GATE then RUNNIN
   expect(action.gate).toBe('release：待上線')
   expect(STATE_ORDER.slice(0, 3)).toEqual(['ACTION', 'GATE', 'RUNNING'])
   expect(rows(snap(running, gate, action)).map(row => row.state)).toEqual(['ACTION', 'GATE', 'RUNNING'])
-  expect(rows(snap(gate))[0].item).toBe('review：檢查變更')
+  expect(rows(snap(gate))[0].item).toBe('審核：檢查變更')
   expect(counts(snap(gate)).GATE).toBe(1)
 })
 
@@ -67,7 +67,7 @@ test('next treats GATE as a user item after ACTION and before SYNC', () => {
   const sync = project('Sync')
   sync.jobs = [{ kind: 'newer', id: 'task-done', status: 'completed', summary: '' }]
 
-  expect(next(snap(sync, gate))).toBe('Gate・spec：確認規格')
+  expect(next(snap(sync, gate))).toBe('Gate・規格審核：確認規格')
   expect(nextProject(snap(sync, gate))).toBe('Gate')
   expect(nextProject(snap(gate, action))).toBe('Action')
 })

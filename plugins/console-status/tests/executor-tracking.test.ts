@@ -260,7 +260,7 @@ test('fix: a manual project asking row names only taking over the session, since
   const auto = buildProject(ALPHA, card('無'), jobs, NOW)
   const manual = { ...auto, executor: 'manual' as const }
   const item = (p: typeof auto) => rows({ at: NOW, projects: [p], blocked: [], codex: '', contextPercent: null, error: null })[0].item
-  expect(item(auto)).toBe('執行者在等你回覆：接手該 session 或同步')
-  expect(item(manual)).toBe('執行者在等你回覆：接手該 session')
+  expect(item(auto)).toBe('執行者在等你回覆：切到它的對話接手，或同步')
+  expect(item(manual)).toBe('執行者在等你回覆：切到它的對話接手')
   expect(actionKinds(manual, 'ACTION')).not.toContain('sync')
 })

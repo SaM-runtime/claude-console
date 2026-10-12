@@ -14,8 +14,8 @@ test('(g) an older session that was already waiting is not announced when the ne
 test('(g) a session that starts waiting this round is still announced', () => {
   const prev = base({ blocked: [{ name: 'A', why: '等待批准', project: 'alpha' }], waiting: ['A'] })
   const cur = base({ blocked: [{ name: 'B', why: '停在提問', project: 'alpha' }], waiting: ['B'] })
-  expect(diffToasts(prev, cur)).toEqual(['session「B」停在提問'])
-  expect(events(prev, cur).map(e => e.text)).toEqual(['工作階段「B」停在提問'])
+  expect(diffToasts(prev, cur)).toEqual(['對話「B」停在提問'])
+  expect(events(prev, cur).map(e => e.text)).toEqual(['對話「B」停在提問'])
 })
 
 const NOW = Date.parse('2030-01-05T12:00:00Z')

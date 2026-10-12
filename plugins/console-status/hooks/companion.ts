@@ -100,10 +100,10 @@ export async function resolveCompanion(files: CompanionFiles, home: string, conf
     if (!await fileExists(files, candidate.path)) continue
     return {
       path: candidate.path, source: candidate.source, version: candidate.version,
-      ...(wanted ? { warning: `configured companionScript not found (${wanted}); using ${candidate.version}` } : {}),
+      ...(wanted ? { warning: `設定的 companionScript 找不到（${wanted}），改用已安裝的 Codex 外掛 ${candidate.version}` } : {}),
     }
   }
   return wanted
-    ? { path: wanted, source: 'configured', warning: `configured companionScript not found (${wanted}) and no installed Codex plugin was found` }
-    : { path: '', source: 'none', warning: 'companionScript is empty and no installed Codex plugin was found' }
+    ? { path: wanted, source: 'configured', warning: `設定的 companionScript 找不到（${wanted}），也沒有已安裝的 Codex 外掛` }
+    : { path: '', source: 'none', warning: 'companionScript 沒有設定，也沒有已安裝的 Codex 外掛' }
 }

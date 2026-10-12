@@ -22,8 +22,8 @@ test('terminal: Client rows — click selects, keys move and select', async ($, 
   for (const bodyColumns of [70, 120]) {
     const ui = await $.ui.mount({ ...PANE(bodyColumns), surface: 'terminal' } as any)
     expect(await ui.find({ type: 'Text', text: /^▸ 下一步$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /示範 session/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /工作階段「/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /示範對話/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /(?<!回應)對話「/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /等你/ })).toBeUndefined()
     expect(JSON.stringify(await ui.drawn()).includes('undefined')).toBe(false)
     await ui.pointer({ in: 'rows', type: 'down', x: 12, y: 0, button: 'left' } as any)

@@ -169,7 +169,7 @@ export function setSyncSetting(settings: DispatchSettings, field: 'model' | 'eff
   if (/[\r\n\x00]/.test(text)) throw new Error('設定值必須是單行文字。')
   const sync: SyncSettings = { ...settings.sync }
   if (field === 'session') {
-    if (text && text !== 'fresh' && text !== 'resume') throw new Error('session 可選：fresh（新的小 session）、resume（接續專案 session）；空白＝有同步模型時 fresh')
+    if (text && text !== 'fresh' && text !== 'resume') throw new Error('可選：fresh（開新的小對話）、resume（接續專案原本的對話）；空白＝自動（有同步模型時開新對話）')
     if (text) sync.session = text as 'fresh' | 'resume'
     else delete sync.session
   } else {
@@ -195,7 +195,7 @@ export function setProjectOverride(settings: DispatchSettings, root: string, fie
   const current = { ...projectOverride(settings, root) }
   if (field === 'executor') {
     const next = parseProjectExecutor(value)
-    if (value.trim() && !next) throw new Error('executor 可選：claude, codex, manual（空白＝沿用預設）')
+    if (value.trim() && !next) throw new Error('執行者可選：claude, codex, manual（空白＝沿用預設）')
     if (next !== current.executor) { delete current.model; delete current.effort }
     if (next) current.executor = next
     else delete current.executor

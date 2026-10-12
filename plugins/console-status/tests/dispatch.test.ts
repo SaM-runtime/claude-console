@@ -25,7 +25,7 @@ test('settings file round trip and failed write are observable through the files
   expect(JSON.parse(files[config.dispatchSettingsPath])).toEqual({ executor: 'claude', model: 'fiction-alpha', effort: 'high' })
   expect(JSON.stringify(await $.command.run({ command: 'console', args: 'model' } as any)).includes('fiction-alpha · high')).toBe(true)
   const invalid = await $.command.run({ command: 'console', args: 'effort impossible' } as any)
-  expect(JSON.stringify(invalid).includes('effort 可選')).toBe(true)
+  expect(JSON.stringify(invalid).includes('強度可選')).toBe(true)
   expect(JSON.parse(files[config.dispatchSettingsPath]).effort).toBe('high')
   deny = true
   const failure = await $.command.run({ command: 'console', args: 'effort low' } as any)

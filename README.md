@@ -171,8 +171,8 @@ Model 與 effort 依相同順序。專案執行者與全域不同時，不沿用
 
 - 模型名稱是自由文字，照你的帳號有的填。空白欄位沿用一般派工的模型或強度；專案的 `sync` 欄位優先於全域。
 - `session`：`fresh` 開一個新的小 session，讀 STATUS.md、`git log`／`git status` 與執行者摘要，並只寫這些看得到的事實。`resume` 照舊接續專案的 session。不設時，Claude 有同步模型就用 `fresh`（便宜模型接續長 session 會用新模型的價格重寫整段快取），Codex 維持 `resume`，因為下一次繼續的 `--resume-last` 會接到 fresh 同步的 thread，而不是工作的 thread。執行者停下來問你的那一列，同步一律接續那個 session。
-- 用同步模型時都會提醒：接受通知寫 `（用 haiku・新 session）`，同步列寫 `claude（haiku・新 session） 寫回中`。同步模型啟動失敗時，主控台立刻改用原本的模型再同步一次並告訴你；用它的同步失敗或沒寫回 CARD 時，也會跳提醒。兩種情況之後的同步都改用原本的模型，直到你重新設定同步模型。
-- 面板標題下的 `同步模型` 控制選全域執行者的同步模型（`同派工` 為清除）；同步會開新 session 時旁邊標 `新 session`，展開的選項列會寫明是哪個執行者的，例如 `同步模型（claude）`。`/console sync-model [claude|codex] <名稱>`、`/console sync-effort [claude|codex] <強度>`、`/console sync-session fresh|resume` 設定相同欄位；`""` 清除，只輸入 `/console sync-model` 會列出目前設定。
+- 用同步模型時都會提醒：接受通知寫 `（用 haiku・新對話）`，同步列寫 `claude（haiku・新對話） 寫回中`。同步模型啟動失敗時，主控台立刻改用原本的模型再同步一次並告訴你；用它的同步失敗或沒寫回 CARD 時，也會跳提醒。兩種情況之後的同步都改用原本的模型，直到你重新設定同步模型。
+- 面板標題下的 `同步模型` 控制選全域執行者的同步模型（`同派工` 為清除）；同步會開新對話時旁邊標 `新對話`，展開的選項列會寫明是哪個執行者的，例如 `同步模型（claude）`。`/console sync-model [claude|codex] <名稱>`、`/console sync-effort [claude|codex] <強度>`、`/console sync-session fresh|resume` 設定相同欄位；`""` 清除，只輸入 `/console sync-model` 會列出目前設定。
 
 ### executor: claude
 
@@ -196,18 +196,18 @@ Codex 模型順序取自 `models_cache.json` 的 `models[].slug`。Effort 取自
 
 Job 預設先讀 `~/.claude/plugins/data/codex-openai-codex/state`，再讀舊版 Temp 根目錄。同 ID 使用較新的 `updatedAt`，缺少時採 state 時間；同時間保留先讀來源。可用例如 `"companionStateRoots": "[\"~/jobs/current\",\"~/jobs/legacy\"]"` 覆寫。這個設定不影響 Codex quota 或 preflight。
 
-內附 preflight 會在 Codex 派工前檢查 companion 與 broker。Quota 取自本機最新可用 Codex 紀錄，可能過期。派工受理只代表 companion 收到工作；完成與審核仍要看 STATUS 證據與本機驗證。
+內附 preflight 會在 Codex 派工前檢查 Codex 串接腳本（companion）與 Codex 背景程式（broker）。Quota 取自本機最新可用 Codex 紀錄，可能過期。派工受理只代表 companion 收到工作；完成與審核仍要看 STATUS 證據與本機驗證。
 
 #### Companion 自動選用
 
 `companionScript` 空白，或 preflight 回報設定的檔案 `MISSING`（Codex plugin 每個版本安裝在各自的快取資料夾，更新後固定路徑會失效）時，mod 會在 `~/.claude/plugins/installed_plugins.json` 中 `codex@openai-codex` 的 installPath 與 `~/.claude/plugins/cache/openai-codex/codex/<版本>/scripts/codex-companion.mjs` 之間，選出實際存在腳本的最新語意版本。頁尾會顯示使用中的路徑並標示 `自動選用`；設定路徑失效時附上警告。
 
-#### 額度與 broker 備援
+#### 額度與背景程式備援
 
 每次 Codex 派工前會檢查最近的探測結果：
 
 - Codex 額度電池顯示剩餘量（取最低的時間窗）低於 `codexMinQuotaPercent`，或
-- preflight 回報此專案 workspace 的 broker 過期、找不到 Codex app／broker，或找不到 companion 腳本。
+- preflight 回報此專案的 Codex 背景程式還是舊版（Codex app 更新後舊的背景程式沒關）、找不到 Codex app，或找不到 Codex 串接腳本。面板會顯示 `Codex 已更新，但背景程式還是舊版（PID …），派工會失敗；先關掉它：! for p in …; do taskkill …; done`，照著執行即可。
 
 超過六小時的額度資料仍會顯示，但視為未知，不會單獨觸發備援。接著：
 
@@ -263,7 +263,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 **執行者區塊。** 展開的專案卡片（動作選單，或「↧ 各專案詳細」裡聚焦的專案）多一區「執行者」，內容與執行者摘要同樣四行。卡片展開時讀取（讀完前顯示 `執行者：讀取中…`），之後 transcript 有變才重讀；沒展開的卡片不讀檔。
 
-**其他工作階段。** 「用量」下的「其他工作階段」列出主控台資料夾或已登記專案裡、正在等你的 Claude Code session：`等待批准`（權限提示）、`停在提問`（做完一輪停下來問你）或 `等待輸入`。daemon 已退休的（沒有程序、沒有 status）不列；同一專案只列一條並標出專案名（先看文案輕重：等待批准 > 停在提問 > 等待輸入，再取最新）；超過三條時以 `…另 N 條` 收尾。停在提問的只在這裡提醒，該專案列本身已提供決策。
+**其他對話。** 「用量」下的「其他對話」列出主控台資料夾或已登記專案裡、正在等你的 Claude Code 對話：`等待批准`（權限提示）、`停在提問`（做完一輪停下來問你）或 `等待輸入`。daemon 已退休的（沒有程序、沒有 status）不列；同一專案只列一條並標出專案名（先看文案輕重：等待批准 > 停在提問 > 等待輸入，再取最新）；超過三條時以 `…另 N 條` 收尾。停在提問的只在這裡提醒，該專案列本身已提供決策。
 
 ## Git、PR 與 CI
 
@@ -312,7 +312,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | 上下文 | 內容 |
 | --- | --- |
 | 選取 | 專案、STATUS 路徑、狀態、需決策、關卡、下一步、執行者工作、Git 與 PR |
-| 執行者摘要（`執行者摘要：`） | 該專案最新執行者 session 的四行：`執行者：<launch name> · <kind> · <status>/<phase>`、`最後活動：<時間> （N 分鐘前）`、`最後動作：` 最後三個工具呼叫、`最後一句：` 最後一段文字（最多 400 字）；沒有 job 或找不到 transcript 時為 `執行者摘要：無紀錄`。專案最近的工作是 Codex 做的時候，因為 Codex 沒有主控台讀得到的 transcript，四行改寫那個 Codex 工作的 id、狀態與時間，並註明以 STATUS 與 git 為準；同一專案以前的 Claude session 不會被當成最新的顯示 |
+| 執行者摘要（`執行者摘要：`） | 該專案最新執行者 session 的四行：`執行者：<launch name> · <種類> · <狀態>／<階段>`（例如 `console-a · 繼續 · 完成／閒置`）、`最後活動：<時間> （N 分鐘前）`、`最後動作：` 最後三個工具呼叫、`最後一句：` 最後一段文字（最多 400 字）；沒有 job 或找不到 transcript 時為 `執行者摘要：無紀錄`。專案最近的工作是 Codex 做的時候，因為 Codex 沒有主控台讀得到的 transcript，四行改寫那個 Codex 工作的 id、狀態與時間，並註明以 STATUS 與 git 為準；同一專案以前的 Claude session 不會被當成最新的顯示 |
 
 面板自己送出的審核關卡與繼續下一步提示也附執行者摘要，獨立審核除外：下一步以審核任務路徑開頭的繼續，會在新的 session（Claude）或新的 thread（Codex `--fresh`）執行，且不附摘要，讓審核者依任務檔、自己重跑的驗收與 diff 判斷，而不是依執行者自己的結論。session 以 daemon 為該 job 記的為準（`~/.claude/jobs/<id>/state.json`），daemon 沒有才用外掛的紀錄；transcript 只解析最後 64 KB，未變更（mtime 與大小相同）就不重讀。
 
@@ -432,7 +432,7 @@ claude plugin install paste-preview@paste-preview
 
 | 版本 | 重點 |
 | --- | --- |
-| 0.20 | 每個主控台都能派工，改成以專案為單位上鎖；自動同步會等你回覆執行者，工作進行中鎖住做決定 |
+| 0.20 | 每個主控台都能派工，改成以專案為單位上鎖；自動同步會等你回覆執行者，工作進行中鎖住做決定；0.20.2 把面板裡中英夾雜的用語改成直白中文（例如 broker → Codex 背景程式、CARD → 狀態卡、session → 對話） |
 | 0.19 | 審核獨立：Codex 審核開新 thread，審核者不先看到執行者的結論；STATUS 版本規則統一 |
 | 0.18 | 可另外指定比較便宜的同步模型（`/console sync-model`），失敗時自動退回原本模型 |
 | 0.17 | 從主控台回覆卡住的執行者（`↩ 回覆執行者`）；提示列顯示下一步，Tab 接受 |

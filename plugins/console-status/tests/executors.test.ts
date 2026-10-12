@@ -392,7 +392,7 @@ test('a log tail is re-read only when the file changes, and an oversized log say
   expect(await executor.lastLine(job)).toBe('third')
   expect(reads).toBe(2)
   stat = { size: 5 * 1024 * 1024, mtimeMs: 3 }
-  expect(await executor.lastLine(job)).toContain('log 超過 4 MiB')
+  expect(await executor.lastLine(job)).toContain('紀錄檔超過 4 MiB')
   expect(reads).toBe(2)
 })
 

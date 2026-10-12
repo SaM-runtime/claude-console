@@ -111,7 +111,7 @@ test('a sync that ends without touching the CARD says so and is not sent again',
   const ui = await $.ui.mount(PANE)
   await ui.press({ key: 'detail' })
   expect(await ui.find({ type: 'Text', text: '● 派工 ─ ● 執行 ─ ✕ 寫回 STATUS' })).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /CARD 的「更新」沒有變/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /狀態卡的「更新」沒有變/ })).toBeTruthy()
   await h.clock.advance(60_000)
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   expect(h.launches.length).toBe(1)

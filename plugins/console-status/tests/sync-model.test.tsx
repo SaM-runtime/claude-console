@@ -135,7 +135,7 @@ test('/console sync-model, sync-effort and sync-session write dispatch.json and 
   await $.command.run({ command: 'console', args: 'sync-session resume' } as any)
   expect(JSON.parse(h.files[path]!).sync).toEqual({ claude: { model: 'haiku' }, codex: { effort: 'low' }, session: 'resume' })
   const shown = await $.command.run({ command: 'console', args: 'sync-model' } as any) as any
-  expect(String(shown?.text ?? shown)).toContain('claude haiku｜codex low｜session resume')
+  expect(String(shown?.text ?? shown)).toContain('claude haiku｜codex low｜同步對話 接續原對話')
   await $.command.run({ command: 'console', args: 'sync-model ""' } as any)
   await $.command.run({ command: 'console', args: 'sync-effort codex ""' } as any)
   await $.command.run({ command: 'console', args: 'sync-session ""' } as any)
@@ -149,7 +149,7 @@ test('the pane names the sync model, whose executor it belongs to, and when it r
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   const ui = await $.ui.mount(PANE)
   expect(await ui.find({ type: 'Text', text: '同步模型' })).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: '新 session' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: '新對話' })).toBeTruthy()
   await ui.press({ key: 'dispatch-sync' })
   expect(await ui.find({ type: 'Text', text: '同步模型（claude）' })).toBeTruthy()
   await ui.press({ key: 'dispatch-sync-sonnet' })

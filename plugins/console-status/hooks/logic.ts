@@ -3,6 +3,7 @@ import type { Blocked, ExecutorTask, JobFlag, Project, Snapshot } from '../types
 import { commitLine, gitLine, prLine, prTransitions } from './git'
 import { parseProjectExecutor } from './dispatch'
 import type { ProjectExecutor } from './dispatch'
+import { phaseText } from './wording'
 
 export const STALE_DAYS = 3
 export const ROTATE_PERCENT = 50
@@ -65,6 +66,15 @@ export function parseGate(value?: string): Gate | null {
   const match = raw.match(/^(spec|review|release)\s*[：:]\s*(.*)$/i)
   if (!match) return { kind: 'unknown', detail: raw }
   return { kind: match[1].toLowerCase() as Gate['kind'], detail: match[2].trim() }
+}
+
+const GATE_KIND: Record<string, string> = { spec: '規格審核', review: '審核', release: '上線審核' }
+
+/** A gate in words for rows and lists: `review: 確認結果` → `審核：確認結果`; one it cannot read stays as written. */
+export function gateText(value?: string): string {
+  const gate = parseGate(value)
+  if (!gate) return ''
+  return GATE_KIND[gate.kind] ? `${GATE_KIND[gate.kind]}${gate.detail ? `：${gate.detail}` : ''}` : (value ?? '').trim()
 }
 
 /**
@@ -215,10 +225,10 @@ export function tiles(s: Snapshot): Tile[] {
   const ctx = s.contextPercent
   return [
     { label: '等你決定', value: String(asks), tone: asks ? 'warn' : 'quiet' },
-    { label: 'CARD 待更新', value: String(stale), tone: stale ? 'info' : 'quiet' },
+    { label: '狀態卡待更新', value: String(stale), tone: stale ? 'info' : 'quiet' },
     { label: '執行者執行中', value: String(running), tone: running ? 'info' : 'quiet' },
-    { label: 'session 等你', value: String(s.blocked.length), tone: s.blocked.length ? 'warn' : 'quiet' },
-    { label: '主控台 context', value: ctx === null ? '—' : `${ctx}%`, tone: ctx !== null && ctx >= ROTATE_PERCENT ? 'bad' : 'quiet' },
+    { label: '其他對話等你', value: String(s.blocked.length), tone: s.blocked.length ? 'warn' : 'quiet' },
+    { label: '主控台上下文', value: ctx === null ? '—' : `${ctx}%`, tone: ctx !== null && ctx >= ROTATE_PERCENT ? 'bad' : 'quiet' },
   ]
 }
 
@@ -229,8 +239,8 @@ export function tiles(s: Snapshot): Tile[] {
 export function relevantCodex(line: string, projectBases: string[]): string {
   if (!line.startsWith('STALE')) return line
   const mine = [...line.matchAll(/(\d+)\(([^)]*)\)/g)].filter(m => projectBases.includes(m[2])).map(m => `${m[1]}(${m[2]})`)
-  if (mine.length === 0) return line.replace(/^STALE/, 'OK*').replace(/ brokers=.*$/, '（其他 workspace 有舊 broker，與本主控台無關）')
-  return `STALE 需處理的 broker：${mine.join(' ')}  ->  ! for p in ${mine.map(s => s.split('(')[0]).join(' ')}; do taskkill //PID $p //T //F; done`
+  if (mine.length === 0) return line.replace(/^STALE/, 'OK*').replace(/ brokers=.*$/, '')
+  return line.replace(/ brokers=.*$/, ` brokers=${mine.join(' ')}`)
 }
 
 /** Only an explicit successful probe is healthy; unavailable data stays unknown. */
@@ -248,7 +258,7 @@ export function blockedSessions(agents: Agent[], selfName?: string): Blocked[] {
       return hasIdentity && name !== selfName && (a.state === 'blocked' || a.status === 'waiting')
     })
     .map(a => ({
-      name: a.name?.trim() || '(未命名 session)',
+      name: a.name?.trim() || '（未命名對話）',
       why: a.state === 'blocked' ? '等批准' : (a.waitingFor?.trim() || '等輸入'),
     }))
 }
@@ -260,11 +270,11 @@ export function bandText(s: Snapshot): string {
   const running = s.projects.reduce((n, p) => n + p.jobs.filter(j => j.kind === 'running').length, 0)
   const parts = [`${s.projects.length} 專案`, `等你 ${asks}`]
   if (gates) parts.push(`待審核 ${gates}`)
-  if (stale) parts.push(`CARD 待更新 ${stale}`)
+  if (stale) parts.push(`狀態卡待更新 ${stale}`)
   if (running) parts.push(`執行者執行中 ${running}`)
-  if (s.blocked.length) parts.push(`session 等你 ${s.blocked.length}`)
-  if (s.codex.startsWith('STALE')) parts.push('Codex broker 過期')
-  if (s.contextPercent !== null) parts.push(`context ${s.contextPercent}%${s.contextPercent >= ROTATE_PERCENT ? '（建議換主控台）' : ''}`)
+  if (s.blocked.length) parts.push(`其他對話等你 ${s.blocked.length}`)
+  if (s.codex.startsWith('STALE')) parts.push('Codex 背景程式過舊')
+  if (s.contextPercent !== null) parts.push(`上下文 ${s.contextPercent}%${s.contextPercent >= ROTATE_PERCENT ? '（建議換主控台）' : ''}`)
   if (s.error) parts.push(`讀取錯誤：${s.error}`)
   return `主控台｜${parts.join('｜')}`
 }
@@ -296,12 +306,12 @@ export function diffToasts(prev: Snapshot | null, cur: Snapshot): string[] {
     for (const t of prTransitions(p.name, prev.projects.find(x => x.name === p.name)?.pr, p.pr)) if (t.toast) out.push(t.text.replace('　', '：'))
   }
   const prevWaiting = waitingBefore(prev)
-  for (const b of cur.blocked) if (!prevWaiting.has(b.name)) out.push(`session「${b.name}」${b.why}`)
-  if (cur.codex.startsWith('STALE') && !prev.codex.startsWith('STALE')) out.push('Codex app 已更新，broker 過期：派工前請先處理')
+  for (const b of cur.blocked) if (!prevWaiting.has(b.name)) out.push(`對話「${b.name}」${b.why}`)
+  if (cur.codex.startsWith('STALE') && !prev.codex.startsWith('STALE')) out.push('Codex 已更新，但背景程式還是舊版：派工前先關掉它（面板有指令）')
   if (
     cur.contextPercent !== null && cur.contextPercent >= ROTATE_PERCENT &&
     (prev.contextPercent === null || prev.contextPercent < ROTATE_PERCENT)
-  ) out.push(`主控台 context 已達 ${cur.contextPercent}%，建議換新的主控台`)
+  ) out.push(`主控台上下文已用 ${cur.contextPercent}%，建議換新的主控台`)
   return out
 }
 
@@ -333,7 +343,7 @@ export function demoSnapshot(now: number): Snapshot & { demo: true } {
       { ...buildProject({ name: 'Sample-API', statusPath: 'demo/api' }, card('無', '示範 API 穩定', 2 * 86_400_000), [], now),
         git: { branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, changed: 0, untracked: 0, conflicts: 0 } },
     ],
-    blocked: [{ name: '示範 session', why: '等批准' }],
+    blocked: [{ name: '示範對話', why: '等批准' }],
     executor: 'claude', codex: 'OK demo', contextPercent: 62, error: null,
     limits: [
       { kind: 'five_hour', percent: 31, resetsAt: new Date(now + 4 * 3_600_000).toISOString() },
@@ -472,11 +482,11 @@ export type Item = { text: string; tone: 'warn' | 'bad' | 'info' | 'win' }
 export function todo(s: Snapshot): Item[] {
   const items: Item[] = []
   if (s.error) items.push({ text: `修正：${s.error}`, tone: 'bad' })
-  if (s.codex.startsWith('STALE')) items.push({ text: '處理過期的 Codex broker（面板有指令）', tone: 'bad' })
-  for (const b of s.blocked) items.push({ text: `回應 session「${b.name}」（${b.why}）`, tone: 'warn' })
+  if (s.codex.startsWith('STALE')) items.push({ text: '關掉舊版的 Codex 背景程式（面板有指令）', tone: 'bad' })
+  for (const b of s.blocked) items.push({ text: `回應對話「${b.name}」（${b.why}）`, tone: 'warn' })
   for (const p of s.projects) if (hasAsk(p)) items.push({ text: `${p.name.replace(/\s.*$/, '')}：${shortAsk(p.ask)}`, tone: 'warn' })
-  for (const p of s.projects) if (!hasAsk(p) && parseGate(p.gate)) items.push({ text: `${p.name.replace(/\s.*$/, '')}：審核 ${shortAsk(p.gate ?? '')}`, tone: 'warn' })
-  if (s.contextPercent !== null && s.contextPercent >= ROTATE_PERCENT) items.push({ text: `換新主控台（context ${s.contextPercent}%）`, tone: 'info' })
+  for (const p of s.projects) if (!hasAsk(p) && parseGate(p.gate)) items.push({ text: `${p.name.replace(/\s.*$/, '')}：${shortAsk(gateText(p.gate))}`, tone: 'warn' })
+  if (s.contextPercent !== null && s.contextPercent >= ROTATE_PERCENT) items.push({ text: `換新主控台（上下文已用 ${s.contextPercent}%）`, tone: 'info' })
   return items
 }
 
@@ -485,7 +495,7 @@ export function running(s: Snapshot): string[] {
   return s.projects.flatMap(p => p.jobs.filter(j => j.kind === 'running').map(() => `${p.name.replace(/\s.*$/, '')}：執行者執行中`))
 }
 export function wins(s: Snapshot): string[] {
-  return s.projects.flatMap(p => p.jobs.filter(j => j.kind === 'newer').map(j => `${p.name.replace(/\s.*$/, '')}：執行者 ${j.status === 'completed' ? '完成' : j.status}，待寫入 CARD`))
+  return s.projects.flatMap(p => p.jobs.filter(j => j.kind === 'newer').map(j => `${p.name.replace(/\s.*$/, '')}：執行者${jobResult(j.status).label}，待寫入狀態卡`))
 }
 
 /** The one-line band: lead with the next action. */
@@ -507,13 +517,13 @@ const short = (name: string) => name.replace(/\s.*$/, '')
 export function board(s: Snapshot): Column[] {
   const ask: Card[] = []
   if (s.error) ask.push({ id: 'err', title: '主控台', text: s.error, meta: '讀取錯誤' })
-  if (s.codex.startsWith('STALE')) ask.push({ id: 'codex', title: 'Codex', text: '處理過期的 broker', meta: '派工前' })
-  for (const b of s.blocked) ask.push({ id: 'b-' + b.name, title: b.name, text: b.why, meta: 'session' })
+  if (s.codex.startsWith('STALE')) ask.push({ id: 'codex', title: 'Codex', text: '背景程式過舊，先關掉', meta: '派工前' })
+  for (const b of s.blocked) ask.push({ id: 'b-' + b.name, title: b.name, text: b.why, meta: '對話' })
   for (const p of s.projects) if (hasAsk(p)) ask.push({ id: 'a-' + p.name, title: short(p.name), text: shortAsk(p.ask, 40), meta: hhmm(p.updated) })
   const run: Card[] = s.projects.flatMap(p =>
     p.jobs.filter(j => j.kind === 'running').map(j => ({ id: 'r-' + j.id, title: short(p.name), text: '執行者執行中', meta: j.id.slice(5, 13) })))
   const done: Card[] = s.projects.flatMap(p =>
-    p.jobs.filter(j => j.kind === 'newer').map(j => ({ id: 'd-' + j.id, title: short(p.name), text: shortAsk(j.summary || `執行者 ${j.status}`, 40), meta: '待寫入 CARD' })))
+    p.jobs.filter(j => j.kind === 'newer').map(j => ({ id: 'd-' + j.id, title: short(p.name), text: shortAsk(j.summary || `執行者${jobResult(j.status).label}`, 40), meta: '待寫入狀態卡' })))
   const busy = new Set([...ask, ...run, ...done].map(c => c.title))
   const idle: Card[] = s.projects
     .filter(p => !busy.has(short(p.name)))
@@ -585,16 +595,16 @@ export function rows(s: Snapshot): Row[] {
     const name = p.name
     const age = ago(cardTime(p.updated), s.at)
     const full = p.name
-    if (!p.hasCard) return { state: 'NOCARD', project: name, item: 'STATUS 卡不存在', age: '—', full }
+    if (!p.hasCard) return { state: 'NOCARD', project: name, item: '找不到狀態卡', age: '—', full }
     if (hasAsk(p)) return { state: 'ACTION', project: name, item: shortAsk(p.ask, 30), age, full }
-    if (parseGate(p.gate)) return { state: 'GATE', project: name, item: shortAsk(p.gate ?? '', 30), age, full }
+    if (parseGate(p.gate)) return { state: 'GATE', project: name, item: shortAsk(gateText(p.gate), 30), age, full }
     const running = p.jobs.filter(j => j.kind === 'running')
     if (running.length) return { state: 'RUNNING', project: name, item: (running.length > 1 ? `${running.length} 個任務・` : '') + runLine(running[0], s.at), age, full }
     // A manual project has no sync button, so the way on is only taking over the session.
     if (p.jobs.some(j => j.kind === 'newer' && j.asks)) {
       // A Claude session that asked can be answered from the console (↩ 回覆); a manual project is only taken over.
-      const item = p.executor === 'manual' ? '執行者在等你回覆：接手該 session'
-        : p.jobs.some(j => j.kind === 'newer' && j.asks && j.sessionId) ? '執行者在等你回覆：↩ 回覆或同步' : '執行者在等你回覆：接手該 session 或同步'
+      const item = p.executor === 'manual' ? '執行者在等你回覆：切到它的對話接手'
+        : p.jobs.some(j => j.kind === 'newer' && j.asks && j.sessionId) ? '執行者在等你回覆：↩ 回覆或同步' : '執行者在等你回覆：切到它的對話接手，或同步'
       return { state: 'ACTION', project: name, item, age, full }
     }
     if (p.jobs.some(j => j.kind === 'newer')) return { state: 'SYNC', project: name, item: '結果未同步至 STATUS', age, full }
@@ -612,7 +622,7 @@ export function counts(s: Snapshot): Record<State, number> {
 /** NEXT: the single most important action (system blockers before project actions). */
 export function next(s: Snapshot): string | null {
   if (s.error) return `主控台：${s.error}`
-  if (s.codex.startsWith('STALE')) return 'Codex：處理過期的 broker'
+  if (s.codex.startsWith('STALE')) return 'Codex：背景程式過舊，先關掉'
   const all = rows(s)
   const r = all.find(x => x.state === 'ACTION' || x.state === 'GATE')
   if (r) return `${r.project}・${r.item}`
@@ -667,7 +677,7 @@ function waitingAgents(agents: Agent[], selfId: string | null, roots: (string | 
  * compare these, so an older session of a project that shows up once the newer one is answered is not new.
  */
 export function waitingNames(agents: Agent[], selfId: string | null, roots: (string | { root: string; name: string })[], home: string): string[] {
-  return waitingAgents(agents, selfId, roots, home).map(({ agent }) => agent.name?.trim() || '(未命名 session)')
+  return waitingAgents(agents, selfId, roots, home).map(({ agent }) => agent.name?.trim() || '（未命名對話）')
 }
 
 /**
@@ -687,7 +697,7 @@ export function relevantBlocked(agents: Agent[], selfId: string | null, roots: (
   }
   return [...newest.values()]
     .sort((x, y) => startedMs(y.agent) - startedMs(x.agent))
-    .map(({ agent, name }) => ({ name: agent.name?.trim() || '(未命名 session)', why: blockedWhy(agent), ...(name ? { project: name } : {}) }))
+    .map(({ agent, name }) => ({ name: agent.name?.trim() || '（未命名對話）', why: blockedWhy(agent), ...(name ? { project: name } : {}) }))
 }
 
 /** The pane's lines for waiting sessions: `name（project）：why`, at most `max`, then `…另 N 條`. */
@@ -723,10 +733,10 @@ export type Limit = { kind: string; percent: number }
 export type Event = { at: number; text: string; tone: 'amber' | 'teal' | 'blue' | 'red' | 'green' }
 
 function jobResult(status: string): { label: string; followup: string; event: string; tone: 'blue' | 'red' } {
-  if (status === 'completed') return { label: '完成', followup: 'CARD 待更新', event: '完成，待同步', tone: 'blue' }
+  if (status === 'completed') return { label: '完成', followup: '狀態卡待更新', event: '完成，待同步', tone: 'blue' }
   if (status === 'failed') return { label: '失敗', followup: '請檢查任務', event: '失敗，請檢查', tone: 'red' }
   if (status === 'cancelled') return { label: '已取消', followup: '', event: '已取消', tone: 'red' }
-  return { label: status || '狀態未知', followup: '請檢查任務', event: status || '狀態未知', tone: 'red' }
+  return { label: status ? phaseText(status) : '狀態未知', followup: '請檢查任務', event: status ? phaseText(status) : '狀態未知', tone: 'red' }
 }
 
 /** `█████░░░` for a 0–100 value in `width` cells. */
@@ -777,8 +787,8 @@ function limitHelpBase(kind: string): string {
   }
   if (parsed?.window === 'five_hour') return '5 小時：Claude 帳號 5 小時滾動額度的剩餘量，到重置時間回滿。'
   if (parsed) return '本週：Claude 帳號每週額度的剩餘量。'
-  if (kind === 'spend_limit') return '花費上限：Claude gateway 為這個帳號設定的花費上限還剩多少，超額後電池見底，到週期重置時回滿。'
-  return `${kind}：host 回報的額度視窗，名稱照原字串顯示。`
+  if (kind === 'spend_limit') return '花費上限：這個帳號設定的花費上限還剩多少，超額後電池見底，到週期重置時回滿。'
+  return `${kind}：Claude Code 回報的額度，名稱照原字串顯示。`
 }
 
 /** The activity feed: what changed between two snapshots, newest first, as short system lines. */
@@ -809,8 +819,8 @@ export function events(prev: Snapshot | null, cur: Snapshot): Event[] {
     for (const t of prTransitions(short(p.name), prev.projects.find(x => x.name === p.name)?.pr, p.pr)) out.push({ at: cur.at, text: t.text, tone: t.tone })
   }
   const prevWaiting = waitingBefore(prev)
-  for (const b of cur.blocked) if (!prevWaiting.has(b.name)) out.push({ at: cur.at, text: `工作階段「${b.name}」${b.why}`, tone: 'amber' })
-  if (cur.codex.startsWith('STALE') && !prev.codex.startsWith('STALE')) out.push({ at: cur.at, text: 'Codex broker 過期', tone: 'red' })
+  for (const b of cur.blocked) if (!prevWaiting.has(b.name)) out.push({ at: cur.at, text: `對話「${b.name}」${b.why}`, tone: 'amber' })
+  if (cur.codex.startsWith('STALE') && !prev.codex.startsWith('STALE')) out.push({ at: cur.at, text: 'Codex 背景程式過舊', tone: 'red' })
   return out
 }
 
@@ -862,7 +872,7 @@ export function lastLogLine(log: string): string {
 export function runLine(j: JobFlag, now: number): string {
   const t = Date.parse(j.startedAt ?? '')
   const elapsed = Number.isNaN(t) ? '' : `已跑 ${ago(t, now)}`
-  const detail = j.last || (j.phase && j.phase !== 'running' ? j.phase : '') || ''
+  const detail = j.last || (j.phase && j.phase !== 'running' ? phaseText(j.phase) : '') || ''
   if (!elapsed && !detail) return j.executor ? `${j.executor} 執行中` : '執行中'
   const body = elapsed && detail ? `${elapsed}・${detail}` : elapsed || detail
   return (j.executor ? `${j.executor} · ` : '') + body
@@ -928,7 +938,7 @@ export function parseCodexQuota(text: string, now: number): { at: string; limits
   for (const w of [rl.primary, rl.secondary]) {
     if (!w || typeof w.used_percent !== 'number') continue
     const mins = Number(w.window_minutes) || 0
-    const label = mins >= 10000 ? 'Codex 週' : mins >= 280 && mins <= 320 ? 'Codex 5h' : `Codex ${Math.round(mins / 60)}h`
+    const label = mins >= 10000 ? 'Codex 週' : mins >= 280 && mins <= 320 ? 'Codex 5 小時' : `Codex ${Math.round(mins / 60)} 小時`
     const reset = typeof w.resets_at === 'number' ? w.resets_at * 1000 : NaN
     const past = Number.isFinite(reset) && reset <= now
     limits.push({ label, percent: past ? 0 : w.used_percent, ...(Number.isFinite(reset) && !past ? { resetsAt: new Date(reset).toISOString() } : {}) })

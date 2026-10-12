@@ -37,7 +37,7 @@ const LOG_READ_LIMIT = 4 * 1024 * 1024
 const tails = new Map<string, { key: string; line: string }>()
 async function logTail(deps: ExecutorDeps, path: string): Promise<string> {
   const stat = deps.files.stat ? await deps.files.stat(path).catch(() => null) : null
-  if (stat && stat.size > LOG_READ_LIMIT) return `（log 超過 4 MiB，請直接開啟：${path}）`
+  if (stat && stat.size > LOG_READ_LIMIT) return `（紀錄檔超過 4 MiB，請直接開啟：${path}）`
   const key = stat ? `${stat.size}|${stat.mtimeMs}` : ''
   const cached = tails.get(path)
   if (key && cached?.key === key) return cached.line

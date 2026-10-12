@@ -27,10 +27,10 @@ export function quotaReading(quota: CodexQuota, minPercent: number, now: number)
 /** Why the preflight line (already filtered to this project's workspace) blocks Codex, or ''. */
 export function preflightProblem(line: string, companionPath: string): string {
   const text = line.trim()
-  if (text.startsWith('STALE')) return 'Codex broker 過期（Codex app 已更新）'
-  if (/\bcodex=unavailable\b/.test(text)) return '找不到 Codex app／broker'
-  if (/\bcompanion=MISSING\b/.test(text)) return '找不到 codex-companion.mjs'
-  if (!companionPath.trim()) return '未設定且找不到 codex-companion.mjs'
+  if (text.startsWith('STALE')) return 'Codex 已更新，但背景程式還是舊版'
+  if (/\bcodex=unavailable\b/.test(text)) return '找不到 Codex app'
+  if (/\bcompanion=MISSING\b/.test(text)) return '找不到 Codex 串接腳本 codex-companion.mjs'
+  if (!companionPath.trim()) return '沒有設定、也找不到 Codex 串接腳本 codex-companion.mjs'
   return ''
 }
 

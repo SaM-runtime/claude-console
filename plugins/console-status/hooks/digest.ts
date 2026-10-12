@@ -3,6 +3,7 @@
  * for the project card and for the context a prompt about that project carries.
  * Pure parts first; `loadDigest` is the one that touches files, through the `DigestIo` it is given.
  */
+import { jobKindText, phaseText } from './wording'
 
 /** How much of a transcript's end is parsed. */
 export const TAIL_CHARS = 65_536
@@ -86,7 +87,7 @@ export function digestLines(job: DigestJob | null, daemon: DaemonRecord | null, 
   const minutes = Number.isFinite(at) ? Math.max(0, Math.floor((now - at) / 60_000)) : null
   const words = oneLine(parsed.lastText)
   return [
-    `執行者：${name} · ${job?.kind || '-'} · ${job?.status || '?'}/${daemon?.state || job?.phase || '?'}`,
+    `執行者：${name} · ${job?.kind ? jobKindText(job.kind) : '-'} · ${job?.status ? phaseText(job.status) : '?'}／${phaseText(daemon?.state || job?.phase || '?')}`,
     parsed.lastAt ? `最後活動：${parsed.lastAt} （${minutes ?? '?'} 分鐘前）` : '最後活動：無',
     parsed.tools.length ? `最後動作：${parsed.tools.join(' → ')}` : '最後動作：無',
     words ? `最後一句：${words.length > 400 ? `…${words.slice(-399)}` : words}` : '最後一句：無',
@@ -112,7 +113,7 @@ export function codexDigestLines(task: DigestTask, now: number): string[] {
   const ms = Date.parse(at)
   const minutes = Number.isFinite(ms) ? Math.max(0, Math.floor((now - ms) / 60_000)) : null
   return [
-    `執行者：${task.id} · codex · ${task.status || '?'}`,
+    `執行者：${task.id} · codex · ${task.status ? phaseText(task.status) : '?'}`,
     at ? `最後活動：${at} （${minutes ?? '?'} 分鐘前）` : '最後活動：無',
     '最後動作：無（Codex 不提供）',
     '最後一句：無（Codex 沒有對話摘要，以 STATUS 與 git 為準）',
@@ -170,7 +171,7 @@ export async function loadDigest(io: DigestIo, where: { root: string; claudeDir:
       if (stat.size <= READ_LIMIT) text = await io.read(path)
       else {
         const result = await io.run(tailArgs(path, io.windows), { timeoutMs: 15_000 })
-        if (result.exitCode !== 0) throw new Error(`讀取 transcript 尾端失敗（exit ${result.exitCode}）`)
+        if (result.exitCode !== 0) throw new Error(`讀取對話紀錄失敗（結束碼 ${result.exitCode}）`)
         text = result.stdout
       }
       parsed = parseTranscript(tailWindow(text))

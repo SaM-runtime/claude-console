@@ -199,7 +199,7 @@ test('any console dispatches; a project another live console dispatched moments 
   h.files[LEASE] = JSON.stringify({ ...after, projects: { [STATUS_KEY]: { sessionId: 'other-console-1234', at: NOW - 10_000 } } })
   await $.command.run({ command: 'console', args: 'continue Project Alpha' } as any)
   expect(h.launches).toEqual([])
-  expect(h.toasts.some(text => text.includes('另一個主控台（session other-co）剛對這個專案派工'))).toBe(true)
+  expect(h.toasts.some(text => text.includes('另一個主控台（對話 other-co）剛對這個專案派工'))).toBe(true)
   // Older than the claim window: the same project is free again, and this console records the dispatch.
   h.files[LEASE] = JSON.stringify({ ...after, projects: { [STATUS_KEY]: { sessionId: 'other-console-1234', at: NOW - 5 * 60_000 } } })
   await $.command.run({ command: 'console', args: 'continue Project Alpha' } as any)

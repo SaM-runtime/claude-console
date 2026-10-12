@@ -74,7 +74,7 @@ test('(e) an expanded card shows the executor\'s four lines, reading first, and 
   expect(await ui.find({ type: 'Text', text: '讀取中…' })).toBeDefined()
   await clock.advance(1000)
   // The daemon's session (sess-alpha-daemon), not the plugin's (sess-alpha-plugin).
-  expect(await ui.find({ type: 'Text', text: 'console-alpha · continue · completed/idle' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'console-alpha · 繼續 · 完成／閒置' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '10 分鐘前' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Bash: npm test' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Alpha 完成。' })).toBeDefined()
@@ -141,7 +141,7 @@ test('a prompt sent with a project selected carries its 執行者摘要, from th
   await $.prompt.submit({ text: '這個專案現在怎樣？' } as any)
   const context = (data.submitted.at(-1)?.context ?? []).join('\n')
   expect(context.includes('【主控台面板選取】使用者在 console-status 面板選了專案「Project Alpha」')).toBe(true)
-  expect(context.includes('執行者摘要：\n執行者：console-alpha · continue · completed/idle\n最後活動：2030-01-05T11:50:00Z （10 分鐘前）\n最後動作：Bash: npm test\n最後一句：Alpha 完成。')).toBe(true)
+  expect(context.includes('執行者摘要：\n執行者：console-alpha · 繼續 · 完成／閒置\n最後活動：2030-01-05T11:50:00Z （10 分鐘前）\n最後動作：Bash: npm test\n最後一句：Alpha 完成。')).toBe(true)
   expect(logReads(data, ALPHA_LOG)).toBe(1)
   await ui.unmount()
 })

@@ -44,7 +44,7 @@ function verdict(p: Project, local?: VerificationResult): 'pass' | 'fail' | null
 
 export function pipeline(p: Project, local?: VerificationResult): Pipeline {
   const todo = (): Stage[] => STAGES.map(stage => ({ ...stage, status: 'todo' }))
-  if (!p.hasCard) return { stages: todo(), current: null, note: 'STATUS 卡不存在' }
+  if (!p.hasCard) return { stages: todo(), current: null, note: '找不到狀態卡' }
   const gate = parseGate(p.gate)
   const gateStage: StageId | null = gate && gate.kind !== 'unknown' ? gate.kind as StageId : null
   const running = p.jobs.some(job => job.kind === 'running')
@@ -64,7 +64,7 @@ export function pipeline(p: Project, local?: VerificationResult): Pipeline {
     current = 'sync'; status = 'wait'; note = '執行者已結束，結果待寫回 STATUS'
   } else if (gateStage) {
     current = gateStage; status = 'wait'
-    note = gateStage === 'release' ? '待使用者核准上線範圍' : `待主控台審核 ${gateStage} 關卡`
+    note = gateStage === 'release' ? '待使用者核准上線範圍' : `待主控台審核${STAGES[INDEX[gateStage]].label}關卡`
   } else if (result === 'fail') {
     current = 'verify'; status = 'fail'; note = '驗證未通過'
   } else if (next) {

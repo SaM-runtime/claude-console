@@ -14,8 +14,8 @@ const newer = { kind: 'newer' as const, id: 'j', status: 'completed', summary: '
 
 test('each workflow position maps to one current stage; earlier stages are done', () => {
   // strip letters: d done · a active · w wait · f fail · t todo  (spec build sync verify review release)
-  expect(at({ hasCard: false })).toEqual({ current: null, strip: 'tttttt', note: 'STATUS 卡不存在' })
-  expect(at({ gate: 'spec：approve acceptance' })).toEqual({ current: 'spec', strip: 'wttttt', note: '待主控台審核 spec 關卡' })
+  expect(at({ hasCard: false })).toEqual({ current: null, strip: 'tttttt', note: '找不到狀態卡' })
+  expect(at({ gate: 'spec：approve acceptance' })).toEqual({ current: 'spec', strip: 'wttttt', note: '待主控台審核規格關卡' })
   expect(at({ gate: 'spec：tests', jobs: [running] }).strip).toBe('attttt')
   expect(at({ next: 'Implement parser', jobs: [running] })).toEqual({ current: 'build', strip: 'datttt', note: '執行者實作中' })
   expect(at({ jobs: [newer] }).strip).toBe('ddwttt')
