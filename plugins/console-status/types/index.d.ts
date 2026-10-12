@@ -1,4 +1,4 @@
-export type JobFlag = { executor?: 'claude' | 'codex'; kind: 'running' | 'newer'; /** What the console dispatched the job for, when known. */ task?: 'sync' | 'continue'; id: string; status: string; summary: string; startedAt?: string; phase?: string; logFile?: string; last?: string; /** A finished job whose turn ended asking the user something. */ asks?: boolean; /** That job's session, which syncing its row resumes. */ sessionId?: string }
+export type JobFlag = { executor?: 'claude' | 'codex'; kind: 'running' | 'newer'; /** What the console dispatched the job for, when known. */ task?: 'sync' | 'continue'; id: string; status: string; summary: string; startedAt?: string; phase?: string; logFile?: string; last?: string; /** When a finished job ended, when known. */ completedAt?: string; /** A finished job whose turn ended asking the user something. */ asks?: boolean; /** That job's session, which syncing its row resumes. */ sessionId?: string }
 
 /** One executor task of a project, as the console lists it. */
 export type ExecutorTask = { id: string; executor?: 'claude' | 'codex'; fallbackFrom?: 'codex'; status: string; title: string; model: string; effort: string; startedAt?: string; completedAt?: string }
@@ -164,6 +164,8 @@ declare module 'claude-code' {
       syncProgress: Record<string, SyncProgress>
       /** statusPath → the executor digest shown on an expanded project card. */
       executorDigests: Record<string, ExecutorDigest>
+      /** Another console's session id while it holds the dispatch lease; null when this console dispatches. */
+      leaseHolder: string | null
     }
   }
 }

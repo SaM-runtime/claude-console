@@ -402,14 +402,32 @@ export async function codexHasThread(deps: Pick<ExecutorDeps, 'run'>, config: Pi
   }
 }
 
+/**
+ * Whether a finished turn's last words wait on the user: a question, or a request for permission or a choice.
+ * Read only from the final line, so a question asked and answered earlier in the turn does not count.
+ */
+export function endsAsking(text: string): boolean {
+  const line = text.trim()
+  if (!line) return false
+  if (/[?？]\s*[)）」』"'`*]*$/.test(line)) return true
+  return /(要我|是否要|是否需要|可以嗎|好嗎|請確認|請問|請授權|需要[你您](?:確認|決定|同意|授權|提供|回覆)|等你回覆|等候你|授權我|允許我|同意嗎|請選擇|should i\b|do you want|would you like|shall i\b|may i\b|please confirm|please approve|needs? (?:your )?(?:approval|permission)|grant (?:me )?permission)/i.test(line)
+}
+
 function createCodex(deps: ExecutorDeps, config: ExecutorConfig): Executor {
   return {
     async listJobs(root) {
-      const jobs = await readJobs(deps.files, config.companionStateRoots, slash(root))
-      return jobs.map(job => {
+      const jobs = (await readJobs(deps.files, config.companionStateRoots, slash(root))).map(job => {
         const kind = job.kind ?? dispatchKind(job.request?.prompt)
         return { ...job, executor: 'codex' as const, ...(kind ? { kind } : {}) }
       })
+      // Codex has no "blocked" state: its newest finished task asks the user when its last words are a question.
+      const last = jobs.filter(job => job.status === 'completed' && job.jobClass === 'task' && job.kind !== 'sync')
+        .sort((a, b) => (Date.parse(b.completedAt ?? '') || 0) - (Date.parse(a.completedAt ?? '') || 0))[0]
+      if (last) {
+        const said = [last.logFile ? await logTail(deps, last.logFile).catch(() => '') : '', last.summary && last.summary !== last.request?.prompt ? last.summary : '']
+        if (said.some(endsAsking)) last.phase = 'idle: 等你回覆'
+      }
+      return jobs
     },
     async dispatch(root, prompt, opts) {
       const normalized = slash(root)

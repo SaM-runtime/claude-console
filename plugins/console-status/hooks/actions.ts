@@ -32,7 +32,8 @@ export function actionKinds(project: Project, state: State): ActionKind[] {
   const gate = parseGate(project.gate)
   const next = project.next.trim()
   if (dispatchable && state === 'IDLE' && !dispatchBlockReason(project) && next && !saysNone(next) && !hasAsk(project) && !gate) kinds.push('continue')
-  if (hasAsk(project)) kinds.push('decide')
+  // The decision is written into the CARD: not while an executor may be writing it too (both would lose).
+  if (hasAsk(project) && !dispatchBlockReason(project)) kinds.push('decide')
   if (gate && gate.kind !== 'unknown') kinds.push('gate')
   return [...kinds, 'open']
 }
@@ -88,7 +89,20 @@ export function dispatchKind(prompt: string | undefined): 'sync' | 'continue' | 
  */
 const REV_RULE = '開始前先重讀 CARD，以這次讀到的 rev 為準；寫入前再重讀一次，只有這兩次不同才停下回報（不要跟記憶裡更早的 rev 比）。'
 /** 更新 is how the console knows the CARD was written: a guessed or UTC time can read as older than the job. */
-const TIME_RULE = '更新欄寫現在的本機時間：先執行 date（Windows 用 Get-Date）取得，不要猜；格式 YYYY-MM-DD HH:MM · rev <n+1> · job <這次的工作 id，若知道>。'
+const TIME_RULE = '更新欄寫現在的本機時間：先執行 date（Windows 用 Get-Date）取得，不要猜；格式 YYYY-MM-DD HH:MM · rev <n+1> · job <這次的工作代號>。'
+
+/** A short code the console gives one dispatch, so the CARD can say which job wrote it (`· job <code>`). */
+export function newJobTag(now: number, random = Math.random): string {
+  return `c-${(now % 1_679_616).toString(36).padStart(4, '0')}${Math.floor(random() * 1296).toString(36).padStart(2, '0')}`
+}
+
+/**
+ * The code goes last in the prompt. 執行中 naming it after the job ended means the job's only CARD write was the
+ * start, so the console still treats the result as not written back.
+ */
+export function withJobTag(prompt: string, tag: string): string {
+  return `${prompt}\n這次工作的代號是 ${tag}：更新欄的 job 寫 ${tag}；執行中 欄若要填，填 ${tag}，寫回結果時改成 無。`
+}
 /**
  * A sync resumes the project's session, which remembers an older rev: without the rule it saw a "conflict" and
  * stopped without writing. With nothing new to record it still writes, so the console sees the sync land.

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.0
+
+Making the overview trustworthy across many projects (2026-10-12), plus an auto-sync race reported from real use.
+
+- **Auto-sync no longer takes a project's thread from under a reply.** A Codex task that ended on a request for permission counted as plain finished work, so auto-sync sent a `--resume-last` sync at once, and the reply sent in the same second failed with `Task … is still running`. Now auto-sync skips a job that ended asking the user, waits 60 seconds after a job ends, and drops the sync for good when new work starts on the project in the meantime. A Codex task whose last words are a question or a request for permission or a choice now shows as `執行者在等你回覆`, like a Claude one.
+- **A CARD written only at the start of a job no longer counts as the result.** Each dispatch gets a short code (`c-k3f9a2`) in its prompt, to write as `· job` in `更新` and in `執行中` while it works. A finished job whose code is still in `執行中` stays in 待同步, even though STATUS.md was saved after it started. Before, any save during the job (the executor's start note, an edit of your own) hid a result that never came.
+- **No decision while an executor may be writing the CARD.** ✎ 做決定 and `d` are locked while the project has a job running; the card says so, and options picked meanwhile are kept for when it ends. A decision typed by hand for such a project tells the console not to write the CARD until the job ends.
+- **`activation: always` leaves executors alone.** It started the console in every session, including non-interactive ones and the background executors the console dispatched, each then polling and auto-syncing as another dispatcher. Those sessions now get the guard only.
+- **One console dispatches at a time.** Each console renews `console-lease.json` beside `claude-sessions.json` on every refresh. A second console that finds a lease younger than 150 seconds only watches: no dispatch, no auto-sync, and a `改由這裡派工` button (or `/console takeover`). A lease left by a console that stopped is taken over by itself; `/console off` hands it back at once.
+
 ## 0.19.0
 
 Fixes from the 2026-10-09 review of the dispatch flow.

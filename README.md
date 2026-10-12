@@ -104,9 +104,9 @@ Marketplace management is covered by the official [plugin marketplace documentat
 | `cacheHint` | `on`: show the console's prompt-cache countdown and re-write cost (see [Prompt cache and cost](#prompt-cache-and-cost)); `off`: hide | `on` |
 | `cacheTtl` | `auto` (the TTL the API reports in the session transcript's usage; 5 minutes until one is seen), `5m` or `1h` | `auto` |
 | `cacheWritePrice` | USD per million cache-write tokens for the estimate; empty uses the model's list price | Empty |
-| `autoSync` | `on`: when finished executor work left the CARD behind (待同步), the console dispatches one sync by itself, once per job, and never retries one that fails or writes nothing. `off`: only the 同步 button syncs | `on` |
+| `autoSync` | `on`: when finished executor work left the CARD behind (待同步), the console dispatches one sync by itself, once per job, and never retries one that fails or writes nothing. It waits 60 seconds after a job ends; if you continued or replied in that time (the project has new work running), that sync is not sent. A job that ended asking you is not synced by itself. `off`: only the 同步 button syncs | `on` |
 | `suggestNext` | `on`: the way on (a decision, a reply to an executor that asked, a gate, a sync, a continue) waits in the prompt box as a dim suggestion, Tab to take (see [Tab for the next step](#tab-for-the-next-step)); `off`: leave the box to Claude Code's own suggestions | `on` |
-| `activation` | `auto`: only a session where you ran `/console` runs the console, and it starts again when that session resumes; other sessions get the command guard only (see [Light sessions](#light-sessions)). `always`: every session | `auto` |
+| `activation` | `auto`: only a session where you ran `/console` runs the console, and it starts again when that session resumes; other sessions get the command guard only (see [Light sessions](#light-sessions)). `always`: every interactive session, except the executor sessions the console dispatched; non-interactive sessions still get the guard only | `auto` |
 | `projectMode` | `auto`: a session opened inside a registered project switches to project mode (see [Pipeline and project mode](#pipeline-and-project-mode)); `off`: always the multi-project console | `auto` |
 
 Paths beginning with `~` expand on Windows, macOS, and Linux. Run `/reload-plugins` or start another Claude Code session after plugin configuration changes. See [the registry example](workflow/projects-scope.example.md).
@@ -252,11 +252,11 @@ The right-click menu (or `m` on the keyboard for the row under the cursor; Esc c
 | ⇢ Continue | IDLE, with a next step and no decision or gate; executor not `manual` | Requires a second press within six seconds (the pane shows the next step it will dispatch), then dispatches the project's executor |
 | ↩ 回覆執行者 | A Claude executor finished its turn on a question to you; executor not `manual` | Fills the composer with `/console reply <project> `: write the answer and press Enter, and the console resumes the session that asked with your words as its prompt (plus the CARD rules a continue carries). No attaching. A permission prompt (`等待批准`) still needs attaching |
 | ⇢ 改用 Claude 派工 | A Codex dispatch held by `codexFallback: ask` | Sends the same action to Claude, recorded as a fallback |
-| ✎ Decide | `等使用者` is nonempty | Prefills a draft and one-shot project context; Claude runs only when submitted. In the expanded card each option is a pressable row, and `✎ 填入決策：1A 2B` fills the picked answer |
+| ✎ Decide | `等使用者` is nonempty and the project has no job running | Prefills a draft and one-shot project context; Claude runs only when submitted. In the expanded card each option is a pressable row, and `✎ 填入決策：1A 2B` fills the picked answer |
 | ⚑ Review gate / final review | Recognized spec, review, or release gate | Sends evidence to the console Claude; release review cannot execute release. The row unlocks when that turn ends, when the CARD moves past the gate, or after ten minutes with no review turn running |
 | ↗ Open STATUS.md | Always | Requests the editor to open the file |
 
-**When a project is 待同步.** A finished job counts as written back when the CARD was written at or after the minute the job started, or when the CARD's `更新` names the job (`· job <id>`). "Written" is the later of `更新` and the STATUS file's own modification time, so a CARD whose `更新` holds a guessed, UTC or unchanged time still counts once the file was saved after the job started. `更新` is read as `2030-01-05 09:05`, `2030/1/5 9:05`, with seconds, or with a zone (`Z`, `+08:00`). Only a job that ended without touching STATUS.md (or failed) leaves the project in 待同步. The console remembers which jobs it sent as syncs, so a sync is never itself taken for work that needs syncing.
+**When a project is 待同步.** A finished job counts as written back when the CARD was written at or after the minute the job started, or when the CARD's `更新` names the job (`· job <id>`). "Written" is the later of `更新` and the STATUS file's own modification time, so a CARD whose `更新` holds a guessed, UTC or unchanged time still counts once the file was saved after the job started. `更新` is read as `2030-01-05 09:05`, `2030/1/5 9:05`, with seconds, or with a zone (`Z`, `+08:00`). Only a job that ended without touching STATUS.md (or failed) leaves the project in 待同步. Each dispatch gets a code (for example `c-k3f9a2`) in its prompt, which the executor writes as `· job` in `更新`; a CARD whose `執行中` still names that code was only written at the start, so the project stays in 待同步. A Codex job that ends on a question or a request for permission shows as `執行者在等你回覆`. ✎ Decide is locked while a job runs (picked answers are kept), so the console and an executor never write STATUS.md at the same time. The console remembers which jobs it sent as syncs, so a sync is never itself taken for work that needs syncing.
 
 **Sync progress.** A sync shows its steps on the project's `同步` line, `● 派工 ─ ◉ 執行 ─ ○ 寫回 STATUS` (● done, ◉ under way, ○ not reached, ✕ stopped there), with the executor, its phase and the elapsed time underneath, and the band shows `↻ 同步：執行中 1 分 20 秒`. It is done when the CARD's `更新` changes; a sync that ends without changing it says so (`✕ 寫回 STATUS`) instead of quietly leaving 待同步. The outcome stays on screen for five minutes and is also a toast. While a job or a sync runs, the console refreshes every 20 seconds instead of every minute.
 
@@ -302,6 +302,7 @@ A dispatch shows RUNNING optimistically until managed state is refreshed. Accept
 | `/console project` | List each project's effective executor, model, and effort |
 | `/console project executor\|model\|effort <value\|inherit> <name>` | Set or clear one project's override |
 | `/console mode [auto\|console\|project]` | Show or choose project mode for this session |
+| `/console takeover` | Make this console the one that dispatches (another console only watches) |
 | `/console off` | Stop the console in this session (the guard stays); `/console` starts it again |
 | `/console version` | Show the installed and the latest version |
 | `/console update` | Update console-status and reload plugins when a newer version is on `main` |
@@ -335,7 +336,7 @@ A suggestion is offered when the way on changes, and again at the next refresh w
 
 With `activation: auto` (the default), a new session is light: it gets the command guard and the `/console` command, and nothing else. It runs no git, `gh`, `claude agents` or Codex probes, draws no band, adds nothing to the system prompt or to prompts, and shows no cache or update toasts. A quick side session, a `claude -p` run and a background executor stay that way.
 
-The first `/console` command in a session (any of them except `version`, `update` and `off`) starts the console there, and the session is remembered: resuming it or reloading plugins starts the console again without asking. `/console off` returns the session to light. Project mode also waits for `/console` in that session. Set `activation` to `always` for the behaviour before 0.6.0, where every session runs the console.
+The first `/console` command in a session (any of them except `version`, `update` and `off`) starts the console there, and the session is remembered: resuming it or reloading plugins starts the console again without asking. `/console off` returns the session to light. Project mode also waits for `/console` in that session. Set `activation` to `always` for the behaviour before 0.6.0, where every session runs the console; non-interactive sessions and the executors the console dispatched (the sessions `claude-sessions.json` records) still stay light.
 
 ## Pipeline and project mode
 
@@ -424,7 +425,7 @@ Since 0.17.0 the Tab suggestion for the next step follows next-steps in [hamzafe
 - Refresh runs every 60 seconds; process probes are cached for five minutes unless forced. `gh` probes follow the same five minutes (one minute while checks run) and run one per project, four at a time.
 - Roots with the same final directory name can collide in companion-state matching.
 - Codex support reads the Codex plugin's internal `state.json` and plugin cache layout. An unrecognised state shape is reported on the companion footer line; update console-status when that happens.
-- Keep one console session dispatching at a time. Writes to `claude-sessions.json` are serialized within one Claude Code process and refuse to overwrite a file another process changed, but the plugin file API has no rename or exclusive create, so two consoles writing in the same instant are not fully safe.
+- One console dispatches at a time. Every console renews `console-lease.json` beside `claude-sessions.json` on each refresh; another console that sees a lease younger than 150 seconds only watches (no dispatch, no auto-sync) and shows `另一個主控台正在派工` with a `改由這裡派工` button (or `/console takeover`). A lease not renewed for 150 seconds is taken over by itself, and `/console off` hands it back at once. Dispatch settings (`dispatch.json`: executor, model, effort) are one shared file, so the last choice applies to every console; use `/console project model <model> <project>` for a different model per project.
 - A selected project adds context to one prompt and does not change the active working directory.
 
 ## Upgrade

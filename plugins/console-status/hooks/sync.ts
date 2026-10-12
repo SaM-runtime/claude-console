@@ -107,14 +107,38 @@ export function bandSync(tracks: Record<string, SyncProgress>): SyncProgress | n
     ?? all.sort((a, b) => (b.endedAt ?? b.at) - (a.endedAt ?? a.at))[0] ?? null
 }
 
+/** A finished job waits this long before auto-sync takes it, so a reply or continue sent right away goes first. */
+export const AUTO_SYNC_GRACE_MS = 60_000
+
+const autoSyncKey = (project: Project, job: Project['jobs'][number]) => `${project.statusPath}\u0000${job.executor ?? ''}:${job.id}`
+
 /**
- * The finished jobs auto-sync would write back for a project in 待同步: completed work the CARD
- * does not reflect. A failed or cancelled job needs a person, and a sync job is never synced again,
- * so a sync that leaves the CARD unchanged cannot start another.
+ * Completed work the CARD does not reflect. A failed or cancelled job needs a person, a sync job is never
+ * synced again (a sync that leaves the CARD unchanged cannot start another), and a job that ended asking
+ * the user waits for the answer: syncing it would resume the same session or thread under the reply.
  */
+function syncable(project: Project) {
+  return project.jobs.filter(job => job.kind === 'newer' && job.status === 'completed' && job.task !== 'sync' && !job.asks)
+}
+
+/** The finished jobs auto-sync would write back for a project in 待同步; none from a manual or busy project. */
 export function autoSyncJobs(project: Project): string[] {
   if (isManual(project) || dispatchBlockReason(project)) return []
-  return project.jobs
-    .filter(job => job.kind === 'newer' && job.status === 'completed' && job.task !== 'sync')
-    .map(job => `${project.statusPath}\u0000${job.executor ?? ''}:${job.id}`)
+  return syncable(project).map(job => autoSyncKey(project, job))
+}
+
+/**
+ * What auto-sync does with a project now. `ready`: jobs to sync. `waiting`: some job ended less than the
+ * grace ago, so look again at a later refresh. `dropped`: jobs to remember as handled without a sync,
+ * because new work started on the project (the console continued or replied) and will write the CARD itself.
+ */
+export function autoSyncPlan(project: Project, now: number): { ready: string[]; waiting: boolean; dropped: string[] } {
+  if (isManual(project)) return { ready: [], waiting: false, dropped: [] }
+  const jobs = syncable(project)
+  if (dispatchBlockReason(project)) return { ready: [], waiting: false, dropped: jobs.map(job => autoSyncKey(project, job)) }
+  const waiting = jobs.some(job => {
+    const ended = Date.parse(job.completedAt ?? '')
+    return Number.isFinite(ended) && now - ended < AUTO_SYNC_GRACE_MS
+  })
+  return { ready: waiting ? [] : jobs.map(job => autoSyncKey(project, job)), waiting, dropped: [] }
 }
