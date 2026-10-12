@@ -14,7 +14,7 @@ const changelog = read('CHANGELOG.md')
 if (!new RegExp(`^## ${plugin.version.replace(/\./g, '\\.')}\\s*$`, 'm').test(changelog))
   problems.push(`CHANGELOG.md has no "## ${plugin.version}" section for plugin.json version ${plugin.version}`)
 
-const readmes = ['README.md', 'README.zh-TW.md']
+const readmes = ['README.md', 'README.en.md']
 for (const readme of readmes) {
   const text = read(readme)
   for (const key of Object.keys(plugin.userConfig ?? {}))
