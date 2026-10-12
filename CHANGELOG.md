@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.20.1
+
+- **Every console can dispatch, per project.** 0.20.0 let only one console dispatch at a time, and a second console only watched. You talk to different projects, or the same project, from several sessions, so the lock is now per project. Any console dispatches any project; the only new wait is for a project another console dispatched in the last two minutes, while its job may not show yet (one job per project, as before). Auto-sync is done by the console that dispatched the job, or by any console once that one stopped. The `改由這裡派工` banner and `/console takeover` are gone.
+
 ## 0.20.0
 
 Making the overview trustworthy across many projects (2026-10-12), plus an auto-sync race reported from real use.

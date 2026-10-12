@@ -37,6 +37,7 @@ import { batteryBody, METER } from './battery'
 import { feedBody } from './feed'
 import { trackRowChanges } from './presentation'
 import { layoutBand } from './band'
+import { claim, claimBlocker, heartbeat, leave, parseLease, syncsHere, type Lease } from './lease'
 import { advanceSync, cardStamp, autoSyncPlan, autoSyncMode, bandSync, isSyncEnded, syncChip, syncStatus, syncStepsText } from './sync'
 import type { SyncProgress, ExecutorDigest } from '../types'
 import { DIGEST_NONE, DIGEST_TIMEOUT, PROMPT_DIGEST_MS, codexDigestLines, digestContext, digestSource, loadDigest } from './digest'
@@ -154,39 +155,23 @@ async function rememberDispatchKind($: any, key: string, kind: 'sync' | 'continu
   await Promise.resolve().then(() => $.store.set(DISPATCH_KINDS_KEY, [...kinds])).catch(() => {})
 }
 /**
- * One console dispatches at a time. Each active console renews a lease file beside claude-sessions.json on
- * every refresh; another console whose lease is fresher than LEASE_MS only watches until it takes over.
+ * Consoles share console-lease.json beside claude-sessions.json (hooks/lease.ts): each renews its heartbeat on
+ * refresh, and a dispatch records which console sent it. Any console may dispatch any project; a project another
+ * console dispatched moments ago waits until that job shows, and only its dispatcher auto-syncs it.
  */
-const LEASE_MS = 150_000
-const leaseHolder = atom({ plugin: 'console-status', key: 'leaseHolder' } as const, null)
 const leasePath = (config: ConsoleConfig) => config.claudeSessionsPath.replace(/\\/g, '/').replace(/\/[^/]*$/, '') + '/console-lease.json'
-async function readLease($: any, config: ConsoleConfig): Promise<{ sessionId: string; at: number } | null> {
-  try {
-    const data = JSON.parse(String(await $.fs.read(leasePath(config))).replace(/^\uFEFF/, ''))
-    return typeof data?.sessionId === 'string' && typeof data?.at === 'number' ? { sessionId: data.sessionId, at: data.at } : null
-  } catch { return null }
-}
-/** Renew this console's lease, or (when another console holds a fresh one) note that one. `take` takes it over. */
-async function renewLease($: any, options: PluginOptions, take = false): Promise<string | null> {
+async function changeLease($: any, options: PluginOptions, change: (lease: Lease, me: string, now: number) => Lease | null): Promise<Lease | null> {
   const me = await Promise.resolve().then(() => $.session.id()).catch(() => null)
   if (typeof me !== 'string' || !me) return null
   const { config } = await paths($, options)
   const now = await $.clock.now()
-  const lease = await readLease($, config)
-  const other = !take && lease && lease.sessionId !== me && now - lease.at < LEASE_MS ? lease.sessionId : null
-  if (!other) await Promise.resolve().then(() => $.fs.write(leasePath(config), JSON.stringify({ sessionId: me, at: now }) + '\n')).catch(() => {})
-  await update($, leaseHolder, () => other)
-  return other
+  const lease = parseLease(await Promise.resolve().then(() => $.fs.read(leasePath(config))).catch(() => null))
+  const next = change(lease, me, now)
+  if (next) await Promise.resolve().then(() => $.fs.write(leasePath(config), JSON.stringify(next) + '\n')).catch(() => {})
+  return next ?? lease
 }
-/** `/console off`: hand the lease back at once instead of letting it run out. */
-async function releaseLease($: any, options: PluginOptions) {
-  const me = await Promise.resolve().then(() => $.session.id()).catch(() => null)
-  const { config } = await paths($, options)
-  const lease = await readLease($, config)
-  if (lease && lease.sessionId === me) await Promise.resolve().then(() => $.fs.write(leasePath(config), JSON.stringify({ sessionId: me, at: 0 }) + '\n')).catch(() => {})
-  await update($, leaseHolder, () => null)
-}
-const leaseNote = (holder: string) => `另一個主控台（session ${holder.slice(0, 8)}）正在派工；這裡只看不派。按「改由這裡派工」或輸入 /console takeover 接手。`
+const renewLease = ($: any, options: PluginOptions) => changeLease($, options, (lease, me, now) => heartbeat(lease, me, now))
+const releaseLease = ($: any, options: PluginOptions) => changeLease($, options, (lease, me) => leave(lease, me))
 
 /** Whether a session is one the console dispatched (a project's executor session, or a job's), from claude-sessions.json. */
 async function dispatchedSession($: any, options: PluginOptions, id: string): Promise<boolean> {
@@ -817,9 +802,11 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     }
     const p = project
     if ((kind === 'sync' || kind === 'continue' || kind === 'reply') && current?.error) throw new Error('請先成功更新執行者狀態，再派工。')
-    if (kind === 'sync' || kind === 'continue' || kind === 'reply') {
-      const holder = await renewLease($, options).catch(() => null)
-      if (holder) throw new Error(leaseNote(holder))
+    if (project && (kind === 'sync' || kind === 'continue' || kind === 'reply')) {
+      // Another console dispatched this project moments ago and its job may not show yet: one job per project.
+      const seen: { other: string | null } = { other: null }
+      await changeLease($, options, (lease, me, now) => (seen.other = claimBlocker(lease, me, project.statusPath, now)) ? null : claim(heartbeat(lease, me, now), me, project.statusPath, now)).catch(() => null)
+      if (seen.other) throw new Error(`另一個主控台（session ${seen.other.slice(0, 8)}）剛對這個專案派工；等那個工作出現在面板上再操作。`)
     }
     const name = p.name.replace(/\s.*$/, '')
     const now = await $.clock.now()
@@ -1151,7 +1138,7 @@ async function scheduleFastTick($: any, options: PluginOptions) {
  * dispatched by itself, once per job. Nothing is retried: a sync that fails or writes nothing waits for a person.
  */
 async function autoSync($: any, options: PluginOptions) {
-  if (autoSyncMode((options as any).autoSync) === 'off' || !consoleActive || await demoEnabled($) || await read($, leaseHolder)) return
+  if (autoSyncMode((options as any).autoSync) === 'off' || !consoleActive || await demoEnabled($)) return
   const s = await read($, snapshot)
   if (!s || s.demo || s.error) return
   const pending = await read($, pendingActions)
@@ -1159,6 +1146,9 @@ async function autoSync($: any, options: PluginOptions) {
   const stored: unknown = await Promise.resolve().then(() => $.store.get(AUTO_SYNCED_KEY)).catch(() => null)
   const done = new Set([...(Array.isArray(stored) ? stored.filter((item): item is string => typeof item === 'string') : []), ...autoSynced])
   const now = await $.clock.now()
+  const me = await Promise.resolve().then(() => $.session.id()).catch(() => null)
+  const { config } = await paths($, options)
+  const lease = parseLease(await Promise.resolve().then(() => $.fs.read(leasePath(config))).catch(() => null))
   const remember = async (jobs: string[]) => {
     for (const job of jobs) { done.add(job); autoSynced.add(job) }
     while (autoSynced.size > AUTO_SYNCED_MAX) autoSynced.delete(autoSynced.values().next().value as string)
@@ -1172,6 +1162,8 @@ async function autoSync($: any, options: PluginOptions) {
     // New work started before the sync went out: that work writes the CARD, so this sync is never sent.
     if (plan.dropped.some(job => !done.has(job))) { await remember(plan.dropped); continue }
     if (row.state !== 'SYNC' || pending[p.statusPath] || actionLocks.has(p.statusPath)) continue
+    // The console that dispatched the work syncs it; another one steps in only when that console stopped.
+    if (typeof me === 'string' && !syncsHere(lease, me, p.statusPath, now)) continue
     const track = tracks[p.statusPath]
     if (track && !isSyncEnded(track.stage)) continue
     if (!plan.ready.some(job => !done.has(job))) continue
@@ -1520,7 +1512,7 @@ export const register: Register = (on, options) => {
     await update($, continueConfirmations, () => ({}))
     await update($, fallbackOffers, () => ({}))
     await loadTrust($)
-    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；reply <專案> <回覆> 回覆停下來問你的執行者；sync / continue / gate / verify <專案> 執行動作；band 橫帶；demo 示範；version 版本；update 更新外掛；takeover 由這個主控台派工；off 此 session 不跑主控台' })
+    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；reply <專案> <回覆> 回覆停下來問你的執行者；sync / continue / gate / verify <專案> 執行動作；band 橫帶；demo 示範；version 版本；update 更新外掛；off 此 session 不跑主控台' })
     transcriptPath = null
     // A reload after an update starts a fresh check, which reads the newly installed manifest.
     await update($, updateInfo, value => value && value.phase !== 'idle' ? { ...value, phase: 'idle', checkedAt: 0 } as UpdateInfo : value)
@@ -1673,14 +1665,6 @@ export const register: Register = (on, options) => {
   on('command.run', async ($, e, next) => {
     if (e.command !== 'console') return next(e)
     const arg = e.args.trim()
-    if (arg === 'takeover') {
-      const me = await Promise.resolve().then(() => $.session.id()).catch(() => null)
-      if (typeof me !== 'string' || !me) return { text: '無法取得 session id，未接手。' }
-      if (!consoleActive) await startConsole($, options, true, false)
-      const holder = await renewLease($, options, true)
-      void refresh($, options, true)
-      return { text: holder === null ? '這個主控台現在負責派工；另一個主控台下次刷新後只看不派。' : '無法取得 session id，未接手。' }
-    }
     if (arg === 'off') {
       if (!consoleActive) return { text: '這個 session 沒有啟動主控台（指令護欄照常運作）。' }
       await stopConsole($, options)
@@ -2050,7 +2034,6 @@ export const register: Register = (on, options) => {
     const openGit = demo ? null : await read($, gitOpen)
     const gitViewMap = demo ? {} : await read($, gitViews)
     const picks = await read($, decisionPicks)
-    const holder = demo ? null : await read($, leaseHolder)
     const refreshing = await read($, isRefreshing)
     const pending = await read($, pendingActions)
     const digests = demo ? {} : await read($, executorDigests)
@@ -2599,17 +2582,6 @@ export const register: Register = (on, options) => {
             )}
             {projectActions(here.project, 'pm-')}
             {verificationView(here.project)}
-          </Box>
-        )}
-
-        {holder && (
-          <Box key="lease" gap={2} flexWrap="wrap">
-            <Text color={C.amber} wrap="wrap">{`◆ 另一個主控台（session ${holder.slice(0, 8)}）正在派工：這裡只看不派，自動同步也不跑`}</Text>
-            <Button key="lease-take" label="改由這裡派工" onPress={() => void (async () => {
-              await renewLease($, options, true)
-              await actionNotice($, '這個主控台現在負責派工', true)
-              void refresh($, options, true)
-            })()} />
           </Box>
         )}
 

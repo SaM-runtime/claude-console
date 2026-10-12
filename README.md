@@ -302,7 +302,6 @@ A dispatch shows RUNNING optimistically until managed state is refreshed. Accept
 | `/console project` | List each project's effective executor, model, and effort |
 | `/console project executor\|model\|effort <value\|inherit> <name>` | Set or clear one project's override |
 | `/console mode [auto\|console\|project]` | Show or choose project mode for this session |
-| `/console takeover` | Make this console the one that dispatches (another console only watches) |
 | `/console off` | Stop the console in this session (the guard stays); `/console` starts it again |
 | `/console version` | Show the installed and the latest version |
 | `/console update` | Update console-status and reload plugins when a newer version is on `main` |
@@ -425,7 +424,7 @@ Since 0.17.0 the Tab suggestion for the next step follows next-steps in [hamzafe
 - Refresh runs every 60 seconds; process probes are cached for five minutes unless forced. `gh` probes follow the same five minutes (one minute while checks run) and run one per project, four at a time.
 - Roots with the same final directory name can collide in companion-state matching.
 - Codex support reads the Codex plugin's internal `state.json` and plugin cache layout. An unrecognised state shape is reported on the companion footer line; update console-status when that happens.
-- One console dispatches at a time. Every console renews `console-lease.json` beside `claude-sessions.json` on each refresh; another console that sees a lease younger than 150 seconds only watches (no dispatch, no auto-sync) and shows `另一個主控台正在派工` with a `改由這裡派工` button (or `/console takeover`). A lease not renewed for 150 seconds is taken over by itself, and `/console off` hands it back at once. Dispatch settings (`dispatch.json`: executor, model, effort) are one shared file, so the last choice applies to every console; use `/console project model <model> <project>` for a different model per project.
+- Several console sessions can run side by side, and different sessions can talk about and dispatch the same project. Each console leaves a heartbeat in `console-lease.json` beside `claude-sessions.json` on every refresh and records which console dispatched each project. Only two limits remain: one job per project at a time, and a project another console dispatched in the last two minutes (its job may not show yet) waits here. Auto-sync is done by the console that dispatched the job; another console steps in only once that one stopped (no heartbeat for 150 seconds, or `/console off`). Dispatch settings (`dispatch.json`: executor, model, effort) are one shared file, so the last choice applies to every console; use `/console project model <model> <project>` for a different model per project.
 - A selected project adds context to one prompt and does not change the active working directory.
 
 ## Upgrade
