@@ -9,7 +9,7 @@ export const ROTATE_PERCENT = 50
 const NONE = new Set(['', '無', '沒有', '-', '未知'])
 
 export type RegistryRow = { name: string; statusPath: string; executor?: ProjectExecutor }
-export type Job = { id: string; kind?: 'sync' | 'continue'; fallbackFrom?: 'codex'; fallbackReason?: string; unmanagedSessionId?: string; warning?: string; executor?: 'claude' | 'codex'; nativeId?: string; sessionId?: string; jobClass?: string; status?: string; summary?: string; createdAt?: string; updatedAt?: string; completedAt?: string; startedAt?: string; phase?: string; logFile?: string; request?: { prompt?: string; effort?: string; model?: string } }
+export type Job = { id: string; kind?: 'sync' | 'continue'; fallbackFrom?: 'codex'; fallbackReason?: string; unmanagedSessionId?: string; warning?: string; executor?: 'claude' | 'codex'; nativeId?: string; sessionId?: string; jobClass?: string; status?: string; summary?: string; createdAt?: string; updatedAt?: string; completedAt?: string; startedAt?: string; phase?: string; logFile?: string; /** The code the console gave this job in its prompt, to write in the CARD. */ tag?: string; request?: { prompt?: string; effort?: string; model?: string } }
 export type Agent = { name?: string; kind?: string; status?: string; state?: string; waitingFor?: string; sessionId?: string; cwd?: string; pid?: number | null; startedAt?: number | string }
 
 /**
@@ -82,6 +82,12 @@ export function cardTime(updated: string): number | null {
   return Date.UTC(y, mo, d, h, mi, sec) - offset * 60_000
 }
 
+/** The job a CARD's 執行中 field names (the executor fills it when it starts and clears it when it writes back), or ''. */
+export function cardRunningJob(value: string): string {
+  if (!value.trim() || saysNone(value)) return ''
+  return value.match(/[\w:.-]{4,}/)?.[0] ?? ''
+}
+
 /** The job a CARD names in its 更新 field (`· job <id>`, as the STATUS template asks), or ''. */
 export function cardJob(updated: string): string {
   return updated.match(/\bjob\s+[`"]?([\w:.-]{4,})/i)?.[1] ?? ''
@@ -112,15 +118,17 @@ export function cardWrittenSince(cardMs: number | null, startedAt: string | unde
 /** The CARD names this job as the one that wrote it (the id, its native id, or a launch id ending in it). */
 function namedByCard(job: Job, named: string): boolean {
   if (!named) return false
+  if (job.tag && named === job.tag) return true
   const ids = [job.id, job.nativeId ?? ''].filter(Boolean)
   return ids.some(id => id === named || (named.length >= 6 && (id.endsWith(`:${named}`) || id.startsWith(`${named}:`))))
 }
 
 /**
  * `cardMs`: when the CARD was last written, the later of its 更新 and the STATUS file's modification time;
- * `named`: the job its 更新 names. Either way a finished job the CARD was written after (or by) is synced.
+ * `named`: the job its 更新 names. Either way a finished job the CARD was written after (or by) is synced,
+ * unless `running` (the job its 執行中 still names) is this job: that write was the start, not the result.
  */
-export function jobFlags(jobs: Job[], cardMs: number | null, named = ''): JobFlag[] {
+export function jobFlags(jobs: Job[], cardMs: number | null, named = '', running = ''): JobFlag[] {
   const flags: JobFlag[] = []
   for (const j of jobs) {
     const summary = (j.summary ?? '').slice(0, 60)
@@ -131,11 +139,12 @@ export function jobFlags(jobs: Job[], cardMs: number | null, named = ''): JobFla
     if (j.jobClass !== 'task') continue
     // A finished sync's output is the CARD itself: whether or not it changed it, the sync is not new work.
     if (j.kind === 'sync' && j.status === 'completed') continue
-    if (j.status === 'completed' && (cardWrittenSince(cardMs, j.startedAt ?? j.createdAt) || namedByCard(j, named))) continue
+    const stillRunning = namedByCard(j, running)
+    if (j.status === 'completed' && !stillRunning && (cardWrittenSince(cardMs, j.startedAt ?? j.createdAt) || namedByCard(j, named))) continue
     const t = Date.parse(j.completedAt ?? j.createdAt ?? '')
     // A Claude job whose turn ended on a question to the user (the agent went idle while blocked).
     const asks = j.status === 'completed' && (j.phase ?? '').startsWith('idle: 等你回覆')
-    if (cardMs === null || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary, ...(j.kind ? { task: j.kind } : {}), ...(asks ? { asks: true, ...(j.sessionId ? { sessionId: j.sessionId } : {}) } : {}) })
+    if (cardMs === null || stillRunning || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary, ...(j.kind ? { task: j.kind } : {}), ...(j.completedAt ? { completedAt: j.completedAt } : {}), ...(asks ? { asks: true, ...(j.sessionId ? { sessionId: j.sessionId } : {}) } : {}) })
   }
   return flags
 }
@@ -172,7 +181,7 @@ export function buildProject(row: RegistryRow, cardText: string | null, jobs: Jo
     verifyNote: verifyNote(card?.['驗證'] ?? ''),
     updated,
     isStale: ms !== null && now - ms > STALE_DAYS * 86400000,
-    jobs: jobFlags(jobs, written, cardJob(updated)),
+    jobs: jobFlags(jobs, written, cardJob(updated), cardRunningJob(card?.['執行中'] ?? '')),
     ...(mtime !== null ? { statusMtime: mtime } : {}),
     tasks: jobTasks(jobs),
   }

@@ -104,9 +104,9 @@ Marketplace 管理請參考官方 [plugin marketplace 文件](https://code.claud
 | `cacheHint` | `on`：顯示主控台 prompt 快取倒數與重寫費用（見[快取與費用](#快取與費用)）；`off`：隱藏 | `on` |
 | `cacheTtl` | `auto`（讀 session 記錄裡 API 回報的實際 TTL，讀到前先當 5 分鐘）、`5m` 或 `1h` | `auto` |
 | `cacheWritePrice` | 估算用的快取寫入單價（每百萬 tokens 美元）；空白使用模型牌價 | 空白 |
-| `autoSync` | `on`：執行者已結束、但結果沒寫回 CARD（待同步）時，主控台自動派一次同步，每個工作只派一次；失敗或沒寫回的同步不會重試。`off`：只有按「同步」才會同步 | `on` |
+| `autoSync` | `on`：執行者已結束、但結果沒寫回 CARD（待同步）時，主控台自動派一次同步，每個工作只派一次；失敗或沒寫回的同步不會重試。工作結束後先等 60 秒，這段時間內若你已繼續或回覆（專案有新工作在跑），這次同步就不派；停下來問你的工作也不自動同步。`off`：只有按「同步」才會同步 | `on` |
 | `suggestNext` | `on`：把下一步（決策、回覆停下來問你的執行者、審核關卡、同步、繼續）以灰字建議放在輸入框，按 Tab 採用（見 [Tab 接受下一步](#tab-接受下一步)）；`off`：輸入框只留 Claude Code 自己的建議 | `on` |
-| `activation` | `auto`：只有執行過 `/console` 的 session 會跑主控台，resume 同一個 session 會自動再啟動；其他 session 只有指令護欄（見[輕量 session](#輕量-session)）。`always`：每個 session 都跑 | `auto` |
+| `activation` | `auto`：只有執行過 `/console` 的 session 會跑主控台，resume 同一個 session 會自動再啟動；其他 session 只有指令護欄（見[輕量 session](#輕量-session)）。`always`：每個互動 session 都跑，但非互動 session 與主控台自己派出去的執行者 session 仍只有護欄 | `auto` |
 | `projectMode` | `auto`：在已登錄專案內開啟的 session 會切到專案模式（見[流程管線與專案模式](#流程管線與專案模式)）；`off`：一律是多專案主控台 | `auto` |
 
 Windows、macOS、Linux 都會展開開頭的 `~`。變更 plugin 設定後，請執行 `/reload-plugins` 或開新 Claude Code session。登錄表格式見 [範例](workflow/projects-scope.example.md)。
@@ -251,11 +251,11 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | ⇢ 繼續下一步 | IDLE、有下一步、無待決或關卡，且執行者不是 `manual` | 六秒內再按一次後派該專案的執行器（面板會顯示將派出的下一步） |
 | ↩ 回覆執行者 | Claude 執行者做完一輪停下來問你，且執行者不是 `manual` | 在輸入框填入 `/console reply <專案> `，寫下回覆按 Enter，主控台就用你的話接續問問題的那個 session（附上和「繼續」相同的 CARD 規則），不用 attach。權限提示（等待批准）仍要 attach 處理 |
 | ⇢ 改用 Claude 派工 | `codexFallback: ask` 擋下的 Codex 派工 | 把同一動作交給 Claude，並記錄為備援 |
-| ✎ 做決定 | `等使用者` 非空 | 預填草稿並附一次性專案 context；送出時才使用 Claude。展開卡片中每個選項都可按下，`✎ 填入決策：1A 2B` 會填入已選的答案 |
+| ✎ 做決定 | `等使用者` 非空，且該專案沒有工作在跑 | 預填草稿並附一次性專案 context；送出時才使用 Claude。展開卡片中每個選項都可按下，`✎ 填入決策：1A 2B` 會填入已選的答案 |
 | ⚑ 審核關卡／最終審核 | 可辨識的 spec、review、release | 交主控台 Claude 審核；release 審核不會執行 release。該輪結束、CARD 關卡變更，或十分鐘內沒有審核輪在跑，這一列就會解鎖 |
 | ↗ 開啟 STATUS.md | 一律 | 請編輯器開啟檔案 |
 
-**什麼時候算待同步。** 只要 CARD 的寫入時間落在工作開始的那一分鐘或之後，或「更新」欄寫明是這個工作（`· job <id>`），就算這個工作已經寫回。寫入時間取「更新」與 STATUS.md 檔案修改時間中較晚的那個，所以執行者把「更新」寫成猜的時間、UTC 或沒改時，只要檔案是在工作開始後存的，仍然算寫回。「更新」可寫成 `2030-01-05 09:05`、`2030/1/5 9:05`、帶秒數或帶時區（`Z`、`+08:00`）。只有結束時沒動到 STATUS.md（或失敗）的工作，才會讓專案停在待同步。主控台會記住哪些工作是它派的同步，同步本身不會被當成還要同步的工作。
+**什麼時候算待同步。** 只要 CARD 的寫入時間落在工作開始的那一分鐘或之後，或「更新」欄寫明是這個工作（`· job <id>`），就算這個工作已經寫回。寫入時間取「更新」與 STATUS.md 檔案修改時間中較晚的那個，所以執行者把「更新」寫成猜的時間、UTC 或沒改時，只要檔案是在工作開始後存的，仍然算寫回。「更新」可寫成 `2030-01-05 09:05`、`2030/1/5 9:05`、帶秒數或帶時區（`Z`、`+08:00`）。只有結束時沒動到 STATUS.md（或失敗）的工作，才會讓專案停在待同步。每次派工，主控台會給工作一個代號（例如 `c-k3f9a2`）並寫進 prompt，執行者把它寫在「更新」的 `· job`；CARD 的「執行中」若還寫著這個代號，代表那次寫入只是開工，結果還沒寫回，專案仍算待同步。Codex 工作若以問句或請求授權結束，也會顯示為「執行者在等你回覆」。工作在跑時「做決定」會鎖住（選好的答案會保留），避免主控台和執行者同時寫 STATUS.md。主控台會記住哪些工作是它派的同步，同步本身不會被當成還要同步的工作。
 
 **同步進度。** 同步時，專案的「同步」欄會顯示步驟 `● 派工 ─ ◉ 執行 ─ ○ 寫回 STATUS`（● 完成、◉ 進行中、○ 未到、✕ 停在這一步），下一行是執行者、目前階段與經過時間；橫帶顯示 `↻ 同步：執行中 1 分 20 秒`。CARD 的「更新」有變才算完成；同步結束卻沒改到 CARD 時會直接標出 `✕ 寫回 STATUS`，不會默默停在待同步。結果在畫面上保留五分鐘，也會跳一則提示。有工作或同步在跑時，主控台每 20 秒更新一次（平常每分鐘）。
 
@@ -301,6 +301,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | `/console project` | 列出每個專案實際生效的執行者、model、effort |
 | `/console project executor\|model\|effort <值\|inherit> <名稱>` | 設定或清除單一專案的覆寫 |
 | `/console mode [auto\|console\|project]` | 顯示或選擇此 session 的專案模式 |
+| `/console takeover` | 改由這個主控台派工（另一個主控台會變成只看不派） |
 | `/console off` | 在此 session 停止主控台（護欄保留）；再輸入 `/console` 重新啟動 |
 | `/console version` | 顯示目前安裝版本與最新版本 |
 | `/console update` | `main` 上有新版時更新 console-status 並重新載入外掛 |
@@ -334,7 +335,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 `activation: auto`（預設）時，新的 session 是輕量的：只有指令護欄和 `/console` 指令。它不會執行 git、`gh`、`claude agents` 或 Codex 探測，不顯示橫帶，不在 system prompt 或提示中加入任何內容，也不跳快取或更新提示。臨時開的小 session、`claude -p` 和背景執行者都會維持這樣。
 
-在 session 中第一次使用 `/console` 指令（`version`、`update`、`off` 除外）時，主控台才會在該 session 啟動，並記住這個 session：之後 resume 或重新載入外掛都會自動再啟動，不用再輸入。`/console off` 讓該 session 回到輕量狀態。專案模式也要等該 session 用過 `/console` 才會啟動。把 `activation` 設為 `always` 可回到 0.6.0 以前每個 session 都跑主控台的行為。
+在 session 中第一次使用 `/console` 指令（`version`、`update`、`off` 除外）時，主控台才會在該 session 啟動，並記住這個 session：之後 resume 或重新載入外掛都會自動再啟動，不用再輸入。`/console off` 讓該 session 回到輕量狀態。專案模式也要等該 session 用過 `/console` 才會啟動。把 `activation` 設為 `always` 可回到 0.6.0 以前每個 session 都跑主控台的行為；非互動 session 和主控台自己派出去的執行者（`claude-sessions.json` 記錄的 session）仍維持輕量。
 
 ## 流程管線與專案模式
 
@@ -424,7 +425,7 @@ claude plugin install paste-preview@paste-preview
 - Companion state 以根目錄最後一段名稱配對；同名根目錄可能混淆。
 - 選取專案只附加一次 context，不會改變目前 cwd。
 - Codex 支援會讀取 Codex 外掛內部的 `state.json` 與 plugin cache 目錄結構。state 結構無法辨識時，companion 那一行會顯示警告；出現時請更新 console-status。
-- 同一時間只讓一個主控台 session 派工。`claude-sessions.json` 的寫入在同一個 Claude Code process 內會排隊，若檔案被其他 process 改過也會拒絕覆寫；但外掛檔案 API 沒有 rename 或獨占建立，兩個主控台在同一瞬間寫入仍不保證安全。
+- 同一時間只有一個主控台派工。每個主控台每次刷新都會更新 `claude-sessions.json` 旁的 `console-lease.json`；另一個主控台看到 150 秒內的租約時只看不派（自動同步也不跑），面板顯示「另一個主控台正在派工」與「改由這裡派工」按鈕（或 `/console takeover`）。租約超過 150 秒沒更新就自動接手，`/console off` 會立即交還。派工設定（`dispatch.json` 的執行者、模型、effort）是所有主控台共用的檔案，最後一次的選擇對所有主控台生效；不同專案要用不同模型，請用 `/console project model <模型> <專案>`。
 
 ## 升級
 
