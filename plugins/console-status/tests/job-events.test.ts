@@ -37,7 +37,7 @@ test('completed jobs preserve their producer and name Codex or Claude in the fee
 test('a completed job without an executor keeps the sensible generic fallback', () => {
   const before = snapshot([])
   const after = snapshot(produced('done-unknown', 'completed'))
-  expect(diffToasts(before, after)).toEqual(['Project Alpha：執行者 完成（done-unknown），CARD 待更新'])
+  expect(diffToasts(before, after)).toEqual(['Project Alpha：執行者 完成（done-unknown），狀態卡待更新'])
   expect(events(before, after)).toEqual([{ at: after.at, text: 'Project　執行者 完成，待同步', tone: 'blue' }])
 })
 

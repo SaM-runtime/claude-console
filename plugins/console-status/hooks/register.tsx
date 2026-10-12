@@ -6,6 +6,7 @@ import type { Register, PluginOptions } from 'claude-code'
 import { resolveConfig, resolveFallbackOptions, legacyDispatchPath, activationMode, suggestNextMode } from './config'
 import type { ConsoleConfig } from './config'
 import { codexHealth, isActiveJob } from './logic'
+import { codexNote } from './wording'
 import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles, effectiveDispatch, setProjectOverride, executorSignature, projectOverride, syncDispatch, setSyncSetting } from './dispatch'
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
@@ -30,7 +31,7 @@ import { commandPreview, dangerReason, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction } from '../types'
-import { jobWarnings, waitingNames, parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
+import { jobWarnings, waitingNames, parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, gateText, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody, METER } from './battery'
@@ -457,11 +458,11 @@ function syncSettingsText(settings: DispatchSettings): string {
     const own = settings.sync?.[executor]
     return own?.model || own?.effort ? [own.model, own.effort].filter(Boolean).join(' · ') : '同一般派工'
   }
-  const session = settings.sync?.session ?? '自動'
+  const session = settings.sync?.session === 'fresh' ? '開新對話' : settings.sync?.session === 'resume' ? '接續原對話' : '自動'
   return [
-    `同步模型：claude ${side('claude')}｜codex ${side('codex')}｜session ${session}`,
+    `同步模型：claude ${side('claude')}｜codex ${side('codex')}｜同步對話 ${session}`,
     '設定：/console sync-model [claude|codex] <模型>，/console sync-effort [claude|codex] <強度>（不寫執行者＝目前的全域執行者）',
-    '/console sync-session fresh|resume（自動＝Claude 有同步模型時開新 session，Codex 接續原本的 session）',
+    '/console sync-session fresh|resume：fresh 開新的小對話、resume 接續專案原本的對話（自動＝Claude 有同步模型時開新對話，Codex 接續原本的對話）',
     '模型名稱照你的帳號可用的填（例如 haiku、luna）；用 "" 清除，回到一般派工的模型。同步模型啟動失敗或沒寫回時，會提醒並改回原本的模型。',
   ].join('\n')
 }
@@ -469,11 +470,11 @@ function syncSettingsText(settings: DispatchSettings): string {
 async function saveDispatch($: any, config: ConsoleConfig, field: GlobalField, value?: string): Promise<DispatchSettings> {
   const { settings, models } = await readDispatch($, config)
   const options = field === 'executor' ? ['claude', 'codex'] : field === 'model' ? models.map(m => m.model) : effortOptions(settings.executor, models, settings.model)
-  if (field === 'model' && value === undefined && !models.length) throw new Error('模型快取無法讀取；請用 /console model <name> 或 /console effort <level> 設定。')
+  if (field === 'model' && value === undefined && !models.length) throw new Error('模型清單讀不到；請用 /console model <名稱> 或 /console effort <強度> 設定。')
   const next = value === undefined ? nextOption(settings[field], options) : (/[\r\n\x00]/.test(value) ? null : value.trim())
   if (next === null) throw new Error('設定值必須是單行文字。')
-  if (field === 'executor' && next !== 'claude' && next !== 'codex') throw new Error('executor 可選：claude, codex')
-  if (field === 'effort' && next && !options.includes(next)) throw new Error(`effort 可選：${options.join(', ')}`)
+  if (field === 'executor' && next !== 'claude' && next !== 'codex') throw new Error('執行者可選：claude, codex')
+  if (field === 'effort' && next && !options.includes(next)) throw new Error(`強度可選：${options.join(', ')}`)
   const updated = { ...settings, [field]: next } as DispatchSettings
   if (field === 'executor' && next !== settings.executor) { updated.model = ''; updated.effort = '' }
   // An explicit model change must not carry an unsupported effort into the next dispatch.
@@ -643,7 +644,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
         if (!job) return
         const last = await createExecutor(job.executor ?? listing, deps, withCompanion(config)).lastLine(job).catch(() => '')
         // A resume copy speaks from the old session's memory; its words are not this dispatch's result.
-        j.last = last && job.unmanagedSessionId ? `（resume 複本）${last}` : last
+        j.last = last && job.unmanagedSessionId ? `（舊對話複本）${last}` : last
       }))
       return { project, warnings }
     })
@@ -806,7 +807,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       // Another console dispatched this project moments ago and its job may not show yet: one job per project.
       const seen: { other: string | null } = { other: null }
       await changeLease($, options, (lease, me, now) => (seen.other = claimBlocker(lease, me, project.statusPath, now)) ? null : claim(heartbeat(lease, me, now), me, project.statusPath, now)).catch(() => null)
-      if (seen.other) throw new Error(`另一個主控台（session ${seen.other.slice(0, 8)}）剛對這個專案派工；等那個工作出現在面板上再操作。`)
+      if (seen.other) throw new Error(`另一個主控台（對話 ${seen.other.slice(0, 8)}）剛對這個專案派工；等那個工作出現在面板上再操作。`)
     }
     const name = p.name.replace(/\s.*$/, '')
     const now = await $.clock.now()
@@ -849,7 +850,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
         result = { command: p.verify, at: await $.clock.now(), ok: false, exitCode: null, lines: outputTail(String(error)), truncated: false }
       }
       await update($, verificationResults, values => ({ ...values, [statusPath]: result }))
-      await actionNotice($, `${name}：${result.ok ? '✓ 驗證通過' : '✕ 驗證失敗'}${result.exitCode === null ? '（逾時或無法執行）' : `（exit ${result.exitCode}）`}`, result.ok)
+      await actionNotice($, `${name}：${result.ok ? '✓ 驗證通過' : '✕ 驗證失敗'}${result.exitCode === null ? '（逾時或無法執行）' : `（結束碼 ${result.exitCode}）`}`, result.ok)
     } else if (kind === 'reply' && !request.text?.trim()) {
       // The answer is typed in the prompt box: a command that carries it back here, to the session that asked.
       const filled = await $.prompt.fill({ text: `/console reply ${p.name} `, mode: 'replace' })
@@ -862,7 +863,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       const { settings } = await readDispatch($, config)
       const eff = effectiveDispatch(settings, root, p.registryExecutor)
       if ((p.executor ?? current?.executor) && (p.executor ?? current?.executor) !== eff.executor) throw new Error('執行者已變更，請更新面板後再操作。')
-      if (eff.executor === 'manual') throw new Error('此專案設為 manual：面板不派工，請手動交接。')
+      if (eff.executor === 'manual') throw new Error('此專案設為手動交接（manual）：面板不派工，請自己交接。')
       const deps: ExecutorDeps = {
         run: (argv, init) => $.process.run(argv, init),
         files: { read: path => $.fs.read(path), list: path => $.fs.list(path), write: (path, text) => $.fs.write(path, text) },
@@ -910,7 +911,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       // A sync of a row whose job stopped to ask resumes that job's session, which may be a review's rather than the project's.
       // A reply goes to that same session, with the person's words as the prompt.
       const asked = (kind === 'sync' || kind === 'reply') && chosen === 'claude' ? askingSession(p) : undefined
-      if (kind === 'reply' && !asked) throw new Error('找不到等你回覆的執行者 session；請更新面板。')
+      if (kind === 'reply' && !asked) throw new Error('找不到在等你回覆的執行者對話；請重新整理面板。')
       if (asked) dispatchOpts = { ...dispatchOpts, resumeSession: asked }
       // A sync may have its own (cheaper) model and run in a new small session; a row that asked keeps its session.
       // A sync model that failed before is skipped, and one that will not launch falls back to the normal model now.
@@ -971,7 +972,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
         void scheduleFastTick($, options)
       }
       const fallbackNote = (dispatchOpts.fallbackFrom ? `（Codex 改由 Claude：${dispatchOpts.fallbackReason}）` : '')
-        + (syncPlan?.model || syncPlan?.fresh ? `（${[syncPlan.model && `用 ${syncPlan.model}`, syncPlan.fresh && '新 session'].filter(Boolean).join('・')}）` : '')
+        + (syncPlan?.model || syncPlan?.fresh ? `（${[syncPlan.model && `用 ${syncPlan.model}`, syncPlan.fresh && '新對話'].filter(Boolean).join('・')}）` : '')
       await actionNotice($, `${name}：${chosen} 已接受${kind === 'sync' ? '同步 STATUS' : kind === 'reply' ? '你的回覆' : '繼續下一步'}${fallbackNote}，等待執行結果`, true)
     } else if (kind === 'decide') {
       // Options already picked in the pane go into the draft, so the CTA and `d` never drop them.
@@ -1014,7 +1015,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       const opened = await $.process.run(['code', p.statusPath], { timeoutMs: 15_000 }).catch(() => null)
       if (!opened || opened.exitCode !== 0) {
         const fallback = await $.process.run(openFallbackArgs(p.statusPath, isWindowsOs(await $.env.get('OS'))), { timeoutMs: 15_000 })
-        if (fallback.exitCode !== 0) throw new Error(`無法開啟 STATUS.md（exit ${fallback.exitCode}）`)
+        if (fallback.exitCode !== 0) throw new Error(`無法開啟 STATUS.md（結束碼 ${fallback.exitCode}）`)
       }
       await actionNotice($, `${name}：已請求開啟 STATUS.md`, true)
     }
@@ -1430,7 +1431,7 @@ async function runUpdate($: any): Promise<string> {
     try { await $.command.run({ command: 'reload-plugins', args: '--force' }) } catch { await notReloaded('已安裝，請輸入 /reload-plugins 套用') }
   })
   // A reload replaces this module and cancels its timers, so this fires only when none happened.
-  $.clock.after(RELOAD_WATCHDOG_MS, () => void notReloaded('已安裝但尚未重新載入：請輸入 /reload-plugins，或開新 session'))
+  $.clock.after(RELOAD_WATCHDOG_MS, () => void notReloaded('已安裝但尚未重新載入：請輸入 /reload-plugins，或開新對話'))
   return `已更新到 ${target}，正在重新載入外掛；若沒有自動套用，請輸入 /reload-plugins。`
 }
 
@@ -1512,7 +1513,7 @@ export const register: Register = (on, options) => {
     await update($, continueConfirmations, () => ({}))
     await update($, fallbackOffers, () => ({}))
     await loadTrust($)
-    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；reply <專案> <回覆> 回覆停下來問你的執行者；sync / continue / gate / verify <專案> 執行動作；band 橫帶；demo 示範；version 版本；update 更新外掛；off 此 session 不跑主控台' })
+    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；reply <專案> <回覆> 回覆停下來問你的執行者；sync / continue / gate / verify <專案> 執行動作；band 橫帶；demo 示範；version 版本；update 更新外掛；off 這個對話關閉主控台' })
     transcriptPath = null
     // A reload after an update starts a fresh check, which reads the newly installed manifest.
     await update($, updateInfo, value => value && value.phase !== 'idle' ? { ...value, phase: 'idle', checkedAt: 0 } as UpdateInfo : value)
@@ -1666,9 +1667,9 @@ export const register: Register = (on, options) => {
     if (e.command !== 'console') return next(e)
     const arg = e.args.trim()
     if (arg === 'off') {
-      if (!consoleActive) return { text: '這個 session 沒有啟動主控台（指令護欄照常運作）。' }
+      if (!consoleActive) return { text: '這個對話沒有開啟主控台（指令護欄照常運作）。' }
       await stopConsole($, options)
-      return { text: '這個 session 已關閉主控台：不再輪詢、不顯示橫帶、不加專案內容；指令護欄照常運作。/console 再開啟。' }
+      return { text: '這個對話已關閉主控台：不再自動更新、不顯示橫帶、不附加專案內容；指令護欄照常運作。輸入 /console 再開啟。' }
     }
     if (arg !== 'version' && arg !== 'update' && !consoleActive) {
       // The first /console in a light session: `refresh` and `demo` load their own data, the pane
@@ -1753,7 +1754,7 @@ export const register: Register = (on, options) => {
           return { text }
         }
         const { settings, models } = await readDispatch($, config)
-        return { text: `目前：${settings.executor} · ${settings.model || '預設'} · ${settings.effort || '預設'}\nexecutor：claude, codex\nmodel：${models.length ? models.map(m => m.model).join(', ') : '快取不可用；使用 /console model <name>'}\neffort：${effortOptions(settings.executor, models, settings.model).join(', ')}\n以 /console model "" 或 /console effort "" 恢復執行者預設。\n${syncSettingsText(settings).split('\n')[0]}（/console sync-model 查看設定方式）` }
+        return { text: `目前：${settings.executor} · ${settings.model || '預設'} · ${settings.effort || '預設'}\n執行者：claude, codex\n模型：${models.length ? models.map(m => m.model).join(', ') : '模型清單讀不到；用 /console model <名稱>'}\n強度：${effortOptions(settings.executor, models, settings.model).join(', ')}\n以 /console model "" 或 /console effort "" 恢復執行者預設。\n${syncSettingsText(settings).split('\n')[0]}（/console sync-model 查看設定方式）` }
       } catch (error) { return { text: `設定未儲存：${error instanceof Error ? error.message : String(error)}` } }
     }
     const act = arg.match(new RegExp(`^(${COMMAND_ACTIONS.join('|')})(?:\\s+([\\s\\S]*))?$`))
@@ -1836,33 +1837,33 @@ export const register: Register = (on, options) => {
   // Palette: quiet ground, colour only where it carries state (amber decide, teal running, blue sync).
   // What each label means, revealed under it while the pointer is over it.
   const HELP: Record<string, string> = {
-    dispatch_executor: '執行者：點一下展開 claude、codex 再選定。claude 使用原生背景 session；codex 使用 Companion。切換時清空模型與 effort，已派出的工作繼續使用原執行者。',
-    dispatch_model: '派工模型：點一下展開可選模型，再點一個選定並存入 dispatch.json；影響後續觸發的派工。「預設」交給執行器決定；也可用 /console model <name> 自由輸入。',
-    project_executor: '專案執行者：點一下選定此專案的覆寫（沿用、claude、codex、manual），存入 dispatch.json 的 projects。優先序：面板覆寫 > 登錄表 Executor 欄 > 全域。manual 代表面板不派工，只做 CARD、驗證與關卡。',
-    fallback: 'Codex 不可用（額度低於門檻、broker 過期或找不到 companion）時，codexFallback=ask 不會派工；按此改由 Claude 執行同一個提示，任務會標記 codex→claude。',
-    dispatch_sync: '同步模型（目前全域執行者的；claude 和 codex 各自一份）：同步 STATUS 只寫 CARD 與歷程，可指定較便宜的模型（例如 Claude 的 haiku、Codex 的 luna，依你的帳號有的模型）。「同派工」＝用上面的派工模型。Claude 設了同步模型後會開新的小 session，只讀 STATUS、git 與執行者摘要；啟動失敗或沒寫回時會提醒並改回原本的模型。/console sync-model 可自由輸入，/console sync-session 改 session 做法。',
-    dispatch_effort: '派工 effort：點一下展開模型支援的推理強度，再點一個選定並儲存；也可用 /console effort <level>。切換模型時不支援的 effort 會清空。',
-    ACTION: '需決策：專案 STATUS 卡片的「等使用者」欄有內容，代表該專案有業務決策需由使用者拍板。',
-    GATE: '待審核：STATUS 的 spec／review 關卡送交主控台判斷；release 只整理可否上線與理由，最後由你決定，不會自動上線。',
-    action_verify: '執行 CARD 驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。新的或被修改過的指令會先完整顯示，10 秒內再按一次才執行。只應填入本機驗證，不可填正式環境操作。',
-    action_sync: '直接請所選執行者將最近結果同步回 STATUS CARD 與歷程，使用同步模型（沒設定時用派工模型）與該執行者額度。',
-    git: 'Git：✕衝突 合併衝突　CI✕ PR 的檢查失敗　●n 未提交／未追蹤檔案　↑n 未推送　↓n 落後上游　CI… 檢查進行中　✓ 乾淨。git 每次更新讀取（不鎖 index），PR 與 CI 透過 gh 每 5 分鐘讀取，CI 進行中時每分鐘。gitProbe 選項可改為 git 或 off。',
-    cache: '主控台的 prompt 快取：最後一次請求後 5 分鐘（或 1 小時）內送出會讀快取；過期後下一則提示要把整段 context 重寫進快取，費用約為 input 價格的 1.25 倍（1 小時 TTL 為 2 倍）。TTL 由 cacheTtl 設定，auto 讀取 session 記錄裡 API 回報的實際 TTL（cache_creation 的 5m／1h 分項）。「上次命中」是上一個請求的 input 有多少比例由快取供應，偏低代表快取失效或剛冷啟動。',
-    pipeline: '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線。● 完成　◉ 執行中　◆ 等待（主控台、使用者或同步）　✕ 驗證失敗　○ 未到。由 CARD、執行者工作與最近一次驗證推得。',
+    dispatch_executor: '執行者：點一下展開 claude、codex 再選定。claude 在背景開新對話執行；codex 透過 Codex 外掛執行。切換時會清空模型與強度，已派出的工作繼續用原本的執行者。',
+    dispatch_model: '派工模型：點一下展開可選模型，再點一個選定並存入 dispatch.json；影響後續觸發的派工。「預設」交給執行者決定；也可用 /console model <名稱> 自由輸入。',
+    project_executor: '專案執行者：點一下替這個專案另選執行者（沿用、claude、codex、manual），存入 dispatch.json。優先順序：面板選的 > 登錄表的 Executor 欄 > 全域設定。manual＝手動交接：面板不派工，只顯示狀態卡、驗證與關卡。',
+    fallback: 'Codex 不能用時（額度低於門檻、背景程式還是舊版、或找不到 Codex 串接腳本），codexFallback 設為 ask 會先停住不派工；按這裡改由 Claude 執行同一個任務，任務會標記 codex→claude。',
+    dispatch_sync: '同步模型（目前全域執行者的；claude 和 codex 各自一份）：同步 STATUS 只寫狀態卡與歷程，可指定較便宜的模型（例如 Claude 的 haiku、Codex 的 luna，依你的帳號有的模型）。「同派工」＝用上面的派工模型。Claude 設了同步模型後會開新的小對話，只讀 STATUS、git 與執行者摘要；啟動失敗或沒寫回時會提醒並改回原本的模型。/console sync-model 可自由輸入，/console sync-session 選要開新對話還是接續原對話。',
+    dispatch_effort: '派工強度：點一下展開模型支援的推理強度，再點一個選定並儲存；也可用 /console effort <強度>。換模型時，新模型不支援的強度會清空。',
+    ACTION: '需決策：專案狀態卡的「等使用者」欄有內容，代表有事要你拍板。',
+    GATE: '待審核：狀態卡的關卡欄寫了 spec（規格）或 review（審核），交給主控台判斷；release（上線）只整理能不能上線與理由，最後由你決定，不會自動上線。',
+    action_verify: '執行狀態卡的驗證指令，工作目錄是專案根目錄，最長 5 分鐘；不花模型額度。新的或被修改過的指令會先完整顯示，10 秒內再按一次才執行。只應填入本機驗證，不可填正式環境操作。',
+    action_sync: '請所選執行者把最近的結果寫回 STATUS 的狀態卡與歷程，用同步模型（沒設定時用派工模型）與該執行者的額度。',
+    git: 'Git：✕衝突 合併衝突　CI✕ PR 的檢查失敗　●n 未提交／未追蹤檔案　↑n 未推送　↓n 落後上游　CI… 檢查進行中　✓ 乾淨。git 狀態每次更新都讀（不會鎖住 repo），PR 與 CI 用 gh 每 5 分鐘讀一次，CI 進行中時每分鐘一次。設定 gitProbe 可改成只讀 git（git）或關閉（off）。',
+    cache: '主控台的提示快取：上一則回應後 5 分鐘（或 1 小時）內送出，會直接讀快取；過期後，下一則提示要把整段上下文重新寫進快取，費用約為一般輸入價格的 1.25 倍（1 小時快取為 2 倍）。快取時長由 cacheTtl 設定，auto＝讀對話紀錄裡實際回報的時長。「上次命中」是上一則請求有多少比例的輸入來自快取，偏低代表快取失效或剛重建。',
+    pipeline: '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線。● 完成　◉ 執行中　◆ 等待（主控台、使用者或同步）　✕ 驗證失敗　○ 未到。由狀態卡、執行者工作與最近一次驗證推算。',
     action_continue: '6 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
-    action_reply: '執行者做完一輪停下來問你：在輸入框寫下回覆，Enter 後主控台用你的話接續同一個 session（Claude 背景 session，用該執行者額度），不用切過去 attach。等待批准的權限提示仍要 attach 處理。',
+    action_reply: '執行者做完一輪停下來問你：在輸入框寫下回覆，按 Enter 後主控台用你的話接續它原本的對話（用該執行者的額度），不用切過去。需要批准的權限提示，仍要切到那個對話處理。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
-    action_gate: '把關卡與專案 context 送給主控台審核，使用 Claude 額度；不會執行 release。',
+    action_gate: '把關卡與專案資料送給主控台審核，使用 Claude 額度；不會執行上線（release）。',
     action_open: '用編輯器開啟專案 STATUS.md，不使用模型額度。',
     RUNNING: '執行中：該專案有 Claude 或 Codex 工作尚未結束；切換執行者仍不得重複派工。',
-    SYNC: '待同步：執行者任務已結束，但 STATUS 卡片在它開始後沒有更新過。autoSync 開啟時主控台會自動派一次同步。',
-    sync_progress: '同步進度：派工（送給執行者）→ 執行（執行者寫回中）→ 寫回 STATUS（CARD 的「更新」有變才算完成）。● 完成　◉ 進行中　○ 未到　✕ 停在這一步。',
+    SYNC: '待同步：執行者的工作已結束，但狀態卡在它開始後沒有更新過。設定 autoSync 開啟時，主控台會自動派一次同步。',
+    sync_progress: '同步進度：派工（送給執行者）→ 執行（執行者寫回中）→ 寫回 STATUS（狀態卡的「更新」有變才算完成）。● 完成　◉ 進行中　○ 未到　✕ 停在這一步。',
     IDLE: '閒置：沒有任務、也沒有待決事項。',
-    codex: 'Codex：companion broker 與已安裝的 Codex app 版本一致才算正常；過期時派工會失敗。',
-    sessions: '其他工作階段：屬於主控台或已登記專案的其他 Claude Code session，正在等待批准（權限提示）、停在提問（做完一輪停下來問問題）或等待輸入，要切到該 session 處理。已退休的不列；同一專案只列最新一條，最多 3 條。與「需決策」不同：這是操作層面的卡住，不是專案決策。',
-    ctx: '上下文：本主控台 session 還剩多少上下文。用掉一半以上建議換新主控台。',
+    codex: 'Codex：檢查 Codex 背景程式是不是和已安裝的 Codex app 同一版；還是舊版時派工會失敗，面板會給你關掉它的指令。',
+    sessions: '其他對話：主控台或已登記專案裡其他的 Claude Code 對話，正在等批准（權限提示）、停下來問問題，或等輸入，要切到那個對話處理。已結束的對話不列；同一專案只列最新一條，最多 3 條。和「需決策」不同：這是對話卡住、要你去操作，不是專案要你拍板。',
+    ctx: '上下文：這個主控台對話的上下文用了多少。用掉一半以上建議換新主控台。',
     // Rate-limit rows (`limit_<kind>`) are added as the host reports them, so a per-model window explains itself by name.
-    version: '版本：目前安裝的 console-status 與 GitHub main 上的最新版，每 30 分鐘與每次載入時檢查。「⬆ 更新」從 marketplace 安裝新版（從本機 git 資料夾載入時改在該資料夾 git pull），完成後自動 /reload-plugins；也可輸入 /console update。',
+    version: '版本：目前安裝的 console-status 與 GitHub 上的最新版，每 30 分鐘與每次載入時檢查。「⬆ 更新」會安裝新版（外掛從本機資料夾載入時，改在那個資料夾執行 git pull），完成後自動重新載入外掛；也可輸入 /console update。',
     codex_quota: 'Codex：Codex 帳號額度的剩餘量，取自最近一次 Codex 工作紀錄（每 5 分鐘讀一次）；很久沒用 Codex 時數字可能是舊的。',
   }
   const C = {
@@ -2022,7 +2023,7 @@ export const register: Register = (on, options) => {
     const stored = await read($, snapshot)
     const s = demo && !stored?.demo ? demoSnapshot(await $.clock.now()) : stored
     // A pane left open across a reload into a light session gets no refresh, so say how to start one.
-    if (s === null && !consoleActive) return <Text color={C.dim}>這個 session 沒有啟動主控台；輸入 /console refresh 開啟。</Text>
+    if (s === null && !consoleActive) return <Text color={C.dim}>這個對話沒有開啟主控台；輸入 /console refresh 開啟。</Text>
     if (s === null) return <Text color={C.dim}>讀取各專案狀態中…</Text>
     const detail = await read($, isDetail)
     const selectedName = await read($, selected)
@@ -2169,9 +2170,9 @@ export const register: Register = (on, options) => {
     const fullItem = (full: string) => {
       const p = s.projects.find(x => x.name === full)
       if (!p) return ''
-      if (!p.hasCard) return 'STATUS 卡不存在'
+      if (!p.hasCard) return '找不到狀態卡'
       if (hasAsk(p)) return askSummary(p.ask)
-      if (parseGate(p.gate)) return `關卡：${p.gate}`
+      if (parseGate(p.gate)) return gateText(p.gate)
       const run = p.jobs.find(j => j.kind === 'running')
       if (run) return runLine(run, s.at)
       if (p.jobs.some(j => j.kind === 'newer')) return '結果未同步至 STATUS'
@@ -2278,7 +2279,7 @@ export const register: Register = (on, options) => {
                 label={chosen ? `[${label}]` : label} onPress={() => { if (!chosen) void chooseProjectExecutor(p, value) }} />
             })}
           </Box>
-          {isManual(p) && <Text color={C.dim}>手動交接：面板不派工（CARD、驗證、關卡照常）</Text>}
+          {isManual(p) && <Text color={C.dim}>手動交接：面板不派工（狀態卡、驗證、關卡照常）</Text>}
           {offer && <Text color={C.amber} wrap="truncate-end">Codex 未派工：{offer.reason}</Text>}
           </Box>
         </Box>
@@ -2439,7 +2440,7 @@ export const register: Register = (on, options) => {
           </Box>
         )}
         {p.git && openGit === p.statusPath && gitView(p, prefix)}
-        {p.git?.upstream && p.git.fetchedAt !== undefined && renderedAt - p.git.fetchedAt > FETCH_STALE_MS && field('Fetch', `上次 fetch ${agoText(p.git.fetchedAt, renderedAt)}，領先／落後可能不是最新`, C.amber)}
+        {p.git?.upstream && p.git.fetchedAt !== undefined && renderedAt - p.git.fetchedAt > FETCH_STALE_MS && field('遠端', `${agoText(p.git.fetchedAt, renderedAt)}抓過遠端（git fetch），領先／落後可能不是最新`, C.amber)}
         {p.git?.commits?.length ? (
           <Box key={prefix + 'commits'} gap={2}>
             <Box width={6} flexShrink={0}><Text color={C.dim}>提交</Text></Box>
@@ -2543,7 +2544,7 @@ export const register: Register = (on, options) => {
               <Button key="dispatch-sync" plain label={pickerValue('sync') || '同派工'} onPress={() => togglePicker('sync')} />
               <Text color={picker === 'sync' ? C.blue : C.faint}>{picker === 'sync' ? '▴' : '▾'}</Text>
             </Box>
-            {syncDispatch(dispatch.settings, '', dispatch.settings.executor, {}).fresh && <Text key="dispatch-sync-fresh" color={C.dim}>新 session</Text>}
+            {syncDispatch(dispatch.settings, '', dispatch.settings.executor, {}).fresh && <Text key="dispatch-sync-fresh" color={C.dim}>新對話</Text>}
             {(() => {
               // These controls set the global default; a selected project may dispatch elsewhere (registry or pane override).
               const p = sel === null ? null : s.projects.find(x => x.name === sel)
@@ -2561,8 +2562,8 @@ export const register: Register = (on, options) => {
               return <Button key={`dispatch-${picker}-${value || 'default'}`} plain dimColor={!chosen}
                 label={chosen ? `[${label}]` : label} onPress={() => { if (chosen) togglePicker(picker); else void choose(picker, value) }} />
             })}
-            {picker === 'model' && !dispatch.models.length && <Text color={C.dim}>模型快取讀不到；用 /console model &lt;name&gt; 輸入</Text>}
-            {picker === 'sync' && <Text color={C.dim}>{dispatch.models.length ? '清單沒有的模型：/console sync-model <name>' : '模型快取讀不到；用 /console sync-model <name> 輸入'}</Text>}
+            {picker === 'model' && !dispatch.models.length && <Text color={C.dim}>模型清單讀不到；用 /console model &lt;名稱&gt; 輸入</Text>}
+            {picker === 'sync' && <Text color={C.dim}>{dispatch.models.length ? '清單沒有的模型：/console sync-model <名稱>' : '模型清單讀不到；用 /console sync-model <名稱> 輸入'}</Text>}
             <Button key="dispatch-picker-close" plain dimColor label="✕" onPress={() => togglePicker(picker)} />
           </Box>}
         </Box>
@@ -2686,7 +2687,7 @@ export const register: Register = (on, options) => {
                       <Text bold color={FG[row.state]} backgroundColor={BG[row.state]}>{chipText(row.state)}</Text>
                       <Text bold color={C.strong} wrap="truncate-end">{p.name}</Text>
                     </Box>
-                    <Text color={C.dim}>{row.age && row.age !== '—' ? `${row.age}前更新` : '無卡片'}</Text>
+                    <Text color={C.dim}>{row.age && row.age !== '—' ? `${row.age}前更新` : '無狀態卡'}</Text>
                   </Box>
                   {pipes.get(p.name) && <Box marginTop={1}>{pipelineLine(pipes.get(p.name)!, PIPE, ui, 'd-pipeline-' + p.name, { noteless: true })}</Box>}
                   {projectInfo(p, 'd-info-' + p.name + '-', { state: true })}
@@ -2731,7 +2732,7 @@ export const register: Register = (on, options) => {
               <Text color={C.dim}>Codex <Text color={health === 'stale' ? C.red : health === 'ok' ? C.green : C.dim}>● {health === 'stale' ? '需處理' : health === 'ok' ? '正常' : '未檢查'}</Text></Text>
             </Box>,
             <Box key="h-sessions" hover={{ scope: 'help-sessions' }}>
-              <Text color={C.dim}>{compactCounts ? '工作階段 ' : '其他工作階段 '}<Text color={s.blocked.length ? C.amber : C.green}>● {s.blocked.length ? `${s.blocked.length} 個停住` : '無'}</Text></Text>
+              <Text color={C.dim}>{compactCounts ? '對話 ' : '其他對話 '}<Text color={s.blocked.length ? C.amber : C.green}>● {s.blocked.length ? `${s.blocked.length} 個停住` : '無'}</Text></Text>
             </Box>,
           ].filter(Boolean))}
           {/* One table for every tool: the tool's name on its first row, the meters lined up under each other. */}
@@ -2779,15 +2780,15 @@ export const register: Register = (on, options) => {
                 for (const l of s.codexQuota?.limits ?? []) {
                   out.push(meterRow('cq' + l.label, tool(), { id: 'codex_quota', label: l.label === 'Codex 週' ? '本週' : l.label.replace('Codex ', ''), used: l.percent, hint: '', note: resetText(l.resetsAt, now, width < 64) }))
                 }
-                if (s.codexQuota?.credits) out.push(usageRow('cq-credits', tool(), '餘額', 'codex_quota', <Text color={C.text}>{`${s.codexQuota.credits} credits`}</Text>))
+                if (s.codexQuota?.credits) out.push(usageRow('cq-credits', tool(), '餘額', 'codex_quota', <Text color={C.text}>{`${s.codexQuota.credits} 點`}</Text>))
                 return out
               })()}
             </Box>
           )}
           {blockedLines(s.blocked).map((line, i) => <Text key={'b' + i} color={C.amber} wrap="truncate-end">{`  ・${line}`}</Text>)}
-          {codexShown && health !== 'ok' && s.codex.trim() && <Text color={health === 'stale' ? C.red : C.dim} wrap="truncate-end">{`  ・${s.codex}`}</Text>}
+          {codexShown && health !== 'ok' && s.codex.trim() && <Text color={health === 'stale' ? C.red : C.dim} wrap={health === 'stale' ? 'wrap' : 'truncate-end'}>{`  ・${codexNote(s.codex)}`}</Text>}
           {codexShown && s.companion && (s.companion.source !== 'configured' || s.companion.warning) && (
-            <Text key="companion" color={s.companion.warning ? C.amber : C.dim} wrap="truncate-end">{`  ・companion：${s.companion.path || '（無）'}${s.companion.source === 'installed' || s.companion.source === 'cache' ? '（自動選用）' : ''}${s.companion.warning ? `　⚠ ${s.companion.warning}` : ''}`}</Text>
+            <Text key="companion" color={s.companion.warning ? C.amber : C.dim} wrap="truncate-end">{`  ・Codex 串接腳本：${s.companion.path || '（無）'}${s.companion.source === 'installed' || s.companion.source === 'cache' ? '（自動選用）' : ''}${s.companion.warning ? `　⚠ ${s.companion.warning}` : ''}`}</Text>
           )}
         </Box>
 

@@ -91,7 +91,7 @@ test('A5: unnamed sessions get a useful label and fully empty entries are remove
     { status: 'waiting', waitingFor: '  ' },
     { name: 'named', status: 'waiting' },
   ])).toEqual([
-    { name: '(未命名 session)', why: '等批准' },
+    { name: '（未命名對話）', why: '等批准' },
     { name: 'named', why: '等輸入' },
   ])
 })

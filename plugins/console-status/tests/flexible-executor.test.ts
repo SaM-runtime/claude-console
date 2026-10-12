@@ -119,11 +119,11 @@ test('fallback decision covers ask/claude/off, the threshold boundary, stale quo
   }
   expect(decideCodexDispatch({ ...base, mode: 'claude', quota: null, companionPath: '' }).action).toBe('claude')
   // An unknown probe or another workspace's stale broker is not a reason.
-  for (const preflight of ['unknown', '…', 'OK*（其他 workspace 有舊 broker，與本主控台無關）']) {
+  for (const preflight of ['unknown', '…', 'OK* codex=1.2.3']) {
     expect(decideCodexDispatch({ ...base, mode: 'claude', quota: null, preflight })).toEqual({ action: 'codex' })
   }
   const both = decideCodexDispatch({ ...base, mode: 'ask', quota: fresh([99]), preflight: 'STALE codex=1 brokers=1(a)' })
-  expect(both.action === 'ask' && both.reason.includes('broker') && both.reason.includes('1%')).toBe(true)
+  expect(both.action === 'ask' && both.reason.includes('背景程式') && both.reason.includes('1%')).toBe(true)
 })
 
 test('companion versions sort semantically, not lexically', () => {
@@ -179,7 +179,7 @@ test('companion auto-resolve picks the newest installed version and reports a st
   const tie = { [`${home}/.claude/plugins/installed_plugins.json`]: JSON.stringify({ plugins: { 'codex@openai-codex': [{ installPath: `${cache}/1.0.10`, version: '1.0.10' }] } }) }
   expect((await resolveCompanion(fakeFs(tree, tie), home, '')).source).toBe('installed')
   // Nothing installed.
-  expect(await resolveCompanion(fakeFs({}), home, '')).toEqual({ path: '', source: 'none', warning: 'companionScript is empty and no installed Codex plugin was found' })
+  expect(await resolveCompanion(fakeFs({}), home, '')).toEqual({ path: '', source: 'none', warning: 'companionScript 沒有設定，也沒有已安裝的 Codex 外掛' })
   const kept = await resolveCompanion(fakeFs({}), home, 'D:/Tools/gone.mjs', true)
   expect([kept.path, kept.source, !!kept.warning]).toEqual(['D:/Tools/gone.mjs', 'configured', true])
 })

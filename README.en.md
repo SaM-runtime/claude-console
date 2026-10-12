@@ -171,8 +171,8 @@ Use `/console model ""` or `/console effort ""` to restore the selected executor
 
 - Model names are free text: write whatever your account offers. A blank field falls back to the normal dispatch's model or effort, and a project's `sync` fields win over the global ones.
 - `session`: `fresh` starts a new small session that reads STATUS.md, `git log`/`git status` and the executor digest, and is told to write only what those show. `resume` continues the project's session, as before. Left out, a Claude sync with its own model goes `fresh` (a cheap model resuming the long session would re-cache all of it at the new model's price), and Codex stays on `resume`, because the next continue's `--resume-last` would pick up a fresh sync's thread instead of the work's. A row whose executor stopped to ask always resumes that session.
-- Every sync on its own model says so: the accepted notice reads `（用 haiku・新 session）` and the 同步 line `claude（haiku・新 session） 寫回中`. If the sync model fails to launch, the console syncs again at once with the normal model and tells you; if a sync on it fails or ends without writing the CARD, a toast says so. In both cases later syncs use the normal model until you set the sync model again.
-- The pane's `同步模型` control beneath the title picks the sync model of the global executor (`同派工` clears it); `新 session` follows it when a sync will start one, and its choices line names the executor, e.g. `同步模型（claude）`. `/console sync-model [claude|codex] <name>`, `/console sync-effort [claude|codex] <level>` and `/console sync-session fresh|resume` set the same fields; `""` clears one, and `/console sync-model` alone shows them.
+- Every sync on its own model says so: the accepted notice reads `（用 haiku・新對話）` and the 同步 line `claude（haiku・新對話） 寫回中`. If the sync model fails to launch, the console syncs again at once with the normal model and tells you; if a sync on it fails or ends without writing the CARD, a toast says so. In both cases later syncs use the normal model until you set the sync model again.
+- The pane's `同步模型` control beneath the title picks the sync model of the global executor (`同派工` clears it); `新對話` follows it when a sync will start one, and its choices line names the executor, e.g. `同步模型（claude）`. `/console sync-model [claude|codex] <name>`, `/console sync-effort [claude|codex] <level>` and `/console sync-session fresh|resume` set the same fields; `""` clears one, and `/console sync-model` alone shows them.
 
 ### executor: claude
 
@@ -264,7 +264,7 @@ With the menu open, one key runs an action on offer: `v` verify, `s` sync, `c` c
 
 **Executor section.** An expanded card (the action menu, or the focused project of `↧ 各專案詳細`) has a 執行者 section with the same four lines as the executor digest. It is read when the card opens (`執行者：讀取中…` until then) and again only when the transcript changed; a card that is not open reads nothing.
 
-**Other sessions.** Under 用量, `其他工作階段` lists Claude Code sessions in the console's folder or a registered project that wait on you: `等待批准` (a permission prompt), `停在提問` (it finished a turn on a question) or `等待輸入`. Sessions the daemon retired (no process, no status) are left out, each project shows one, named with the project (the most pressing wording first, then the newest), and past three lines the list ends with `…另 N 條`. A session stopped on a question is only pointed out here; its project row already offers the decision.
+**Other sessions.** Under 用量, `其他對話` lists Claude Code sessions in the console's folder or a registered project that wait on you: `等待批准` (a permission prompt), `停在提問` (it finished a turn on a question) or `等待輸入`. Sessions the daemon retired (no process, no status) are left out, each project shows one, named with the project (the most pressing wording first, then the newest), and past three lines the list ends with `…另 N 條`. A session stopped on a question is only pointed out here; its project row already offers the decision.
 
 ## Git, PR and CI
 
@@ -313,7 +313,7 @@ What the selected project's prompt carries, so the console need not read files t
 | Context | Content |
 | --- | --- |
 | Selection | The project, its STATUS path, state, decision, gate, next step, executor jobs, Git and PR lines |
-| Executor digest (`執行者摘要：`) | Four lines about the project's latest executor session: `執行者：<launch name> · <kind> · <status>/<phase>`, `最後活動：<time> （N 分鐘前）`, `最後動作：` the last three tool calls, `最後一句：` its last words (up to 400 characters); `執行者摘要：無紀錄` when there is no job or transcript. When the project's latest work ran on Codex, which keeps no transcript the console can read, the four lines name that Codex job, its status and time, and say to go by STATUS and git; an older Claude session of the same project is not shown as its latest |
+| Executor digest (`執行者摘要：`) | Four lines about the project's latest executor session: `執行者：<launch name> · <kind> · <status>／<phase>` (kind and status in Chinese, e.g. `console-a · 繼續 · 完成／閒置`), `最後活動：<time> （N 分鐘前）`, `最後動作：` the last three tool calls, `最後一句：` its last words (up to 400 characters); `執行者摘要：無紀錄` when there is no job or transcript. When the project's latest work ran on Codex, which keeps no transcript the console can read, the four lines name that Codex job, its status and time, and say to go by STATUS and git; an older Claude session of the same project is not shown as its latest |
 
 The panel's own gate review and continue prompts carry the executor digest too, except an independent review: a continue whose 下一步 starts with a review task's path runs in a new session (Claude) or a new thread (Codex `--fresh`) and gets no digest, so the reviewer judges from the task, its own run of the acceptance and the diff rather than from the worker's last words. The session is the one the daemon recorded for the job (`~/.claude/jobs/<id>/state.json`), the plugin's record only when the daemon has none; only the transcript's last 64 KB is parsed, and an unchanged transcript (same mtime and size) is not read again.
 
@@ -433,7 +433,7 @@ One line per version, newest first; see [CHANGELOG.md](CHANGELOG.md) or [GitHub 
 
 | Version | Highlights |
 | --- | --- |
-| 0.20 | Every console can dispatch, locked per project; auto-sync waits for your reply to an executor, decisions lock while a job runs |
+| 0.20 | Every console can dispatch, locked per project; auto-sync waits for your reply to an executor, decisions lock while a job runs; 0.20.2 rewrites the pane's half-English wording in plain Chinese (broker → Codex 背景程式, CARD → 狀態卡, session → 對話) |
 | 0.19 | Independent reviews: a Codex review starts a new thread, the reviewer isn't told the worker's conclusion; one STATUS rev rule |
 | 0.18 | Optional cheaper model for sync (`/console sync-model`), falling back to the normal model if it fails |
 | 0.17 | Reply to a stuck executor from the console (`↩ 回覆執行者`); next step as ghost text, Tab to accept |

@@ -44,7 +44,7 @@ test('a sync moves from dispatch to running to done, or stops where it failed', 
   const running = project(cardAt, [{ id: 's', jobClass: 'task', executor: 'codex', status: 'running', phase: 'editing', startedAt: '2030-01-05T11:59:00Z' }])
   expect(advanceSync(start, running, NOW)).toEqual({ ...start, phase: 'editing' })
   expect(syncStepsText(start)).toBe('● 派工 ─ ◉ 執行 ─ ○ 寫回 STATUS')
-  expect(syncStatus(start, NOW)).toBe('codex 寫回中（queued）・1 分 0 秒')
+  expect(syncStatus(start, NOW)).toBe('codex 寫回中（排隊中）・1 分 0 秒')
 
   const written = project(local('2030-01-05T12:00:00Z'), [{ id: 's', jobClass: 'task', executor: 'codex', status: 'completed', startedAt: '2030-01-05T11:59:00Z', completedAt: '2030-01-05T12:00:30Z' }])
   const done = advanceSync(start, written, NOW)!

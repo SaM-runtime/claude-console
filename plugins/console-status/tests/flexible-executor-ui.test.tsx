@@ -131,7 +131,7 @@ test('codexFallback=claude sends a blocked Codex dispatch to Claude and records 
   expect(h.launches[0]!.includes('fiction-codex')).toBe(false)
   const job = JSON.parse(h.files[SESSIONS]!).roots['d:/project alpha'].jobs[0]
   expect(job.fallbackFrom).toBe('codex')
-  expect(job.fallbackReason.includes('broker')).toBe(true)
+  expect(job.fallbackReason.includes('背景程式')).toBe(true)
   expect(h.toasts.some(text => text.includes('Codex 改由 Claude'))).toBe(true)
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   expect(await ui.find({ type: 'Text', text: /codex→claude/ })).toBeDefined()
@@ -194,7 +194,7 @@ test('an empty companionScript resolves the newest installed Codex plugin and th
   const resolved = `${cache}/1.0.10/scripts/codex-companion.mjs`
   expect(h.probes[0]!.join('|').includes(`--companion-script|${resolved}`)).toBe(true)
   const ui = await $.ui.mount(PANE)
-  expect(await ui.find({ type: 'Text', text: /companion：.*1\.0\.10.*自動選用/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Codex 串接腳本：.*1\.0\.10.*自動選用/ })).toBeDefined()
   await ui.press({ key: 'detail' })
   await ui.press({ key: 'detail-Project Alpha-continue' })
   await ui.press({ key: 'detail-Project Alpha-continue' })
@@ -212,7 +212,7 @@ test('a configured companion reported MISSING is replaced by the installed one w
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   expect(h.probes.length).toBe(2)
   const ui = await $.ui.mount(PANE)
-  expect(await ui.find({ type: 'Text', text: /companion：.*2\.0\.0.*⚠ configured companionScript not found/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Codex 串接腳本：.*2\.0\.0.*⚠ 設定的 companionScript 找不到/ })).toBeDefined()
   // The healthy re-probe means no fallback: Codex is dispatched with the resolved script.
   await ui.press({ key: 'detail' })
   await ui.press({ key: 'detail-Project Alpha-continue' })

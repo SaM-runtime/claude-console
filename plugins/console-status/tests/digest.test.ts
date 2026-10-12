@@ -48,13 +48,13 @@ test('(d) the digest is always four lines: executor, last activity, last three a
   const parsed = parseTranscript(TRANSCRIPT)
   const lines = digestLines({ id: 'console-a:abcd1234', launchName: 'console-a', kind: 'continue', status: 'completed', phase: 'idle' }, { state: 'idle' }, parsed, NOW)
   expect(lines).toEqual([
-    '執行者：console-a · continue · completed/idle',
+    '執行者：console-a · 繼續 · 完成／閒置',
     '最後活動：2030-01-05T11:51:00Z （9 分鐘前）',
     `最後動作：Bash: npm test -- --watch=false → Edit: D:/Project Alpha/b.ts → Bash: echo ${'x'.repeat(75)}`,
     '最後一句：測試全過。 CARD 已更新，關卡留無。',
   ])
   const empty = digestLines({ id: 'j' }, null, parseTranscript(''), NOW)
-  expect(empty).toEqual(['執行者：j · - · ?/?', '最後活動：無', '最後動作：無', '最後一句：無'])
+  expect(empty).toEqual(['執行者：j · - · ?／?', '最後活動：無', '最後動作：無', '最後一句：無'])
   const long = digestLines({ id: 'j' }, null, parseTranscript(say('2030-01-05T11:59:00Z', 'z'.repeat(1000))), NOW)
   expect(long.length).toBe(4)
   expect(long[3].length).toBeLessThanOrEqual('最後一句：'.length + 400)
@@ -94,7 +94,7 @@ test('(c) no job, and a job whose transcript is nowhere, both come out as 無紀
   const cache = new Map()
   const result = await loadDigest(found.io, where, cache, new Map(), NOW)
   expect(result.kind).toBe('ready')
-  expect(result.kind === 'ready' && result.lines[0]).toBe('執行者：console-j · - · running/working')
+  expect(result.kind === 'ready' && result.lines[0]).toBe('執行者：console-j · - · 執行中／工作中')
   // Same mtime: the transcript is not read again.
   await loadDigest(found.io, where, cache, new Map(), NOW)
   expect(found.reads.filter(p => p.endsWith('.jsonl')).length).toBe(1)

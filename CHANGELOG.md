@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.20.2
+
+- **Plain Chinese in the pane.** Wording that mixed Chinese with internal English terms was hard to read (`STALE 需處理的 broker：…`). The pane, band, toasts, feed, tooltips and `/console` replies now say what is happening and what to do in plain Traditional Chinese. One word per idea: `狀態卡` for the STATUS CARD, `對話` for a Claude Code session (`其他工作階段` and `session 等你` included), `上下文` for context, `強度` for effort, `Codex 背景程式` for the Codex broker, `Codex 串接腳本` for the companion script, `結束碼` for exit codes. The old-broker line now reads `Codex 已更新，但背景程式還是舊版（PID …），派工會失敗；先關掉它：! for p in …` and wraps instead of cutting off the command. Job states (`running`, `blocked: …`, `queued`) and kinds (`continue`, `sync`) show in Chinese, Codex quota windows read `5 小時`, credits `點`, and companion warnings are in Chinese. Commands, settings names, file names and model names stay as you type them. The executor digest attached to prompts names states the same way; the instructions sent to executors are unchanged.
+
 ## 0.20.1
 
 - **Every console can dispatch, per project.** 0.20.0 let only one console dispatch at a time, and a second console only watched. You talk to different projects, or the same project, from several sessions, so the lock is now per project. Any console dispatches any project; the only new wait is for a project another console dispatched in the last two minutes, while its job may not show yet (one job per project, as before). Auto-sync is done by the console that dispatched the job, or by any console once that one stopped. The `改由這裡派工` banner and `/console takeover` are gone.

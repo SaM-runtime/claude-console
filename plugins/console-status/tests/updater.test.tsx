@@ -109,7 +109,7 @@ test('/console update runs claude plugin update, then /reload-plugins', OPTIONS,
   expect(data.reloadArgs).toEqual(['--force'])
   // No reload replaced the module (a test never does): after 20 s the pane stops saying it is reloading.
   await data.clock.advance(20_000)
-  expect(data.state.updateInfo).toMatchObject({ phase: 'failed', message: '已安裝但尚未重新載入：請輸入 /reload-plugins，或開新 session' })
+  expect(data.state.updateInfo).toMatchObject({ phase: 'failed', message: '已安裝但尚未重新載入：請輸入 /reload-plugins，或開新對話' })
 })
 
 test('a marketplace update that installs nothing is not called installed', OPTIONS, async ($, on) => {

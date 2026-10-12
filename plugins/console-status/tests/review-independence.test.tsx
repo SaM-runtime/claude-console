@@ -82,7 +82,7 @@ test('a Codex continue carries the Codex job as its digest, not an old Claude se
   expect(h.launches[0]!.includes('--resume-last')).toBe(true)
   const prompt = h.launches[0]!.at(-1)!
   expect(prompt.includes('這是獨立審核')).toBe(false)
-  expect(prompt.includes('執行者摘要：\n執行者：task-work · codex · completed')).toBe(true)
+  expect(prompt.includes('執行者摘要：\n執行者：task-work · codex · 完成')).toBe(true)
   expect(prompt.includes('console-old')).toBe(false)
   expect(prompt.includes('舊的 Claude 工作已完成')).toBe(false)
 })
@@ -97,7 +97,7 @@ test('the digest comes from the executor that did the latest work', () => {
   expect(digestSource('claude', undefined)).toEqual({ kind: 'claude' })
   expect(digestSource('manual', undefined)).toEqual({ kind: 'claude' })
   expect(codexDigestLines(codex, T('2030-01-05T12:00:00Z'))).toEqual([
-    '執行者：task-1 · codex · completed',
+    '執行者：task-1 · codex · 完成',
     '最後活動：2030-01-05T11:50:00Z （10 分鐘前）',
     '最後動作：無（Codex 不提供）',
     '最後一句：無（Codex 沒有對話摘要，以 STATUS 與 git 為準）',

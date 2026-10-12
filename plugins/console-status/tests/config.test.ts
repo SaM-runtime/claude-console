@@ -62,6 +62,6 @@ test('refresh consumes userConfig and plugin-relative scripts, then renders the 
   expect(await ui.find({ type: 'Text', text: /^ ▶ 執行中 $/ })).toBeDefined()
   expect((await ui.find({ key: 'sel-Project Alpha' }))?.text).toBe('Project Alpha')
   expect((await ui.find({ type: 'Text', text: /^● 未檢查$/ }))?.props.color).toBe('#6E7787')
-  expect(await ui.find({ type: 'Text', text: /^  ・unknown$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^  ・Codex 狀態不明（unknown）$/ })).toBeDefined()
   await ui.unmount()
 })
