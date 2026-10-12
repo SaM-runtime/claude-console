@@ -3,7 +3,7 @@
 **A console for keeping several projects moving from inside Claude Code.** One pane shows where every project stands and who it is waiting on; decisions are pressed, dispatch is one button, and Git, PR, CI and quota sit beside them, so you don't switch windows.
 
 <p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" alt="claude-console demo: /console demo opens the console, then the right-click action menu, decisions answered with number keys, the filled decision, and the per-project detail cards" width="900"></a></p>
-<p align="center"><a href="docs/demo.mp4">▶ Watch the 45-second demo (MP4)</a> · <a href="README.md">繁體中文</a></p>
+<p align="center"><a href="docs/demo.mp4">▶ Watch the 45-second demo (MP4)</a> · <a href="#version-history">Version history</a> · <a href="README.md">繁體中文</a></p>
 <p align="center"><sub>The real screen of Claude Code 2.1.294 with console-status 0.15.0 in a terminal (captured frame by frame with tmux, then encoded), showing <code>/console demo</code> data; the captions and mouse pointer were added afterwards.</sub></p>
 
 ## Try the demo
@@ -426,6 +426,33 @@ Since 0.17.0 the Tab suggestion for the next step follows next-steps in [hamzafe
 - Codex support reads the Codex plugin's internal `state.json` and plugin cache layout. An unrecognised state shape is reported on the companion footer line; update console-status when that happens.
 - Several console sessions can run side by side, and different sessions can talk about and dispatch the same project. Each console leaves a heartbeat in `console-lease.json` beside `claude-sessions.json` on every refresh and records which console dispatched each project. Only two limits remain: one job per project at a time, and a project another console dispatched in the last two minutes (its job may not show yet) waits here. Auto-sync is done by the console that dispatched the job; another console steps in only once that one stopped (no heartbeat for 150 seconds, or `/console off`). Dispatch settings (`dispatch.json`: executor, model, effort) are one shared file, so the last choice applies to every console; use `/console project model <model> <project>` for a different model per project.
 - A selected project adds context to one prompt and does not change the active working directory.
+
+## Version history
+
+One line per version, newest first; see [CHANGELOG.md](CHANGELOG.md) or [GitHub Releases](https://github.com/SaM-runtime/claude-console/releases) for details.
+
+| Version | Highlights |
+| --- | --- |
+| 0.20 | Every console can dispatch, locked per project; auto-sync waits for your reply to an executor, decisions lock while a job runs |
+| 0.19 | Independent reviews: a Codex review starts a new thread, the reviewer isn't told the worker's conclusion; one STATUS rev rule |
+| 0.18 | Optional cheaper model for sync (`/console sync-model`), falling back to the normal model if it fails |
+| 0.17 | Reply to a stuck executor from the console (`↩ 回覆執行者`); next step as ghost text, Tab to accept |
+| 0.16 | Cache countdown knows about compaction (including Claude Code's idle compaction) and shows the new write cost |
+| 0.15 | Decisions with number keys and undo; wrapping and short key hints on narrow terminals |
+| 0.14 | Project cards show what the executor was last doing, attached to select/review/continue prompts |
+| 0.13 | Pane visual system (section titles, next-step card); decision options are pressed |
+| 0.12 | Git file list, opened with `▸ 檔案` or `f` |
+| 0.11 | Git on the console: recent commits, uncommitted lines, stash, stale-fetch warning |
+| 0.10 | Usage pace, cache hit rate, loop guard |
+| 0.9 | Executor/model/effort picked from a list, hover help; sync and waiting-session fixes |
+| 0.8 | Auto sync; one-click update from a local folder; command guard sees past wrappers |
+| 0.7 | UI redesign: meters fill from the left, one usage table, state glyphs |
+| 0.6 | Light sessions (guard only until `/console`); command guard false-positive and bypass fixes |
+| 0.5 | In-pane version check and one-click update; shares the band with other plugins |
+| 0.4 | Command guard; prompt cache countdown and re-write cost from the actual TTL |
+| 0.3 | Git, PR and CI per project; action-menu hotkeys |
+| 0.2 | Per-project executor, Codex fallback, workflow pipeline and project mode, macOS support |
+| 0.1 | Initial release |
 
 ## Upgrade
 

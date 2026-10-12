@@ -3,7 +3,7 @@
 **在 Claude Code 裡同時顧好幾個專案的主控台。** 一個面板看完每個專案卡在哪、在等誰；決策用按的、派工一鍵、Git／PR／CI 與額度都在旁邊，不用切視窗。
 
 <p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" alt="claude-console 示範：/console demo 開啟主控台，右鍵動作選單、數字鍵作答、填入決策、各專案詳細卡片" width="900"></a></p>
-<p align="center"><a href="docs/demo.mp4">▶ 觀看 45 秒示範影片（MP4）</a> · <a href="README.en.md">English</a></p>
+<p align="center"><a href="docs/demo.mp4">▶ 觀看 45 秒示範影片（MP4）</a> · <a href="#版本紀錄">版本紀錄</a> · <a href="README.en.md">English</a></p>
 <p align="center"><sub>Claude Code 2.1.294 與 console-status 0.15.0 在終端機中的實際畫面（tmux 逐格擷取後轉成影片），資料來自 <code>/console demo</code>；下方字幕與滑鼠指標為後製加上。</sub></p>
 
 ## 先看示範
@@ -425,6 +425,33 @@ claude plugin install paste-preview@paste-preview
 - 選取專案只附加一次 context，不會改變目前 cwd。
 - Codex 支援會讀取 Codex 外掛內部的 `state.json` 與 plugin cache 目錄結構。state 結構無法辨識時，companion 那一行會顯示警告；出現時請更新 console-status。
 - 可以同時開好幾個主控台 session，也可以在不同 session 對同一個專案對話、派工。每個主控台每次刷新都在 `claude-sessions.json` 旁的 `console-lease.json` 留下心跳，派工時記下是哪個主控台派的。限制只有兩條：同一個專案一次只有一個工作；另一個主控台剛對同一個專案派工（2 分鐘內、工作可能還沒出現在面板上）時，這裡會先擋下。自動同步由派出那個工作的主控台負責，那個主控台關掉（心跳超過 150 秒或 `/console off`）後才由其他主控台接手。派工設定（`dispatch.json` 的執行者、模型、effort）是所有主控台共用的檔案，最後一次的選擇對所有主控台生效；不同專案要用不同模型，請用 `/console project model <模型> <專案>`。
+
+## 版本紀錄
+
+每個版本一句話，新的在上面；完整內容見 [CHANGELOG.md](CHANGELOG.md) 或 [GitHub Releases](https://github.com/SaM-runtime/claude-console/releases)。
+
+| 版本 | 重點 |
+| --- | --- |
+| 0.20 | 每個主控台都能派工，改成以專案為單位上鎖；自動同步會等你回覆執行者，工作進行中鎖住做決定 |
+| 0.19 | 審核獨立：Codex 審核開新 thread，審核者不先看到執行者的結論；STATUS 版本規則統一 |
+| 0.18 | 可另外指定比較便宜的同步模型（`/console sync-model`），失敗時自動退回原本模型 |
+| 0.17 | 從主控台回覆卡住的執行者（`↩ 回覆執行者`）；提示列顯示下一步，Tab 接受 |
+| 0.16 | 快取倒數認得壓縮（含 Claude Code 閒置壓縮），顯示已壓縮與新的寫入成本 |
+| 0.15 | 用數字鍵做決定、可退回；窄視窗換行與簡短按鍵提示 |
+| 0.14 | 專案卡顯示執行者最近在做什麼，並附在選取／審核／繼續的提示裡 |
+| 0.13 | 面板視覺系統（區塊標題、下一步卡片）；決策選項用按的 |
+| 0.12 | Git 檔案清單，按 `▸ 檔案` 或 `f` 展開 |
+| 0.11 | 主控台直接看 Git：最近提交、未提交行數、stash、fetch 過舊提醒 |
+| 0.10 | 用量配速、快取命中率、重複失敗護欄 |
+| 0.9 | 執行者／模型／effort 改用清單挑選、滑鼠提示說明；同步與等待中 session 的判斷修正 |
+| 0.8 | 自動同步；從本機資料夾一鍵更新；指令護欄看穿包裝指令 |
+| 0.7 | 介面改版：用量條由左往右填、單一用量表、狀態符號 |
+| 0.6 | 輕量 session（預設只開護欄，`/console` 才啟用主控台）；護欄誤判與繞過修正 |
+| 0.5 | 面板內檢查新版並一鍵更新；與其他 plugin 共用提示列上方區域 |
+| 0.4 | 指令護欄；提示快取倒數與重寫成本，讀取實際 TTL |
+| 0.3 | 每個專案的 Git、PR、CI；動作選單快速鍵 |
+| 0.2 | 每個專案可選執行者、Codex 備援、流程管線與專案模式、macOS 支援 |
+| 0.1 | 第一版 |
 
 ## 升級
 
