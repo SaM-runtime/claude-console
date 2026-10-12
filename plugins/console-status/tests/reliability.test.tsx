@@ -5,6 +5,7 @@ import { buildProject, cardRunningJob } from '../hooks/logic'
 import { actionKinds, newJobTag, withJobTag } from '../hooks/actions'
 import { autoSyncJobs, autoSyncPlan, AUTO_SYNC_GRACE_MS } from '../hooks/sync'
 import { endsAsking } from '../hooks/executors'
+import { claim, claimBlocker, heartbeat, leave, parseLease, syncsHere, ALIVE_MS, CLAIM_MS } from '../hooks/lease'
 
 const T = (iso: string) => Date.parse(iso)
 const NOW = T('2030-01-05T12:00:00Z')
@@ -88,6 +89,26 @@ test('做決定 is locked while the project has a job running', () => {
   expect(actionKinds(asks([running]), 'ACTION')).not.toContain('decide')
 })
 
+// --- Consoles side by side: per project, not one console for all ---
+
+test('the lease keeps live consoles and their claims, and holds a project only while its dispatch is fresh', () => {
+  expect(parseLease('{"sessionId":"old","at":5}')).toEqual({ consoles: {}, projects: {} })
+  expect(parseLease(null)).toEqual({ consoles: {}, projects: {} })
+  let lease = heartbeat({ consoles: { gone: NOW - ALIVE_MS - 1, b: NOW - 1000 }, projects: { 'P/x': { sessionId: 'gone', at: NOW - 1000 } } }, 'a', NOW)
+  expect(lease).toEqual({ consoles: { b: NOW - 1000, a: NOW }, projects: {} })
+  lease = claim(lease, 'b', 'P/y', NOW - 1000)
+  expect(claimBlocker(lease, 'a', 'P/y', NOW)).toBe('b')
+  expect(claimBlocker(lease, 'b', 'P/y', NOW)).toBe(null)
+  expect(claimBlocker(lease, 'a', 'P/z', NOW)).toBe(null)
+  expect(claimBlocker(lease, 'a', 'P/y', NOW - 1000 + CLAIM_MS)).toBe(null)
+  // Auto-sync belongs to the dispatcher while it lives.
+  expect(syncsHere(lease, 'a', 'P/y', NOW)).toBe(false)
+  expect(syncsHere(lease, 'b', 'P/y', NOW)).toBe(true)
+  expect(syncsHere(lease, 'a', 'P/z', NOW)).toBe(true)
+  expect(syncsHere(lease, 'a', 'P/y', NOW + ALIVE_MS)).toBe(true)
+  expect(leave(lease, 'b')).toEqual({ consoles: { a: NOW }, projects: {} })
+})
+
 // --- UI: activation always, the dispatch lease, and the job code on a real dispatch ---
 
 const STATUS = 'D:/Project Alpha/.console/STATUS.md'
@@ -163,37 +184,33 @@ test('activation always leaves out non-interactive sessions and the executors th
   h.data.session = 'console-session'
   await $.session.start(START)
   await h.clock.settle()
-  expect(JSON.parse(lease()!).sessionId).toBe('console-session')
+  expect(Object.keys(JSON.parse(lease()!).consoles)).toEqual(['console-session'])
 })
 
-test('a console sees another console holding the lease and does not dispatch until it takes over', { options: BASE }, async ($, on) => {
+test('any console dispatches; a project another live console dispatched moments ago waits for that job', { options: BASE }, async ($, on) => {
   const h = harness(on)
-  h.files[LEASE] = JSON.stringify({ sessionId: 'other-console-1234', at: NOW - 30_000 })
+  const STATUS_KEY = 'D:/Project Alpha/.console/STATUS.md'
+  // Another console is alive and dispatched a different project: nothing here is held.
+  h.files[LEASE] = JSON.stringify({ consoles: { 'other-console-1234': NOW - 30_000 }, projects: { 'D:/Beta/STATUS.md': { sessionId: 'other-console-1234', at: NOW - 10_000 } } })
   await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const after = JSON.parse(h.files[LEASE]!)
+  expect(Object.keys(after.consoles).sort()).toEqual(['console-session', 'other-console-1234'])
+  // It dispatched this project 10 s ago: its job may not show yet, so this console waits.
+  h.files[LEASE] = JSON.stringify({ ...after, projects: { [STATUS_KEY]: { sessionId: 'other-console-1234', at: NOW - 10_000 } } })
   await $.command.run({ command: 'console', args: 'continue Project Alpha' } as any)
   expect(h.launches).toEqual([])
-  expect(h.toasts.some(text => text.includes('另一個主控台（session other-co）正在派工'))).toBe(true)
-  // Taking over writes this console into the lease, and the dispatch goes out.
-  const took: any = await $.command.run({ command: 'console', args: 'takeover' } as any)
-  expect(took.text).toMatch(/現在負責派工/)
-  expect(JSON.parse(h.files[LEASE]!).sessionId).toBe('console-session')
+  expect(h.toasts.some(text => text.includes('另一個主控台（session other-co）剛對這個專案派工'))).toBe(true)
+  // Older than the claim window: the same project is free again, and this console records the dispatch.
+  h.files[LEASE] = JSON.stringify({ ...after, projects: { [STATUS_KEY]: { sessionId: 'other-console-1234', at: NOW - 5 * 60_000 } } })
   await $.command.run({ command: 'console', args: 'continue Project Alpha' } as any)
   expect(h.launches.length).toBe(1)
-  // The prompt carries this dispatch's code, and the console remembers it for the job.
-  const prompt = h.launches[0]!.at(-1)!
-  const tag = prompt.match(/這次工作的代號是 (c-[0-9a-z]{6})/)?.[1]
-  expect(tag).toBeDefined()
-  // /console off hands the lease back at once.
+  expect(JSON.parse(h.files[LEASE]!).projects[STATUS_KEY].sessionId).toBe('console-session')
+  // The prompt carries this dispatch's code.
+  expect(h.launches[0]!.at(-1)!.match(/這次工作的代號是 (c-[0-9a-z]{6})/)?.[1]).toBeDefined()
+  // /console off takes this console and its claims out at once.
   await $.command.run({ command: 'console', args: 'off' } as any)
   await h.clock.settle()
-  expect(JSON.parse(h.files[LEASE]!).at).toBe(0)
-})
-
-test('a lease left behind by a console that stopped renewing is taken over by itself', { options: BASE }, async ($, on) => {
-  const h = harness(on)
-  h.files[LEASE] = JSON.stringify({ sessionId: 'other-console-1234', at: NOW - 10 * 60_000 })
-  await $.command.run({ command: 'console', args: 'refresh' } as any)
-  expect(JSON.parse(h.files[LEASE]!).sessionId).toBe('console-session')
-  await $.command.run({ command: 'console', args: 'continue Project Alpha' } as any)
-  expect(h.launches.length).toBe(1)
+  const left = JSON.parse(h.files[LEASE]!)
+  expect(left.consoles['console-session']).toBeUndefined()
+  expect(left.projects[STATUS_KEY]).toBeUndefined()
 })

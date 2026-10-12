@@ -164,8 +164,6 @@ declare module 'claude-code' {
       syncProgress: Record<string, SyncProgress>
       /** statusPath → the executor digest shown on an expanded project card. */
       executorDigests: Record<string, ExecutorDigest>
-      /** Another console's session id while it holds the dispatch lease; null when this console dispatches. */
-      leaseHolder: string | null
     }
   }
 }

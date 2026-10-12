@@ -301,7 +301,6 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 | `/console project` | 列出每個專案實際生效的執行者、model、effort |
 | `/console project executor\|model\|effort <值\|inherit> <名稱>` | 設定或清除單一專案的覆寫 |
 | `/console mode [auto\|console\|project]` | 顯示或選擇此 session 的專案模式 |
-| `/console takeover` | 改由這個主控台派工（另一個主控台會變成只看不派） |
 | `/console off` | 在此 session 停止主控台（護欄保留）；再輸入 `/console` 重新啟動 |
 | `/console version` | 顯示目前安裝版本與最新版本 |
 | `/console update` | `main` 上有新版時更新 console-status 並重新載入外掛 |
@@ -425,7 +424,7 @@ claude plugin install paste-preview@paste-preview
 - Companion state 以根目錄最後一段名稱配對；同名根目錄可能混淆。
 - 選取專案只附加一次 context，不會改變目前 cwd。
 - Codex 支援會讀取 Codex 外掛內部的 `state.json` 與 plugin cache 目錄結構。state 結構無法辨識時，companion 那一行會顯示警告；出現時請更新 console-status。
-- 同一時間只有一個主控台派工。每個主控台每次刷新都會更新 `claude-sessions.json` 旁的 `console-lease.json`；另一個主控台看到 150 秒內的租約時只看不派（自動同步也不跑），面板顯示「另一個主控台正在派工」與「改由這裡派工」按鈕（或 `/console takeover`）。租約超過 150 秒沒更新就自動接手，`/console off` 會立即交還。派工設定（`dispatch.json` 的執行者、模型、effort）是所有主控台共用的檔案，最後一次的選擇對所有主控台生效；不同專案要用不同模型，請用 `/console project model <模型> <專案>`。
+- 可以同時開好幾個主控台 session，也可以在不同 session 對同一個專案對話、派工。每個主控台每次刷新都在 `claude-sessions.json` 旁的 `console-lease.json` 留下心跳，派工時記下是哪個主控台派的。限制只有兩條：同一個專案一次只有一個工作；另一個主控台剛對同一個專案派工（2 分鐘內、工作可能還沒出現在面板上）時，這裡會先擋下。自動同步由派出那個工作的主控台負責，那個主控台關掉（心跳超過 150 秒或 `/console off`）後才由其他主控台接手。派工設定（`dispatch.json` 的執行者、模型、effort）是所有主控台共用的檔案，最後一次的選擇對所有主控台生效；不同專案要用不同模型，請用 `/console project model <模型> <專案>`。
 
 ## 升級
 
