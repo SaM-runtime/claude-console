@@ -141,7 +141,7 @@ test('(e) an executor that stopped to ask stops the cycle: no reply, no sync', O
   await later(h, $)
   expect(h.launches.length).toBe(1)
   expect(h.submitted.length).toBe(0)
-  expect(h.feed.some(text => text.startsWith('⟳ Project 接力停止：等你決定／回覆'))).toBe(true)
+  expect(h.feed.some(text => text.startsWith('⟳ Project 接力停止：執行者在等你回覆'))).toBe(true)
 })
 
 test('(f) a gate the console leaves in place stops the cycle; the gate is sent once', OPTIONS, async ($, on) => {

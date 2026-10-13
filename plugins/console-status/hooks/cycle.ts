@@ -71,6 +71,9 @@ export function cyclePlan(project: Project, state: State, run: CycleRun, now: nu
   if (options.demo) return { stop: '示範資料不接力' }
   if (state === 'NOCARD' || !project.hasCard) return { stop: '找不到狀態卡' }
   if (isManual(project)) return { stop: '手動交接的專案不接力' }
+  // An executor that ended its turn on a question waits for you, whatever the row shows: rows() ranks a gate
+  // above it, so a GATE row can hide one, and a gate hop then would answer past the question.
+  if (project.jobs.some(job => job.kind === 'newer' && job.asks)) return { stop: '執行者在等你回覆' }
   // A gate hop waits for its review turn, and a gate the console left in place is not sent a second time.
   if (options.gatePending) return { wait: '等回合' }
   const gate = parseGate(project.gate)

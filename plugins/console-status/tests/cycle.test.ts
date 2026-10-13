@@ -20,7 +20,7 @@ test('(a) cyclePlan: every way a project can be, and what one hop does with it',
     ['review gate is sent to the console', project({ gate: 'review：0.21.0 PASS' }), 'GATE', run(), {}, { action: 'gate' }],
     ['release gate stops', project({ gate: 'release：push to fork' }), 'GATE', run(), {}, { stop: '到 release 關卡，等你核准' }],
     ['a decision stops', project({ ask: '選 A 或 B' }), 'ACTION', run(), {}, { stop: '等你決定／回覆' }],
-    ['an executor asking stops, no sync', project({ jobs: [job({ asks: true })] }), 'ACTION', run(), {}, { stop: '等你決定／回覆' }],
+    ['an executor asking stops, no sync', project({ jobs: [job({ asks: true })] }), 'ACTION', run(), {}, { stop: '執行者在等你回覆' }],
     ['SYNC with autoSync on waits for autoSync', project({ jobs: [job()] }), 'SYNC', run(), { autoSync: 'on' }, { wait: '等同步' }],
     ['SYNC with autoSync off syncs', project({ jobs: [job()] }), 'SYNC', run(), {}, { action: 'sync' }],
     ['SYNC with autoSync off waits out the grace', project({ jobs: [job({ completedAt: iso(NOW - 10_000) })] }), 'SYNC', run(), {}, { wait: '等同步' }],
@@ -69,4 +69,14 @@ test('(c) a repeated hop is judged by the CARD rev and the next step only, not b
   expect(cyclePlan(project({ next: '.task/y.md' }), 'IDLE', { ...same, lastAt: NOW - 5 * 60_000 }, NOW, opts())).toEqual({ action: 'continue' })
   // A CARD without a rev cannot be judged the same.
   expect(cyclePlan(project({ updated: '2030-01-05 11:00' }), 'IDLE', { ...same, lastRev: null, lastAt: NOW - 5 * 60_000 }, NOW, opts())).toEqual({ action: 'continue' })
+})
+
+test('review P2-1: an executor waiting on its question stops the cycle in any state, a gate row too', () => {
+  // rows() ranks a gate above a newer job that asks, so the row is GATE while the executor waits for you.
+  const asking = project({ gate: 'review：x', jobs: [job({ asks: true })] })
+  expect(cyclePlan(asking, 'GATE', run(), NOW, opts())).toEqual({ stop: '執行者在等你回覆' })
+  expect(cyclePlan(project({ gate: 'release：ship', jobs: [job({ asks: true })] }), 'GATE', run(), NOW, opts())).toEqual({ stop: '執行者在等你回覆' })
+  expect(cyclePlan(project({ jobs: [job({ asks: true })] }), 'ACTION', run(), NOW, opts())).toEqual({ stop: '執行者在等你回覆' })
+  // Without a question, the gate goes to the console as before.
+  expect(cyclePlan(project({ gate: 'review：x' }), 'GATE', run(), NOW, opts())).toEqual({ action: 'gate' })
 })
