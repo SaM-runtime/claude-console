@@ -36,6 +36,8 @@ export function storedCycles(value: unknown): Record<string, CycleRun> {
       startedAt: r.startedAt as number, hops: r.hops as number, max: r.max as number, lastAt: r.lastAt as number,
       lastRev: num(r.lastRev) ? r.lastRev as number : null, lastNext: r.lastNext, lastKind: kind,
       ...(typeof r.lastGate === 'string' ? { lastGate: r.lastGate } : {}),
+      ...(typeof r.waiting === 'string' ? { waiting: r.waiting } : {}),
+      ...(typeof r.owner === 'string' ? { owner: r.owner } : {}),
     }
   }
   return out
@@ -52,7 +54,10 @@ export type CycleOptions = {
   syncStage?: string
 }
 
-export const newCycleRun = (now: number, max: number): CycleRun => ({ startedAt: now, hops: 0, max, lastRev: null, lastNext: '', lastKind: '', lastAt: 0 })
+export const newCycleRun = (now: number, max: number, owner?: string): CycleRun => ({ startedAt: now, hops: 0, max, lastRev: null, lastNext: '', lastKind: '', lastAt: 0, ...(owner !== undefined ? { owner } : {}) })
+
+/** A cycle another console armed: shown here, never run, stopped or rewritten here. */
+export const FOREIGN_CYCLE = '另一主控台接力中'
 
 /** The rev in a CARD's 更新 line (`… · rev 7 · …`), or null when it has none. */
 export function cardRev(updated: string): number | null {
@@ -109,7 +114,8 @@ export function cyclePlan(project: Project, state: State, run: CycleRun, now: nu
 }
 
 /** The chip on the row and the next-step card: hops sent of the limit, or what the cycle waits for. */
-export function cycleChip(run: CycleRun): string {
+export function cycleChip(run: CycleRun, foreign = false): string {
+  if (foreign) return `⟳ ${FOREIGN_CYCLE}`
   return run.waiting && run.waiting !== '稍候' ? `⟳ ${run.waiting}` : `⟳ ${run.hops}/${run.max}`
 }
 

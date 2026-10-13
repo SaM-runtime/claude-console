@@ -87,6 +87,8 @@ export type CycleRun = {
   lastGate?: string
   /** Why the cycle is waiting, for the chip; absent while it is about to act. */
   waiting?: string
+  /** The console session that armed it; `$.store` is shared by every console, and only this one sends its hops. */
+  owner?: string
 }
 /** `gate` is the CARD 關卡 the review was submitted for; a CARD that moved past it ends the row's wait. */
 export type ReviewRequest = { text: string; projectName: string; at: number; turnId?: string; gate?: string }

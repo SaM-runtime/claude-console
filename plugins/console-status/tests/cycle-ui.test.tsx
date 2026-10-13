@@ -188,7 +188,7 @@ test('(h) cycleMaxHops: 2 sends two hops and stops before a third', { ...OPTIONS
 
 test('(i) a cycle armed before a reload is still in force: only the store has it, and it takes its next hop', OPTIONS, async ($, on) => {
   const h = harness(on, { next: '.task/build.md' })
-  h.store.cycles = { [STATUS]: { startedAt: h.clock.now() - 30 * 60_000, hops: 1, max: 6, lastRev: 0, lastNext: '.task/before.md', lastKind: 'continue', lastAt: h.clock.now() - 10 * 60_000 } }
+  h.store.cycles = { [STATUS]: { startedAt: h.clock.now() - 30 * 60_000, hops: 1, max: 6, lastRev: 0, lastNext: '.task/before.md', lastKind: 'continue', lastAt: h.clock.now() - 10 * 60_000, owner: 'console-session' } }
   await refresh($)
   expect(h.launches.length).toBe(1)
   expect(h.feed.some(text => text === '⟳ Project 第 2 跳：⇢ 繼續下一步（.task/build.md）')).toBe(true)
@@ -199,7 +199,7 @@ test('(i) a cycle with no hop for six hours is let go of, and says so', OPTIONS,
   const h = harness(on, { next: '.task/build.md' })
   // Its last hop's job never ended; six hours on, the wait is given up.
   const long = h.clock.now() - CYCLE_MAX_AGE_MS - MINUTE
-  h.store.cycles = { [STATUS]: { startedAt: long - MINUTE, hops: 1, max: 6, lastRev: 1, lastNext: '.task/x.md', lastKind: 'continue', lastAt: long } }
+  h.store.cycles = { [STATUS]: { startedAt: long - MINUTE, hops: 1, max: 6, lastRev: 1, lastNext: '.task/x.md', lastKind: 'continue', lastAt: long, owner: 'console-session' } }
   h.state.jobs = [{ id: 'long', jobClass: 'task', status: 'running', startedAt: new Date(long).toISOString(), request: { prompt: 'work' } }]
   await refresh($)
   expect(h.feed.some(text => text === '⟳ Project 接力解除：6 小時沒有新的一跳（第 1 跳）')).toBe(true)
@@ -253,4 +253,64 @@ test('(k) with auto-sync off the cycle sends the sync itself, once', { ...OPTION
   const syncs = h.launches.filter(argv => prompt(argv).startsWith('把最近完成的工作結果寫回 STATUS CARD'))
   expect(syncs.length).toBe(1)
   expect(h.feed.some(text => text === '⟳ Project 第 2 跳：⇢ 同步 STATUS（結果寫回狀態卡）')).toBe(true)
+})
+
+// Review P2-2: the store is shared by every console session. This test's console is B ('console-session');
+// console A is another session whose heartbeat is in the lease and which is in consoleSessions.
+const LEASE = 'C:/Users/example/.claude/handoffs/console-lease.json'
+const OTHER = 'D:/Elsewhere/.console/STATUS.md'
+const armedBy = (owner: string, at: number, over: Record<string, unknown> = {}) => ({ startedAt: at, hops: 0, max: 6, lastRev: null, lastNext: '', lastKind: '', lastAt: 0, owner, ...over })
+function consoleA(h: H, alive = true) {
+  h.store.consoleSessions = alive ? ['console-A', 'console-session'] : ['console-session']
+  h.files[LEASE] = JSON.stringify({ consoles: alive ? { 'console-A': h.clock.now() } : {}, projects: {} })
+}
+
+test('review P2-2: a cycle another console armed is shown here, not run here', OPTIONS, async ($, on) => {
+  const h = harness(on, { next: '.task/build.md' })
+  consoleA(h)
+  h.store.cycles = { [STATUS]: armedBy('console-A', h.clock.now()) }
+  await refresh($)
+  await later(h, $)
+  expect(h.launches.length).toBe(0)
+  expect((h.store.cycles as any)[STATUS].owner).toBe('console-A')
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'detail' })
+  expect((await ui.find({ key: 'detail-Project Alpha-cycle' }))?.text).toBe('⟳ 另一主控台接力中')
+  // ■ here does not stop A's cycle.
+  await ui.press({ key: 'detail-Project Alpha-cycle' })
+  expect((h.store.cycles as any)[STATUS].owner).toBe('console-A')
+  // A stops it: this console sees that at its next refresh.
+  h.store.cycles = {}
+  await later(h, $)
+  expect((await ui.find({ key: 'detail-Project Alpha-cycle' }))?.text).toBe('⟳ 自動接力')
+  await ui.unmount()
+})
+
+test('review P2-2: two consoles arm different projects without writing over each other', OPTIONS, async ($, on) => {
+  const h = harness(on, { next: '.task/build.md' })
+  consoleA(h)
+  h.store.cycles = { [OTHER]: armedBy('console-A', h.clock.now()) }
+  await refresh($)
+  await arm($)
+  await refresh($)
+  expect(h.launches.length).toBe(1)
+  expect((h.store.cycles as any)[OTHER].owner).toBe('console-A')
+  expect((h.store.cycles as any)[STATUS].owner).toBe('console-session')
+  // A arms or changes its own entry meanwhile; this console's next write keeps it.
+  h.store.cycles = { ...(h.store.cycles as any), [OTHER]: armedBy('console-A', h.clock.now(), { hops: 3 }) }
+  finish(h, 'task-1', '.task/next.md')
+  await later(h, $)
+  expect((h.store.cycles as any)[OTHER].hops).toBe(3)
+  expect((h.store.cycles as any)[STATUS].hops).toBe(2)
+})
+
+test('review P2-2: a cycle whose console is gone is cleared by another after six hours, and says so', OPTIONS, async ($, on) => {
+  const h = harness(on, { next: '.task/build.md' })
+  consoleA(h, false)
+  const long = h.clock.now() - CYCLE_MAX_AGE_MS - MINUTE
+  h.store.cycles = { [STATUS]: armedBy('console-A', long - MINUTE, { hops: 2, lastAt: long, lastKind: 'continue', lastNext: '.task/x.md', lastRev: 1 }) }
+  await refresh($)
+  expect(h.launches.length).toBe(0)
+  expect(h.store.cycles).toEqual({})
+  expect(h.feed.some(text => text === '⟳ Project 接力解除：接力的主控台已離開超過 6 小時（第 2 跳）')).toBe(true)
 })
