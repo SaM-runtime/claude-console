@@ -314,3 +314,29 @@ test('review P2-2: a cycle whose console is gone is cleared by another after six
   expect(h.store.cycles).toEqual({})
   expect(h.feed.some(text => text === '⟳ Project 接力解除：接力的主控台已離開超過 6 小時（第 2 跳）')).toBe(true)
 })
+
+// Review P3: a continue or gate hop waits for another console's dispatch as 0.20.1 does, two minutes, not as long as it lives.
+function claimedBy(h: H, agoMs: number) {
+  consoleA(h)
+  h.files[LEASE] = JSON.stringify({ consoles: { 'console-A': h.clock.now() }, projects: { [STATUS]: { sessionId: 'console-A', at: h.clock.now() - agoMs } } })
+}
+
+test('review P3: another console dispatched the project three minutes ago: the cycle takes its hop', OPTIONS, async ($, on) => {
+  const h = harness(on, { next: '.task/build.md' })
+  await refresh($)
+  await arm($)
+  claimedBy(h, 3 * 60_000)
+  await refresh($)
+  expect(h.launches.length).toBe(1)
+})
+
+test('review P3: another console dispatched the project a minute ago: the cycle waits for it', OPTIONS, async ($, on) => {
+  const h = harness(on, { next: '.task/build.md' })
+  await refresh($)
+  await arm($)
+  claimedBy(h, 60_000)
+  await refresh($)
+  expect(h.launches.length).toBe(0)
+  expect((h.store.cycles as any)[STATUS].waiting).toBe('等另一個主控台')
+  expect(h.feed.some(text => text.includes('接力停止'))).toBe(false)
+})

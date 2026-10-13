@@ -1313,8 +1313,6 @@ async function autoCycle($: any, options: PluginOptions) {
     if (!gatePending && (held || actionLocks.has(path))) continue
     const track = tracks[path]
     if (track && !isSyncEnded(track.stage)) { await setWaiting(path, '等同步'); continue }
-    // Another console dispatched this project moments ago: its job, its turn.
-    if (typeof me === 'string' && !syncsHere(lease, me, path, now)) { await setWaiting(path, '等另一個主控台'); continue }
     const state = list.find(r => r.full === p.name)?.state ?? 'NOCARD'
     const plan = cyclePlan(p, state, run, now, { autoSync: autoSyncMode((options as any).autoSync), gatePending, ...(track ? { syncStage: track.stage } : {}) })
     if ('stop' in plan) {
@@ -1324,6 +1322,10 @@ async function autoCycle($: any, options: PluginOptions) {
     }
     if ('wait' in plan) { await setWaiting(path, plan.wait); continue }
     const kind = plan.action
+    // Another console's dispatch, as 0.20.1 does it: a continue or a gate waits out its two-minute claim (a press
+    // would be refused just the same); a sync is the dispatching console's to send, as auto-sync does it.
+    const otherConsole = me ? (kind === 'sync' ? !syncsHere(lease, me, path, now) : !!claimBlocker(lease, me, path, now)) : false
+    if (otherConsole) { await setWaiting(path, '等另一個主控台'); continue }
     const hop: Hop = { path, name, kind, rev: cardRev(p.updated), next: p.next.trim(), gate: (p.gate ?? '').trim(), label: actionLabel(kind, p), detail: hopDetail(kind, p) }
     if (kind === 'gate') {
       // A gate is a prompt to this console, and the host refuses a prompt submitted from inside a command
