@@ -38,9 +38,10 @@ import { batteryBody, METER } from './battery'
 import { feedBody } from './feed'
 import { trackRowChanges } from './presentation'
 import { layoutBand } from './band'
-import { claim, claimBlocker, heartbeat, leave, parseLease, syncsHere, type Lease } from './lease'
+import { ALIVE_MS, claim, claimBlocker, heartbeat, leave, parseLease, syncsHere, type Lease } from './lease'
 import { advanceSync, cardStamp, autoSyncPlan, autoSyncMode, bandSync, isSyncEnded, syncChip, syncStatus, syncStepsText } from './sync'
-import type { SyncProgress, ExecutorDigest } from '../types'
+import type { SyncProgress, ExecutorDigest, CycleRun } from '../types'
+import { CYCLE_MAX_AGE_MS, cardRev, cycleChip, cycleMaxHops, cyclePlan, cycleQuotaStop, hopDetail, newCycleRun, quotaBrake, storedCycles } from './cycle'
 import { DIGEST_NONE, DIGEST_TIMEOUT, PROMPT_DIGEST_MS, codexDigestLines, digestContext, digestSource, loadDigest } from './digest'
 import type { DigestCache, DigestIo, DigestResult } from './digest'
 
@@ -93,6 +94,9 @@ const reviewRequests = atom({ plugin: 'console-status', key: 'reviewRequests' } 
 const fallbackOffers = atom({ plugin: 'console-status', key: 'fallbackOffers' } as const, {})
 /** statusPath → where its 同步 STATUS dispatch is (派工 → 執行 → 寫回), advanced on each refresh. */
 const syncProgress = atom({ plugin: 'console-status', key: 'syncProgress' } as const, {})
+/** statusPath → its ⟳ 自動接力; kept in `$.store` under CYCLES_KEY so a reload keeps it, mirrored here for drawing. */
+const cycleRuns = atom({ plugin: 'console-status', key: 'cycleRuns' } as const, {})
+const CYCLES_KEY = 'cycles'
 /** statusPath → the 執行者 section of an open project card. */
 const executorDigests = atom({ plugin: 'console-status', key: 'executorDigests' } as const, {})
 /** Parsed transcript tails, kept per path while mtime and size stay; and where each session's transcript was found. */
@@ -695,6 +699,8 @@ async function refresh($: any, options: PluginOptions, force = false) {
       await advanceSyncs($, options)
       await renewLease($, options).catch(() => null)
       await autoSync($, options)
+      // After auto-sync, so a sync it just sent is seen and not sent again by a cycle.
+      await autoCycle($, options)
       await suggestNext($, options)
       await followGitDetail($).catch(() => {})
       // Only the open cards of an open pane: a transcript that has not changed is not read again.
@@ -731,6 +737,18 @@ async function actionNotice($: any, text: string, ok: boolean) {
     if (generation !== dataGeneration || await demoEnabled($)) return
     await update($, feedAtom, list => [{ at, text, tone: ok ? 'green' : 'red' } as const, ...list].slice(0, 20))
     if (generation === dataGeneration && !demoActive) $.ui.toast(text, { timeoutMs: 8000 })
+  })
+}
+
+/** A ⟳ line in the feed, with a toast when `toast`; a hop is only a feed line, a stop is both. */
+async function cycleNotice($: any, text: string, tone: 'teal' | 'amber' | 'green' | 'red', toast: boolean) {
+  const generation = dataGeneration
+  if (await demoEnabled($)) return
+  const at = await $.clock.now()
+  await publishDisplay(async () => {
+    if (generation !== dataGeneration || await demoEnabled($)) return
+    await update($, feedAtom, list => [{ at, text, tone } as const, ...list].slice(0, 20))
+    if (toast && generation === dataGeneration && !demoActive) $.ui.toast(text, { timeoutMs: 8000 })
   })
 }
 
@@ -1174,6 +1192,181 @@ async function autoSync($: any, options: PluginOptions) {
   }
 }
 
+/** This console's session id, the owner it writes on the cycles it arms ('' when the host cannot say). */
+let selfSession: string | null = null
+async function mySession($: any): Promise<string> {
+  if (selfSession === null) {
+    const id = await Promise.resolve().then(() => $.session.id()).catch(() => null)
+    selfSession = typeof id === 'string' ? id : ''
+  }
+  return selfSession
+}
+const mine = (run: CycleRun, me: string) => (run.owner ?? '') === me
+
+/**
+ * The cycles every console sees. `$.store` is shared by all console sessions, so it is read again each time
+ * (another console may have armed or stopped one) and mirrored into the atom for drawing.
+ */
+async function loadCycles($: any): Promise<Record<string, CycleRun>> {
+  const runs = storedCycles(await Promise.resolve().then(() => $.store.get(CYCLES_KEY)).catch(() => null))
+  if (JSON.stringify(runs) !== JSON.stringify(await read($, cycleRuns))) await update($, cycleRuns, () => runs)
+  return runs
+}
+
+/** One project's cycle changed in the store as read just now, so the other entries, other consoles' too, stay as they are. */
+async function saveCycle($: any, path: string, change: (run: CycleRun | undefined) => CycleRun | undefined) {
+  const runs = storedCycles(await Promise.resolve().then(() => $.store.get(CYCLES_KEY)).catch(() => null))
+  const next = change(runs[path])
+  const all = { ...runs }
+  if (next) all[path] = next
+  else delete all[path]
+  await Promise.resolve().then(() => $.store.set(CYCLES_KEY, all)).catch(() => {})
+  await update($, cycleRuns, () => all)
+}
+
+/**
+ * ⟳ on a project: arm its cycle (the first hop goes out at the next refresh), or stop it. Work already running
+ * is not touched. Returns what happened, for a command's answer.
+ */
+async function toggleCycle($: any, options: PluginOptions, p: Project, want?: boolean): Promise<string> {
+  const name = p.name.replace(/\s.*$/, '')
+  if (await demoEnabled($)) { $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。'); return '示範資料不接力' }
+  const runs = await loadCycles($)
+  const me = await mySession($)
+  const run = runs[p.statusPath]
+  const armed = !!run
+  // Another console's cycle is that console's to stop.
+  if (run && !mine(run, me)) {
+    const text = `${name}：另一個主控台在接力，請在那邊停止`
+    $.ui.toast(text)
+    return text
+  }
+  if (!(want ?? !armed)) {
+    if (!run) return `${name}：沒有在接力`
+    await saveCycle($, p.statusPath, () => undefined)
+    await cycleNotice($, `⟳ ${name} 接力已停止（第 ${run.hops} 跳；進行中的工作不中斷）`, 'amber', true)
+    return `${name}：接力已停止`
+  }
+  if (run) return `${name}：已在接力（${cycleChip(run)}）`
+  const s = await read($, snapshot)
+  const state = s ? rows(s).find(r => r.full === p.name)?.state : undefined
+  const quotaStop = cycleQuotaStop((options as any).cycleQuotaStop)
+  const brake = quotaBrake(s?.limits, quotaStop, await $.clock.now())
+  const refused = isManual(p) ? '手動交接的專案不接力' : !p.hasCard ? '找不到狀態卡' : state === 'ACTION' ? '先處理等你決定／回覆的事' : brake ?? ''
+  if (refused) { $.ui.toast(`${name}：${refused}`); return `${name}：${refused}` }
+  const max = cycleMaxHops((options as any).cycleMaxHops)
+  const now = await $.clock.now()
+  await saveCycle($, p.statusPath, () => newCycleRun(now, max, me))
+  await cycleNotice($, `⟳ ${name} 開始自動接力（最多 ${max} 跳${quotaStop === null ? '' : `，5 小時額度到 ${quotaStop}% 就停`}；停在決策、執行者提問、release 關卡與失敗）`, 'teal', true)
+  return `${name}：開始自動接力，最多 ${max} 跳`
+}
+
+/** Whether the hop just triggered went out: a gate as a review request, a continue or a sync as a running job. */
+async function hopTook($: any, path: string, kind: 'continue' | 'gate' | 'sync'): Promise<boolean> {
+  if (kind === 'gate') return !!(await read($, reviewRequests))[path] || (await read($, pendingActions))[path]?.kind === 'gate'
+  return !!(await read($, snapshot))?.projects.find(p => p.statusPath === path)?.jobs.some(job => job.kind === 'running')
+}
+
+/**
+ * ⟳ 自動接力: for each project a person armed, one hop per refresh with the existing actions, until the
+ * planner stops it. Nothing is read or sent while no project is armed; a hop that did not go out stops the
+ * cycle rather than being tried again.
+ */
+async function autoCycle($: any, options: PluginOptions) {
+  if (!consoleActive || await demoEnabled($)) return
+  const runs = await loadCycles($)
+  const armed = Object.keys(runs)
+  if (!armed.length) return
+  const s = await read($, snapshot)
+  if (!s || s.demo || s.error) return
+  const pending = await read($, pendingActions)
+  const tracks = await read($, syncProgress)
+  const now = await $.clock.now()
+  const me = await mySession($)
+  const { config } = await paths($, options)
+  const lease = parseLease(await Promise.resolve().then(() => $.fs.read(leasePath(config))).catch(() => null))
+  const sessions = await activeSessions($)
+  const list = rows(s)
+  const quotaStop = cycleQuotaStop((options as any).cycleQuotaStop)
+  const setWaiting = async (path: string, waiting: string) => {
+    if (runs[path]?.waiting !== waiting) await saveCycle($, path, run => run && mine(run, me) ? { ...run, waiting } : run)
+  }
+  const drop = (path: string) => saveCycle($, path, () => undefined)
+  for (const path of armed) {
+    const run = runs[path]!
+    const p = s.projects.find(item => item.statusPath === path)
+    const name = p ? p.name.replace(/\s.*$/, '') : path
+    const stale = now - Math.max(run.lastAt, run.startedAt) > CYCLE_MAX_AGE_MS
+    if (!mine(run, me)) {
+      // Another console's cycle: shown, never run here. Its console gone (off, closed or crashed) for six hours, any console clears it.
+      const owner = run.owner ?? ''
+      const gone = !owner || !sessions.includes(owner) || now - (lease.consoles[owner] ?? -Infinity) >= ALIVE_MS
+      if (gone && stale) { await drop(path); await cycleNotice($, `⟳ ${name} 接力解除：接力的主控台已離開超過 6 小時（第 ${run.hops} 跳）`, 'amber', true) }
+      continue
+    }
+    if (!p) { await drop(path); await cycleNotice($, `⟳ 接力解除：${path} 不在登錄表`, 'amber', true); continue }
+    if (stale) {
+      await drop(path)
+      await cycleNotice($, `⟳ ${name} 接力解除：6 小時沒有新的一跳（第 ${run.hops} 跳）`, 'amber', true)
+      continue
+    }
+    const held = pending[path]
+    const gatePending = held?.kind === 'gate' && run.lastKind === 'gate'
+    // Someone is acting on the row (a press, a sync, auto-sync): this refresh leaves it alone.
+    if (!gatePending && (held || actionLocks.has(path))) continue
+    const track = tracks[path]
+    if (track && !isSyncEnded(track.stage)) { await setWaiting(path, '等同步'); continue }
+    const state = list.find(r => r.full === p.name)?.state ?? 'NOCARD'
+    const plan = cyclePlan(p, state, run, now, { autoSync: autoSyncMode((options as any).autoSync), gatePending, limits: s.limits, quotaStop, ...(track ? { syncStage: track.stage } : {}) })
+    if ('stop' in plan) {
+      await drop(path)
+      await cycleNotice($, `⟳ ${name} 接力${plan.done ? '完成' : '停止'}：${plan.stop}（第 ${run.hops} 跳）`, plan.done ? 'green' : 'amber', true)
+      continue
+    }
+    if ('wait' in plan) { await setWaiting(path, plan.wait); continue }
+    const kind = plan.action
+    // Another console's dispatch, as 0.20.1 does it: a continue or a gate waits out its two-minute claim (a press
+    // would be refused just the same); a sync is the dispatching console's to send, as auto-sync does it.
+    const otherConsole = me ? (kind === 'sync' ? !syncsHere(lease, me, path, now) : !!claimBlocker(lease, me, path, now)) : false
+    if (otherConsole) { await setWaiting(path, '等另一個主控台'); continue }
+    const hop: Hop = { path, name, kind, rev: cardRev(p.updated), next: p.next.trim(), gate: (p.gate ?? '').trim(), label: actionLabel(kind, p), detail: hopDetail(kind, p) }
+    if (kind === 'gate') {
+      // A gate is a prompt to this console, and the host refuses a prompt submitted from inside a command
+      // (`/console refresh`): it would wait on the turn the command holds. A timer is a later event of its own.
+      if (gateHops.has(path)) continue
+      gateHops.add(path)
+      $.clock.after(0, () => void sendHop($, options, hop).finally(() => gateHops.delete(path)))
+      continue
+    }
+    await sendHop($, options, hop)
+  }
+}
+
+type Hop = { path: string; name: string; kind: 'continue' | 'gate' | 'sync'; rev: number | null; next: string; gate: string; label: string; detail: string }
+/** Gate hops scheduled and not yet sent, so a second refresh in between does not schedule another. */
+const gateHops = new Set<string>()
+
+/** One hop: the existing action, then whether it went out; a hop that did not go out stops the cycle, it is not retried. */
+async function sendHop($: any, options: PluginOptions, hop: Hop) {
+  // Stopped (■, /console cycle off) between planning and now, or not this console's: nothing is sent.
+  const me = await mySession($)
+  const run = (await loadCycles($))[hop.path]
+  if (!run || !mine(run, me)) return
+  await triggerAction($, options, hop.path, hop.kind, { auto: true, confirmed: true })
+  if (!await hopTook($, hop.path, hop.kind)) {
+    await saveCycle($, hop.path, () => undefined)
+    await cycleNotice($, `⟳ ${hop.name} 接力停止：${hop.label} 沒有送出，見上一則動態（第 ${run.hops} 跳）`, 'red', true)
+    return
+  }
+  const hops = run.hops + 1
+  const at = await $.clock.now()
+  await saveCycle($, hop.path, current => current && mine(current, me) ? {
+    startedAt: run.startedAt, hops, max: run.max, lastRev: hop.rev, lastNext: hop.next, lastKind: hop.kind, lastAt: at, owner: me,
+    ...(hop.kind === 'gate' ? { lastGate: hop.gate } : {}),
+  } : current)
+  await cycleNotice($, `⟳ ${hop.name} 第 ${hops} 跳：${hop.label}（${hop.detail}）`, 'teal', false)
+}
+
 /** The last suggestion the prompt box showed, so a refresh proposes again only when the way on changed. */
 let lastSuggestion: string | null = null
 
@@ -1513,7 +1706,7 @@ export const register: Register = (on, options) => {
     await update($, continueConfirmations, () => ({}))
     await update($, fallbackOffers, () => ({}))
     await loadTrust($)
-    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；reply <專案> <回覆> 回覆停下來問你的執行者；sync / continue / gate / verify <專案> 執行動作；band 橫帶；demo 示範；version 版本；update 更新外掛；off 這個對話關閉主控台' })
+    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；reply <專案> <回覆> 回覆停下來問你的執行者；sync / continue / gate / verify <專案> 執行動作；cycle <專案> [off] 自動接力（一路按下去，停在需要你的地方）；band 橫帶；demo 示範；version 版本；update 更新外掛；off 這個對話關閉主控台' })
     transcriptPath = null
     // A reload after an update starts a fresh check, which reads the newly installed manifest.
     await update($, updateInfo, value => value && value.phase !== 'idle' ? { ...value, phase: 'idle', checkedAt: 0 } as UpdateInfo : value)
@@ -1757,6 +1950,18 @@ export const register: Register = (on, options) => {
         return { text: `目前：${settings.executor} · ${settings.model || '預設'} · ${settings.effort || '預設'}\n執行者：claude, codex\n模型：${models.length ? models.map(m => m.model).join(', ') : '模型清單讀不到；用 /console model <名稱>'}\n強度：${effortOptions(settings.executor, models, settings.model).join(', ')}\n以 /console model "" 或 /console effort "" 恢復執行者預設。\n${syncSettingsText(settings).split('\n')[0]}（/console sync-model 查看設定方式）` }
       } catch (error) { return { text: `設定未儲存：${error instanceof Error ? error.message : String(error)}` } }
     }
+    // ⟳ 自動接力 from the keyboard: the same as the menu's button.
+    const cycleArg = arg.match(/^cycle(?:\s+([\s\S]*))?$/)
+    if (cycleArg) {
+      if (await demoEnabled($)) return { text: '示範資料：不執行專案操作；/console refresh 回到實際資料。' }
+      const snap = await read($, snapshot)
+      const rest = (cycleArg[1] ?? '').trim()
+      const off = /\s+off$/i.test(rest) || /^off$/i.test(rest)
+      const named = rest.replace(/\s*\boff$/i, '').trim()
+      const target = commandTarget(snap && !snap.demo ? snap.projects : [], named)
+      if (!target) return { text: `${named ? `找不到專案「${named}」。` : ''}用法：/console cycle <專案名稱>（開始自動接力）、/console cycle <專案名稱> off（停止）` }
+      return { text: await toggleCycle($, options, target.project, !off) }
+    }
     const act = arg.match(new RegExp(`^(${COMMAND_ACTIONS.join('|')})(?:\\s+([\\s\\S]*))?$`))
     if (act) {
       const kind = act[1] as typeof COMMAND_ACTIONS[number]
@@ -1854,6 +2059,7 @@ export const register: Register = (on, options) => {
     action_reply: '執行者做完一輪停下來問你：在輸入框寫下回覆，按 Enter 後主控台用你的話接續它原本的對話（用該執行者的額度），不用切過去。需要批准的權限提示，仍要切到那個對話處理。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
     action_gate: '把關卡與專案資料送給主控台審核，使用 Claude 額度；不會執行上線（release）。',
+    action_cycle: '自動接力：每次更新替你按下一個現有按鈕（繼續、同步、審核關卡），一路做下去；停在需要你拍板的決策、執行者停下來提問、release 關卡、工作失敗、上一跳沒改到狀態卡、達到跳數上限（cycleMaxHops，預設 6），或 5 小時額度用到門檻（cycleQuotaStop，預設 70%）。再按一次停止，進行中的工作不中斷。',
     action_open: '用編輯器開啟專案 STATUS.md，不使用模型額度。',
     RUNNING: '執行中：該專案有 Claude 或 Codex 工作尚未結束；切換執行者仍不得重複派工。',
     SYNC: '待同步：執行者的工作已結束，但狀態卡在它開始後沒有更新過。設定 autoSync 開啟時，主控台會自動派一次同步。',
@@ -1995,6 +2201,7 @@ export const register: Register = (on, options) => {
         return {}
       }
       if (menuProject && !(await demoEnabled($))) {
+        if (k === 'a') { void toggleCycle($, options, menuProject); return {} }
         const kind = HOTKEYS[k]
         const state = list.find(r => r.full === menuProject.name)?.state
         const held = (await read($, pendingActions))[menuProject.statusPath]
@@ -2125,6 +2332,13 @@ export const register: Register = (on, options) => {
     const GIT_TONE: Record<string, string> = { red: C.red, amber: C.amber, blue: C.blue, teal: C.teal, green: C.green, dim: C.dim }
     const pipes = new Map(s.projects.map(p => [p.name, pipeline(p, verified[p.statusPath])]))
     const here = demo ? null : await focused($, options, s)
+    // ⟳ chips: hops sent of the limit, or what the cycle waits for; a column only while some project is armed.
+    const cycles: Record<string, CycleRun> = demo ? {} : await read($, cycleRuns)
+    const cycleOf = (full: string) => { const p = s.projects.find(item => item.name === full); return p ? cycles[p.statusPath] : undefined }
+    // A cycle another console armed shows as that here; selfSession is known once a refresh ran.
+    const foreign = (run: CycleRun) => selfSession !== null && (run.owner ?? '') !== selfSession
+    const chipOf = (run: CycleRun) => cycleChip(run, foreign(run))
+    const chipW = Math.max(0, ...list.map(r => { const run = cycleOf(r.full); return run ? displayWidth(chipOf(run)) : 0 }))
 
     const specs = list.map(r => ({
       id: r.full,
@@ -2137,6 +2351,7 @@ export const register: Register = (on, options) => {
         { t: r.item, c: r.state === 'IDLE' ? C.dim : C.text },
         ...(W.flow ? [{ t: '', w: W.flow, parts: pipes.get(r.full) ? pipelineParts(pipes.get(r.full)!, PIPE) : [] }] : []),
         ...(W.git ? [{ t: badges.get(r.full)?.text ?? '', c: GIT_TONE[badges.get(r.full)?.tone ?? 'dim'], w: W.git }] : []),
+        ...(chipW ? [{ t: (() => { const run = cycleOf(r.full); return run ? chipOf(run) : '' })(), c: C.teal, w: chipW }] : []),
         { t: r.age, c: C.dim, w: W.age, right: true },
       ],
     }))
@@ -2257,6 +2472,12 @@ export const register: Register = (on, options) => {
         <Box width={6} flexShrink={0}><Text color={C.dim}>動作</Text></Box>
         <Box columnGap={2} flexWrap="wrap" flexGrow={1} flexShrink={1}>
           {kinds.map(kind => actionButton(p, kind, prefix + kind))}
+          {!demo && (cycles[p.statusPath] || (!isManual(p) && p.hasCard && state !== 'ACTION')) && (
+            <Box key={'help-' + prefix + 'cycle'} hover={{ scope: 'help-action_cycle' }}>
+              <Button key={prefix + 'cycle'} plain label={!cycles[p.statusPath] ? '⟳ 自動接力' : foreign(cycles[p.statusPath]!) ? chipOf(cycles[p.statusPath]!) : `■ 停止接力（${chipOf(cycles[p.statusPath]!)}）`}
+                onPress={() => void toggleCycle($, options, p)} />
+            </Box>
+          )}
           {blockedReason && <Text key={prefix + 'blocked'} color={C.dim}>派工鎖定：{blockedReason}</Text>}
           {offer && <Box key={'help-' + prefix + 'fallback'} hover={{ scope: 'help-fallback' }}>
             <Button key={prefix + 'fallback'} plain dimColor={!!livePending(p)} label={`⇢ 改用 Claude 派工（${actionLabel(offer.kind, p).replace(/^⇢\s*/, '')}）`} onPress={async () => {
@@ -2591,7 +2812,7 @@ export const register: Register = (on, options) => {
           <Box width={1} flexShrink={0} backgroundColor={n ? (targetState ? FG[targetState] : C.amber) : C.green} />
           <Box flexDirection="column" flexGrow={1} flexShrink={1} paddingX={1}>
             <Box justifyContent="space-between" gap={1}>
-              <Text bold color={n ? (targetState ? FG[targetState] : C.amber) : C.green}>{n ? '▸ 下一步' : '✓ 就緒'}</Text>
+              <Text bold color={n ? (targetState ? FG[targetState] : C.amber) : C.green}>{n ? '▸ 下一步' : '✓ 就緒'}{targetProject && cycles[targetProject.statusPath] ? <Text color={C.teal}>{`　${chipOf(cycles[targetProject.statusPath]!)}`}</Text> : null}</Text>
               {targetProject && primaryAction && (
                 <Box key="next-cta" flexShrink={0} paddingX={1} backgroundColor={targetState && BG[targetState] ? BG[targetState] : C.sel}
                   hover={{ backgroundColor: targetState === 'GATE' ? '#463755' : targetState === 'ACTION' ? '#4D412B' : '#2B3D5E' }}>
@@ -2643,6 +2864,7 @@ export const register: Register = (on, options) => {
                 if (hasAsk(menuProject) && parseAsk(menuProject.ask).some(d => d.options.length)) keys.unshift('1–9 選選項')
                 if (menuProject.pr) keys.push('p 開啟 PR')
                 if (menuProject.git) keys.push('f Git 檔案')
+                if (cycles[menuProject.statusPath] ? !foreign(cycles[menuProject.statusPath]!) : !isManual(menuProject) && menuProject.hasCard && st !== 'ACTION') keys.push(cycles[menuProject.statusPath] ? 'a 停止接力' : 'a 自動接力')
                 return <Text key="m-keys" color={C.faint} wrap="wrap">{`快捷鍵　${[...keys, 'Esc 關閉'].join('・')}`}</Text>
               })()}
             </Box>

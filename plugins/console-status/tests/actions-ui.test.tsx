@@ -402,7 +402,7 @@ test('the action menu shows the branch, uncommitted work and the PR checks, and 
   expect(await ui.find({ type: 'Text', text: /^abc1234 Parse nested tables（\d+ 小時前）$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^def5678 Add parser tests（1 天前）$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /#17 Parser rewrite（開啟）　CI ✕ 1 失敗：build \(windows\)　1 進行中　待審查/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /快捷鍵　v 執行驗證・c 繼續下一步・o 開啟 STATUS\.md・p 開啟 PR・f Git 檔案・Esc 關閉/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /快捷鍵　v 執行驗證・c 繼續下一步・o 開啟 STATUS\.md・p 開啟 PR・f Git 檔案・a 自動接力・Esc 關閉/ })).toBeDefined()
   await ui.unmount()
 })
 

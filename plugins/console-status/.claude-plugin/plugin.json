@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.20.2",
+  "version": "0.21.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -122,6 +122,18 @@
       "title": "Auto sync",
       "description": "on: when finished executor work left a project's STATUS CARD behind (待同步), dispatch one sync by itself, once per job; a sync that fails or writes nothing is not retried. off: wait for the 同步 button.",
       "default": "on"
+    },
+    "cycleMaxHops": {
+      "type": "string",
+      "title": "Auto-cycle hop limit",
+      "description": "Hops one press of ⟳ 自動接力 may dispatch (continue, sync or a gate sent to the console) before it hands the project back: 1–20, default 6. A cycle also stops at a decision, an executor's question, a release gate, a failure or a hop that left the CARD unchanged.",
+      "default": "6"
+    },
+    "cycleQuotaStop": {
+      "type": "string",
+      "title": "Auto-cycle quota brake",
+      "description": "A cycle of ⟳ 自動接力 stops before its next hop once a Claude 5-hour window is used this much (percent, 1–100, default 70), or when any window at its pace runs out within the hour. off: no quota brake (cycleMaxHops still applies).",
+      "default": "70"
     },
     "suggestNext": {
       "type": "string",
