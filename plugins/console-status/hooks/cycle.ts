@@ -2,9 +2,10 @@
 // buttons in turn, and stops wherever a person is needed. Pure planning, no I/O; register.tsx runs the loop.
 import type { CycleRun, Project } from '../types'
 import type { State } from './logic'
-import { hasAsk, parseGate, saysNone } from './logic'
+import { hasAsk, limitName, parseGate, parseLimitKind, saysNone } from './logic'
 import { actionKinds, dispatchBlockReason, isManual } from './actions'
 import { AUTO_SYNC_GRACE_MS, autoSyncPlan } from './sync'
+import { limitPace } from './pace'
 
 /** A press of ⟳ dispatches at most this many hops unless `cycleMaxHops` says otherwise. */
 export const CYCLE_DEFAULT_HOPS = 6
@@ -18,6 +19,38 @@ export function cycleMaxHops(value: unknown): number {
   const raw = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value.trim()) : NaN
   if (!Number.isFinite(raw)) return CYCLE_DEFAULT_HOPS
   return Math.max(CYCLE_MIN_HOPS, Math.min(CYCLE_MAX_HOPS, Math.round(raw)))
+}
+
+/** A cycle stops before a hop once a 5-hour window is used this much, unless `cycleQuotaStop` says otherwise. */
+export const CYCLE_DEFAULT_QUOTA_STOP = 70
+
+/** `cycleQuotaStop` option: the 5-hour usage percent (1–100) at which a cycle stops; `off` turns the brake off. */
+export function cycleQuotaStop(value: unknown): number | null {
+  if (typeof value === 'string' && /^\s*off\s*$/i.test(value)) return null
+  const raw = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value.trim().replace(/%$/, '')) : NaN
+  if (!Number.isFinite(raw)) return CYCLE_DEFAULT_QUOTA_STOP
+  return Math.max(1, Math.min(100, Math.round(raw)))
+}
+
+export type UsageLimit = { kind: string; percent: number; resetsAt?: string }
+
+/**
+ * Why Claude's quota should stop a cycle before its next hop, or null: a 5-hour window used at or past the
+ * limit, or any window that at its pace runs out within the hour. Every hop spends Claude quota, a gate hop
+ * the console's own and a Codex hop that falls back to Claude; Codex's own quota keeps `codexMinQuotaPercent`.
+ */
+export function quotaBrake(limits: UsageLimit[] | undefined, stopAt: number | null, now: number): string | null {
+  if (stopAt === null) return null
+  for (const limit of limits ?? []) {
+    if (parseLimitKind(limit.kind)?.window === 'five_hour' && limit.percent >= stopAt) {
+      return `額度煞車：${limitName(limit.kind)}額度已用 ${Math.round(limit.percent)}%（門檻 ${stopAt}%）`
+    }
+  }
+  for (const limit of limits ?? []) {
+    const pace = limitPace(limit.kind, limit.percent, limit.resetsAt, now)
+    if (pace && !pace.lasts && pace.tone === 'red') return `額度煞車：${limitName(limit.kind)}額度${pace.text}`
+  }
+  return null
 }
 
 export type { CycleRun }
@@ -52,6 +85,9 @@ export type CycleOptions = {
   gatePending?: boolean
   /** How the project's latest sync ended, when one did. */
   syncStage?: string
+  /** Claude's rate-limit windows as the usage table reads them, and the 5-hour percent that stops a cycle (null: off). */
+  limits?: UsageLimit[]
+  quotaStop?: number | null
 }
 
 export const newCycleRun = (now: number, max: number, owner?: string): CycleRun => ({ startedAt: now, hops: 0, max, lastRev: null, lastNext: '', lastKind: '', lastAt: 0, ...(owner !== undefined ? { owner } : {}) })
@@ -110,6 +146,8 @@ export function cyclePlan(project: Project, state: State, run: CycleRun, now: nu
   // Like auto-sync, a hop sent a moment ago leaves room for the person's own continue or reply.
   if (run.lastAt && now - run.lastAt < AUTO_SYNC_GRACE_MS) return { wait: '稍候' }
   if (run.hops >= run.max) return { stop: `已達上限 ${run.max} 跳` }
+  const brake = quotaBrake(options.limits, options.quotaStop === undefined ? CYCLE_DEFAULT_QUOTA_STOP : options.quotaStop, now)
+  if (brake) return { stop: brake }
   return { action }
 }
 

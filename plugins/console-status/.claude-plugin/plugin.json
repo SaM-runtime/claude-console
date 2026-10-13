@@ -129,6 +129,12 @@
       "description": "Hops one press of ⟳ 自動接力 may dispatch (continue, sync or a gate sent to the console) before it hands the project back: 1–20, default 6. A cycle also stops at a decision, an executor's question, a release gate, a failure or a hop that left the CARD unchanged.",
       "default": "6"
     },
+    "cycleQuotaStop": {
+      "type": "string",
+      "title": "Auto-cycle quota brake",
+      "description": "A cycle of ⟳ 自動接力 stops before its next hop once a Claude 5-hour window is used this much (percent, 1–100, default 70), or when any window at its pace runs out within the hour. off: no quota brake (cycleMaxHops still applies).",
+      "default": "70"
+    },
     "suggestNext": {
       "type": "string",
       "title": "Suggest the next step",

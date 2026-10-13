@@ -41,7 +41,7 @@ import { layoutBand } from './band'
 import { ALIVE_MS, claim, claimBlocker, heartbeat, leave, parseLease, syncsHere, type Lease } from './lease'
 import { advanceSync, cardStamp, autoSyncPlan, autoSyncMode, bandSync, isSyncEnded, syncChip, syncStatus, syncStepsText } from './sync'
 import type { SyncProgress, ExecutorDigest, CycleRun } from '../types'
-import { CYCLE_MAX_AGE_MS, cardRev, cycleChip, cycleMaxHops, cyclePlan, hopDetail, newCycleRun, storedCycles } from './cycle'
+import { CYCLE_MAX_AGE_MS, cardRev, cycleChip, cycleMaxHops, cyclePlan, cycleQuotaStop, hopDetail, newCycleRun, quotaBrake, storedCycles } from './cycle'
 import { DIGEST_NONE, DIGEST_TIMEOUT, PROMPT_DIGEST_MS, codexDigestLines, digestContext, digestSource, loadDigest } from './digest'
 import type { DigestCache, DigestIo, DigestResult } from './digest'
 
@@ -1250,12 +1250,14 @@ async function toggleCycle($: any, options: PluginOptions, p: Project, want?: bo
   if (run) return `${name}：已在接力（${cycleChip(run)}）`
   const s = await read($, snapshot)
   const state = s ? rows(s).find(r => r.full === p.name)?.state : undefined
-  const refused = isManual(p) ? '手動交接的專案不接力' : !p.hasCard ? '找不到狀態卡' : state === 'ACTION' ? '先處理等你決定／回覆的事' : ''
+  const quotaStop = cycleQuotaStop((options as any).cycleQuotaStop)
+  const brake = quotaBrake(s?.limits, quotaStop, await $.clock.now())
+  const refused = isManual(p) ? '手動交接的專案不接力' : !p.hasCard ? '找不到狀態卡' : state === 'ACTION' ? '先處理等你決定／回覆的事' : brake ?? ''
   if (refused) { $.ui.toast(`${name}：${refused}`); return `${name}：${refused}` }
   const max = cycleMaxHops((options as any).cycleMaxHops)
   const now = await $.clock.now()
   await saveCycle($, p.statusPath, () => newCycleRun(now, max, me))
-  await cycleNotice($, `⟳ ${name} 開始自動接力（最多 ${max} 跳；停在決策、執行者提問、release 關卡與失敗）`, 'teal', true)
+  await cycleNotice($, `⟳ ${name} 開始自動接力（最多 ${max} 跳${quotaStop === null ? '' : `，5 小時額度到 ${quotaStop}% 就停`}；停在決策、執行者提問、release 關卡與失敗）`, 'teal', true)
   return `${name}：開始自動接力，最多 ${max} 跳`
 }
 
@@ -1285,6 +1287,7 @@ async function autoCycle($: any, options: PluginOptions) {
   const lease = parseLease(await Promise.resolve().then(() => $.fs.read(leasePath(config))).catch(() => null))
   const sessions = await activeSessions($)
   const list = rows(s)
+  const quotaStop = cycleQuotaStop((options as any).cycleQuotaStop)
   const setWaiting = async (path: string, waiting: string) => {
     if (runs[path]?.waiting !== waiting) await saveCycle($, path, run => run && mine(run, me) ? { ...run, waiting } : run)
   }
@@ -1314,7 +1317,7 @@ async function autoCycle($: any, options: PluginOptions) {
     const track = tracks[path]
     if (track && !isSyncEnded(track.stage)) { await setWaiting(path, '等同步'); continue }
     const state = list.find(r => r.full === p.name)?.state ?? 'NOCARD'
-    const plan = cyclePlan(p, state, run, now, { autoSync: autoSyncMode((options as any).autoSync), gatePending, ...(track ? { syncStage: track.stage } : {}) })
+    const plan = cyclePlan(p, state, run, now, { autoSync: autoSyncMode((options as any).autoSync), gatePending, limits: s.limits, quotaStop, ...(track ? { syncStage: track.stage } : {}) })
     if ('stop' in plan) {
       await drop(path)
       await cycleNotice($, `⟳ ${name} 接力${plan.done ? '完成' : '停止'}：${plan.stop}（第 ${run.hops} 跳）`, plan.done ? 'green' : 'amber', true)
@@ -2056,7 +2059,7 @@ export const register: Register = (on, options) => {
     action_reply: '執行者做完一輪停下來問你：在輸入框寫下回覆，按 Enter 後主控台用你的話接續它原本的對話（用該執行者的額度），不用切過去。需要批准的權限提示，仍要切到那個對話處理。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
     action_gate: '把關卡與專案資料送給主控台審核，使用 Claude 額度；不會執行上線（release）。',
-    action_cycle: '自動接力：每次更新替你按下一個現有按鈕（繼續、同步、審核關卡），一路做下去；停在需要你拍板的決策、執行者停下來提問、release 關卡、工作失敗、上一跳沒改到狀態卡，或達到跳數上限（cycleMaxHops，預設 6）。再按一次停止，進行中的工作不中斷。',
+    action_cycle: '自動接力：每次更新替你按下一個現有按鈕（繼續、同步、審核關卡），一路做下去；停在需要你拍板的決策、執行者停下來提問、release 關卡、工作失敗、上一跳沒改到狀態卡、達到跳數上限（cycleMaxHops，預設 6），或 5 小時額度用到門檻（cycleQuotaStop，預設 70%）。再按一次停止，進行中的工作不中斷。',
     action_open: '用編輯器開啟專案 STATUS.md，不使用模型額度。',
     RUNNING: '執行中：該專案有 Claude 或 Codex 工作尚未結束；切換執行者仍不得重複派工。',
     SYNC: '待同步：執行者的工作已結束，但狀態卡在它開始後沒有更新過。設定 autoSync 開啟時，主控台會自動派一次同步。',
@@ -2861,6 +2864,7 @@ export const register: Register = (on, options) => {
                 if (hasAsk(menuProject) && parseAsk(menuProject.ask).some(d => d.options.length)) keys.unshift('1–9 選選項')
                 if (menuProject.pr) keys.push('p 開啟 PR')
                 if (menuProject.git) keys.push('f Git 檔案')
+                if (cycles[menuProject.statusPath] ? !foreign(cycles[menuProject.statusPath]!) : !isManual(menuProject) && menuProject.hasCard && st !== 'ACTION') keys.push(cycles[menuProject.statusPath] ? 'a 停止接力' : 'a 自動接力')
                 return <Text key="m-keys" color={C.faint} wrap="wrap">{`快捷鍵　${[...keys, 'Esc 關閉'].join('・')}`}</Text>
               })()}
             </Box>

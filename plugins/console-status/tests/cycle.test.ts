@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { AUTO_SYNC_GRACE_MS } from '../hooks/sync'
-import { CYCLE_DEFAULT_HOPS, cardRev, cycleMaxHops, cyclePlan, newCycleRun } from '../hooks/cycle'
+import { CYCLE_DEFAULT_HOPS, CYCLE_DEFAULT_QUOTA_STOP, cardRev, cycleMaxHops, cyclePlan, cycleQuotaStop, newCycleRun, quotaBrake } from '../hooks/cycle'
 import type { CycleRun } from '../hooks/cycle'
 
 const NOW = Date.parse('2030-01-05T12:00:00Z')
@@ -79,4 +79,29 @@ test('review P2-1: an executor waiting on its question stops the cycle in any st
   expect(cyclePlan(project({ jobs: [job({ asks: true })] }), 'ACTION', run(), NOW, opts())).toEqual({ stop: '執行者在等你回覆' })
   // Without a question, the gate goes to the console as before.
   expect(cyclePlan(project({ gate: 'review：x' }), 'GATE', run(), NOW, opts())).toEqual({ action: 'gate' })
+})
+
+test('quota brake: a 5-hour window at the threshold, or a window running out within the hour, stops the next hop', () => {
+  expect(CYCLE_DEFAULT_QUOTA_STOP).toBe(70)
+  expect(cycleQuotaStop(undefined)).toBe(70)
+  expect(cycleQuotaStop('')).toBe(70)
+  expect(cycleQuotaStop('abc')).toBe(70)
+  expect(cycleQuotaStop('85%')).toBe(85)
+  expect(cycleQuotaStop(0)).toBe(1)
+  expect(cycleQuotaStop(150)).toBe(100)
+  expect(cycleQuotaStop(' OFF ')).toBe(null)
+  const fiveHour = (percent: number) => ({ kind: 'five_hour', percent, resetsAt: iso(NOW + 2 * 3_600_000) })
+  // Under the threshold, and a weekly window high but not running out within the hour: no brake.
+  expect(quotaBrake([fiveHour(40), { kind: 'seven_day', percent: 80, resetsAt: iso(NOW + 2 * 86_400_000) }], 70, NOW)).toBe(null)
+  expect(quotaBrake([fiveHour(72)], 70, NOW)).toBe('額度煞車：5 小時額度已用 72%（門檻 70%）')
+  expect(quotaBrake([fiveHour(72)], null, NOW)).toBe(null)
+  expect(quotaBrake(undefined, 70, NOW)).toBe(null)
+  // A weekly window at 99.5% five days in runs out in well under an hour.
+  expect(quotaBrake([{ kind: 'seven_day', percent: 99.5, resetsAt: iso(NOW + 2 * 86_400_000) }], 70, NOW)).toMatch(/^額度煞車：本週額度照目前速度約 \d+ 分後用完$/)
+  // In the plan: the brake stops a hop that would otherwise go out, and the default applies when unset.
+  expect(cyclePlan(project(), 'IDLE', run(), NOW, opts({ limits: [fiveHour(70)] }))).toEqual({ stop: '額度煞車：5 小時額度已用 70%（門檻 70%）' })
+  expect(cyclePlan(project(), 'IDLE', run(), NOW, opts({ limits: [fiveHour(70)], quotaStop: 90 }))).toEqual({ action: 'continue' })
+  expect(cyclePlan(project(), 'IDLE', run(), NOW, opts({ limits: [fiveHour(95)], quotaStop: null }))).toEqual({ action: 'continue' })
+  // A cycle that is only waiting is not stopped by quota: nothing would be spent.
+  expect(cyclePlan(project({ jobs: [{ ...job(), kind: 'running', status: 'running' }] }), 'RUNNING', run(), NOW, opts({ limits: [fiveHour(95)] }))).toEqual({ wait: '等執行者' })
 })
