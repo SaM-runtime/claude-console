@@ -72,6 +72,22 @@ export type ActionKind = 'verify' | 'sync' | 'continue' | 'reply' | 'decide' | '
 export type ContinueConfirmation = { at: number; signature: string }
 export type VerificationResult = { command: string; at: number; ok: boolean; exitCode: number | null; lines: string[]; truncated: boolean }
 export type PendingAction = { kind: ActionKind; at: number }
+
+/** One project's ⟳ 自動接力: hops sent, the limit, and what the last hop saw (see hooks/cycle.ts). */
+export type CycleRun = {
+  startedAt: number
+  hops: number
+  max: number
+  /** The CARD rev and 下一步 when the last hop went out; a continue that changed neither did nothing. */
+  lastRev: number | null
+  lastNext: string
+  lastKind: '' | 'continue' | 'gate' | 'sync'
+  lastAt: number
+  /** The 關卡 a gate hop sent; the same gate after its turn means the console did not pass it. */
+  lastGate?: string
+  /** Why the cycle is waiting, for the chip; absent while it is about to act. */
+  waiting?: string
+}
 /** `gate` is the CARD 關卡 the review was submitted for; a CARD that moved past it ends the row's wait. */
 export type ReviewRequest = { text: string; projectName: string; at: number; turnId?: string; gate?: string }
 
@@ -162,6 +178,8 @@ declare module 'claude-code' {
       isTurnRunning: boolean
       updateInfo: UpdateInfo | null
       syncProgress: Record<string, SyncProgress>
+      /** statusPath → its ⟳ 自動接力, mirrored from `$.store` so drawing can read it. */
+      cycleRuns: Record<string, CycleRun>
       /** statusPath → the executor digest shown on an expanded project card. */
       executorDigests: Record<string, ExecutorDigest>
     }
