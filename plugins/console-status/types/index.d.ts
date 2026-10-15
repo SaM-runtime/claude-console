@@ -178,7 +178,7 @@ declare module 'claude-code' {
       gitViews: Record<string, GitDetail | 'loading'>
       graphOpen: string | null
       graphViews: Record<string, GraphView | 'loading'>
-      graphStyleOverride: 'line' | 'dot' | null
+      graphStyleOverride: 'spaced' | 'line' | 'dot' | null
       /** `statusPath\nhash` of the commit open under the graph, and the details read so far. */
       graphPick: string | null
       graphDetails: Record<string, GraphCommitDetail | 'loading'>

@@ -40,15 +40,27 @@ test('a merge bends out and the branch bends back in on the commits own rows', (
 })
 
 test('the line style draws each commit as a heavy stretch joined to its line and bends, with no gap', () => {
-  const rows = layoutGraph([c('M', ['A', 'F']), c('F', ['B']), c('A', ['B']), c('B')], { head: 'M', work: true })
+  const rows = layoutGraph([c('M', ['A', 'F']), c('F', ['B']), c('A', ['B']), c('B')], { head: 'M', work: true, style: 'line' })
   // Uncommitted work is dashed; a commit is heavy below its centre, so commits in a row stay apart.
   expect(draw(rows)).toEqual(['┇', '┟─╮', '│ ╽', '╽ │', '┖─╯'])
   expect(rows[1]!.cells.map(x => Boolean(x.node))).toEqual([true, false, false])
-  expect(draw(layoutGraph([c('T')]))).toEqual(['┃'])
+  expect(draw(layoutGraph([c('T')], { style: 'line' }))).toEqual(['┃'])
   expect(cellRuns([{ ch: '╽', color: 0, node: true }, { ch: '─', color: 0 }, { ch: '╮', color: 1 }], 3)).toEqual([{ text: '╽', color: 0, node: true }, { text: '─', color: 0 }, { text: '╮', color: 1 }])
-  expect([graphStyle(undefined), graphStyle('line'), graphStyle(' Dot '), graphStyle('x')]).toEqual(['line', 'line', 'dot', 'line'])
+  expect([graphStyle(undefined), graphStyle('line'), graphStyle(' Dot '), graphStyle('x')]).toEqual(['spaced', 'line', 'dot', 'spaced'])
   expect(mix('#8BD5CA', '#1C222B', 0.45)).toBe('#598482')
   expect(mix('bad', '#000000', 0.5)).toBe('bad')
+})
+
+test('the spaced style puts a row of lines between commits, where branches bend in and out', () => {
+  const rows = layoutGraph([c('M', ['A', 'F']), c('F', ['B']), c('A', ['B']), c('B')], { head: 'M', work: true })
+  // A merge bends out below it, a branch bends in above the commit it starts from; plain lines part the rest.
+  expect(draw(rows)).toEqual(['○', '│', '●', '├─╮', '│ ●', '│ │', '● │', '├─╯', '●'])
+  expect(rows.map(r => Boolean(r.link))).toEqual([false, true, false, true, false, true, false, true, false])
+  expect(rows[2]!.cells.map(x => Boolean(x.node))).toEqual([true])
+  // A bend that passes a line crosses it; a parent another lane already waits for is joined with ┤.
+  expect(draw(layoutGraph([c('T', ['M1']), c('X', ['D', 'M2']), c('D', ['M2']), c('M1', ['M2', 'H']), c('H', ['M2']), c('M2')])))
+    .toEqual(['●', '│', '│ ●', '│ ├─╮', '│ ● │', '│ │ │', '● │ │', '├─┼─┼─╮', '│ │ │ ●', '├─┴─┴─╯', '●'])
+  expect(draw(layoutGraph([c('T')]))).toEqual(['●'])
 })
 
 test('a bend that crosses a line shows the crossing and joins a lane already waiting for that parent', () => {

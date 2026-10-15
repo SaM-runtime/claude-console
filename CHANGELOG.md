@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.24.0
+
+- **The branch graph looks like VS Code Git Graph and GitKraken.** The new default `spaced` style draws a `●` per commit with a row of lines between commits, so the dots are threaded on their branch lines instead of stacked against each other, and branches bend in and out on those rows (`├─╮` where a merge takes in a branch, `├─╯` where a branch starts). Each row ends in two aligned columns, how long ago (`3 小時前`) and the short hash (which opens the commit, like the subject); the age column replaces the day dividers in this style. Branch and tag pills no longer get squeezed into `…` on a narrow pane: the subject gives way first. `樣式：寬鬆` in the graph's header steps through 寬鬆 → 線段 → 圓點 for this session, and the `gitGraph` option (`spaced`, `line`, `dot`) sets the default. The spaced graph is about twice as tall as the one-row styles.
+
 ## 0.23.0
 
 - **The branch graph does something now.** Press a commit's row to open it in place: the whole message, author and time, and the files with their line counts (a merge shows what it brought into its first parent), with its lanes running on through it. `✎ 附給 Claude` makes the next prompt carry that commit (`git show` with the patch, cut at 400 lines), as selecting a project does, so you can ask for a review or a fix of exactly that change; `⧉ 複製 hash` copies it. The graph marks commits a push would send (`↑`, local commits no remote has) and commits a pull would bring (`↓`, upstream commits HEAD lacks), and says how many above the rows. Each branch with an open pull request carries a `PR #17` pill with its checks (`✓`, `✕1`, `…`), read with `gh pr list` when the graph opens (not with `gitProbe: git`). The ideas come from VS Code Git Graph, GitKraken and lazygit; branch, checkout, cherry-pick, revert and rebase stay in lazygit or the editor.

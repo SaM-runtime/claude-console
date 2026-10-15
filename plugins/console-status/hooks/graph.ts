@@ -97,12 +97,18 @@ const NODE: Record<string, string> = {
   '0100': '╻', '0101': '┎', '0110': '┒', '0111': '┰', '0000': '┃', '0001': '┃', '0010': '┃', '0011': '┃',
 }
 
-/** `line`: commits are heavy stretches of a seamless line; `dot`: commits are `●` (HEAD `◉`). */
-export type GraphStyle = 'line' | 'dot'
+/**
+ * `spaced`: VS Code Git Graph / GitKraken style, a `●` per commit with a row of lines between
+ * commits, where branches bend in and out. `line`: one row per commit, each a heavy stretch of a
+ * seamless line. `dot`: one row per commit, a `●` each (HEAD `◉`), as in 0.22.0.
+ */
+export type GraphStyle = 'spaced' | 'line' | 'dot'
+export const GRAPH_STYLES: GraphStyle[] = ['spaced', 'line', 'dot']
 
-/** `gitGraph` option: `dot` on request, anything else is `line`. */
+/** `gitGraph` option: `line` or `dot` on request, anything else is `spaced`. */
 export function graphStyle(value: unknown): GraphStyle {
-  return String(value ?? '').trim().toLowerCase() === 'dot' ? 'dot' : 'line'
+  const v = String(value ?? '').trim().toLowerCase()
+  return v === 'line' || v === 'dot' ? v : 'spaced'
 }
 
 /**
@@ -110,8 +116,11 @@ export function graphStyle(value: unknown): GraphStyle {
  * marks a commit (drawn bright; the lines between commits are drawn softer in the `line` style).
  */
 export type GraphCell = { ch: string; color: number; node?: boolean }
-/** `after`: the colour slot of each lane still running below the row (-1: none), for a divider row. */
-export type GraphRow = { cells: GraphCell[]; col: number; commit?: GraphCommit; after: number[] }
+/**
+ * `after`: the colour slot of each lane still running below the row (-1: none), for a divider row.
+ * `link`: a row of lines only, between two commits of the `spaced` style (no commit, `col` -1).
+ */
+export type GraphRow = { cells: GraphCell[]; col: number; commit?: GraphCommit; after: number[]; link?: boolean }
 
 /**
  * Lays commits (newest first, children before parents) out in lanes. Each lane waits for one
@@ -122,7 +131,8 @@ export type GraphRow = { cells: GraphCell[]; col: number; commit?: GraphCommit; 
  * `work` adds a row above for uncommitted changes, on HEAD's line, which then stays leftmost.
  */
 export function layoutGraph(commits: GraphCommit[], opts: { colors?: number; head?: string; work?: boolean; style?: GraphStyle } = {}): GraphRow[] {
-  const line = (opts.style ?? 'line') === 'line'
+  if ((opts.style ?? 'spaced') === 'spaced') return layoutSpaced(commits, opts)
+  const line = opts.style === 'line'
   const colors = Math.max(1, opts.colors ?? 6)
   const lanes: (string | null)[] = []
   const laneColor: number[] = []
@@ -180,6 +190,104 @@ export function layoutGraph(commits: GraphCommit[], opts: { colors?: number; hea
     if (commit.hash === opts.head && !line) cells[col * 2] = { ch: '◉', color, node: true }
     while (lanes.length && lanes[lanes.length - 1] === null) lanes.pop()
     rows.push({ cells, col, commit, after: lanes.map((h, i) => (h === null ? -1 : laneColor[i]!)) })
+  }
+  return rows
+}
+
+/**
+ * The `spaced` layout: the lanes of {@link layoutGraph}, but a commit row holds only its `●` and the
+ * lines passing by. Between two commits sits a link row: plain lines, or the bends there. Lanes
+ * waiting for the next commit bend into it on the link row above it (`├─╯`); a merge's further
+ * parents bend out on the link row below it (`├─╮`, or `┤` into a lane already waiting). A link row
+ * never holds both, so each bend reads on its own.
+ */
+function layoutSpaced(commits: GraphCommit[], opts: { colors?: number; head?: string; work?: boolean }): GraphRow[] {
+  const colors = Math.max(1, opts.colors ?? 6)
+  const lanes: (string | null)[] = []
+  const laneColor: number[] = []
+  let nextColor = 0
+  const fresh = () => nextColor++ % colors
+  const rows: GraphRow[] = []
+  const shown = new Set(commits.map(c => c.hash))
+  const running = () => lanes.map((h, i) => (h === null ? -1 : laneColor[i]!))
+  type Seg = { u: boolean; d: boolean; l: boolean; r: boolean; color: number }
+  const pass = (): Seg[] => lanes.map((h, i) => ({ u: h !== null, d: h !== null, l: false, r: false, color: h === null ? -1 : laneColor[i]! }))
+  /** Lanes as cells; `gap[i]` colours the `─` between lane i and i+1 (-1: blank). */
+  const cellsOf = (segs: Seg[], gap: number[] = []): GraphCell[] => {
+    const out: GraphCell[] = []
+    segs.forEach((g, i) => {
+      if (i) out.push(gap[i - 1]! >= 0 ? { ch: '─', color: gap[i - 1]! } : { ch: ' ', color: -1 })
+      out.push({ ch: BOX[`${+g.u}${+g.d}${+g.l}${+g.r}`]!, color: g.color })
+    })
+    while (out.length && out[out.length - 1]!.ch === ' ') out.pop()
+    return out
+  }
+  const link = (cells: GraphCell[]) => rows.push({ cells, col: -1, after: running(), link: true })
+  /** Bends from `col` to each end in `ends` (lane → colour of its line): the nearest end beyond a point owns the line there. */
+  const bend = (segs: Seg[], col: number, ends: Map<number, number>) => {
+    const gap: number[] = Array.from({ length: segs.length }, () => -1)
+    const keys = [...ends.keys()]
+    for (let i = 0; i < segs.length; i++) {
+      if (i === col) continue
+      const beyond = i > col ? keys.filter(e => e >= i && e > col).sort((a, b) => a - b)[0] : keys.filter(e => e <= i && e < col).sort((a, b) => b - a)[0]
+      if (beyond === undefined) continue
+      const owner = ends.get(beyond)!
+      const seg = segs[i]!
+      if (i > col) { seg.l = true; seg.r = i < beyond || keys.some(e => e > i) } else { seg.r = true; seg.l = i > beyond || keys.some(e => e < i) }
+      if (!seg.u && !seg.d) seg.color = owner
+      gap[i > col ? i - 1 : i] = owner
+      if (i > col) segs[col]!.r = true; else segs[col]!.l = true
+    }
+    return gap
+  }
+  if (opts.work && opts.head && shown.has(opts.head)) {
+    lanes.push(opts.head)
+    laneColor.push(fresh())
+    rows.push({ cells: [{ ch: '○', color: laneColor[0]!, node: true }], col: 0, after: running() })
+  }
+  for (const commit of commits) {
+    const hits: number[] = []
+    lanes.forEach((h, i) => { if (h === commit.hash) hits.push(i) })
+    let col = hits[0] ?? lanes.indexOf(null)
+    if (col < 0) col = lanes.length
+    // The link row above: lanes waiting for this commit bend into its lane, else plain lines.
+    if (rows.length) {
+      const segs = pass()
+      const ends = new Map(hits.filter(i => i !== col).map(i => [i, laneColor[i]!] as [number, number]))
+      for (const i of ends.keys()) segs[i]!.d = false
+      // A merge's link row already parts this commit from the one above, unless bends must go in too.
+      if (ends.size || !rows[rows.length - 1]!.link) link(cellsOf(segs, ends.size ? bend(segs, col, ends) : []))
+      for (const i of ends.keys()) lanes[i] = null
+    }
+    if (!hits.length) { lanes[col] = commit.hash; laneColor[col] = fresh() }
+    const color = laneColor[col]!
+    const node = pass()
+    const cells = cellsOf(node.map((g, i) => (i === col ? { ...g, u: false, d: false } : g)))
+    while (cells.length <= col * 2) cells.push({ ch: ' ', color: -1 })
+    cells[col * 2] = { ch: '●', color, node: true }
+    lanes[col] = commit.parents[0] ?? null
+    while (lanes.length && lanes[lanes.length - 1] === null) lanes.pop()
+    rows.push({ cells, col, commit, after: running() })
+    // A merge's further parents bend out on the link row below: into a lane already waiting, else a new lane.
+    const further = commit.parents.slice(1)
+    if (further.length) {
+      const segs = pass()
+      while (segs.length <= col) segs.push({ u: false, d: false, l: false, r: false, color: -1 })
+      segs[col] = { u: true, d: lanes[col] != null, l: false, r: false, color }
+      const ends = new Map<number, number>()
+      for (const parent of further) {
+        const waiting = lanes.indexOf(parent)
+        if (waiting >= 0 && waiting !== col) { ends.set(waiting, laneColor[waiting]!); continue }
+        let j = lanes.findIndex((h, i) => h === null && i > col)
+        if (j < 0) j = Math.max(lanes.length, col + 1)
+        lanes[j] = parent
+        laneColor[j] = fresh()
+        while (segs.length <= j) segs.push({ u: false, d: false, l: false, r: false, color: -1 })
+        segs[j] = { u: false, d: true, l: false, r: false, color: laneColor[j]! }
+        ends.set(j, laneColor[j]!)
+      }
+      link(cellsOf(segs, bend(segs, col, ends)))
+    }
   }
   return rows
 }
