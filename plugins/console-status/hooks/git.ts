@@ -238,6 +238,11 @@ export function gitBadge(git: GitInfo | undefined, pr: PrInfo | undefined): { te
 
 /** One readable line for cards, the action menu and prompt context. */
 export function gitLine(git: GitInfo): string {
+  return gitParts(git).join('　')
+}
+
+/** gitLine's parts, so a narrow card can wrap between them instead of inside `2 個檔案`. */
+export function gitParts(git: GitInfo): string[] {
   const head = git.detached ? `分離 HEAD${git.oid ? ` ${git.oid}` : ''}` : git.branch || '（無分支）'
   const parts = [git.upstream ? `${head} → ${git.upstream}` : `${head}（無上游）`]
   if (git.ahead) parts.push(`領先 ${git.ahead}`)
@@ -247,7 +252,7 @@ export function gitLine(git: GitInfo): string {
   if (git.untracked) parts.push(`${git.untracked} 個未追蹤`)
   if (!git.ahead && !git.behind && !git.conflicts && !git.changed && !git.untracked) parts.push('乾淨')
   if (git.stash) parts.push(`stash ${git.stash}`)
-  return parts.join('　')
+  return parts
 }
 
 const REVIEW: Record<string, string> = { APPROVED: '已核准', CHANGES_REQUESTED: '要求修改', REVIEW_REQUIRED: '待審查' }
