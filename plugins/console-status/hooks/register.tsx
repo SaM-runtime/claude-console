@@ -2841,17 +2841,18 @@ export const register: Register = (on, options) => {
             {graphCells(key + '-cells', cells)}
             <Box width={1} flexShrink={0}><Text color={mark?.color ?? C.faint}>{mark?.ch ?? ' '}</Text></Box>
             <Box flexGrow={1} flexShrink={1} height={1} overflow="hidden">
-              <Button key={key + '-open'} plain onPress={() => void toggleCommit($, p, c.hash)}>
-                <Text color={isHead ? C.strong : C.text} wrap="truncate-end">
-                  {showHash ? <Text color={isHead ? C.strong : C.dim} bold={isHead}>{c.hash.slice(0, 7) + ' '}</Text> : ''}
+              <Box flexWrap="nowrap">
+                {showHash && <Button key={key + '-hash'} plain dimColor={!isHead} label={c.hash.slice(0, 7)} onPress={() => void toggleCommit($, p, c.hash)} />}
+                {showHash && <Text key={key + '-hs'}>{' '}</Text>}
+                {labels.length > 0 && <Text key={key + '-refs'} wrap="truncate-end">
                   {labels.map((l, j) => [
                     <Text key={key + '-r' + j} color={REF[l.kind]} backgroundColor={PILL[l.kind]} bold={l.kind === 'current' || l.kind === 'head'}>{' ' + (l.kind === 'tag' ? '◇ ' : '') + l.text}{l.synced ? <Text color={C.blue} bold={false}>{' ⇄ ' + l.synced}</Text> : ''}{' '}</Text>,
                     <Text key={key + '-rs' + j}>{' '}</Text>,
                   ])}
                   {prChips}
-                  {labels.length ? ' ' : ''}{c.subject}
-                </Text>
-              </Button>
+                </Text>}
+                <Button key={key + '-open'} plain dimColor={false} label={c.subject || '（沒有標題）'} onPress={() => void toggleCommit($, p, c.hash)} />
+              </Box>
             </Box>
             {showAge && <Box width={5} flexShrink={0} justifyContent="flex-end"><Text color={C.faint}>{shortAgo(c.at, renderedAt)}</Text></Box>}
           </Box>, open ? commitView(p, row, c, key, cells.length) : null].filter(Boolean)
