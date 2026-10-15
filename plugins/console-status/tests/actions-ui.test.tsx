@@ -19,7 +19,7 @@ function fixture(on: any) {
     agentsDelay: 0,
     files: {} as Record<string, string>,
     /** `git status --porcelain=v2 --branch` and `gh pr view --json` output; empty: not a repository / no PR. */
-    git: '', gh: '', gitLog: '', gitDiff: '', gitFiles: '', gitShow: '', gitGraph: '', gitCalls: [] as any[],
+    git: '', gh: '', gitLog: '', gitDiff: '', gitFiles: '', gitShow: '', gitGraph: '', gitUnpushed: '', gitIncoming: '', gitCommit: '', gitPatch: '', ghList: '', gitCalls: [] as any[],
   }
   on('fs.list', () => ({ value: [{ name: 'Project Alpha-hash', kind: 'dir' }] }))
   on('fs.read', (_: any, e: any) => {
@@ -45,8 +45,9 @@ function fixture(on: any) {
     if (e.argv[0] === 'git') {
       data.gitCalls.push(e)
       if (!data.git) return { value: result(128, '', 'not a git repository') }
-      return { value: result(0, e.argv.includes('--topo-order') ? data.gitGraph : e.argv.includes('log') ? data.gitLog ?? '' : e.argv.includes('diff') ? data.gitDiff ?? '' : e.argv.includes('show') ? data.gitShow ?? '' : e.argv.includes('--porcelain=v1') ? data.gitFiles ?? '' : data.git) }
+      return { value: result(0, e.argv.includes('--topo-order') ? data.gitGraph : e.argv.includes('--patch') ? data.gitPatch : e.argv.includes('--first-parent') ? data.gitCommit : e.argv.includes('rev-list') ? data.gitIncoming : e.argv.includes('--not') ? data.gitUnpushed : e.argv.includes('log') ? data.gitLog ?? '' : e.argv.includes('diff') ? data.gitDiff ?? '' : e.argv.includes('show') ? data.gitShow ?? '' : e.argv.includes('--porcelain=v1') ? data.gitFiles ?? '' : data.git) }
     }
+    if (e.argv[0] === 'gh' && e.argv[2] === 'list') { data.gitCalls.push(e); return { value: result(0, data.ghList || '[]') } }
     if (e.argv[0] === 'gh') { data.gitCalls.push(e); return { value: data.gh ? result(0, data.gh) : result(1, '', 'no pull requests found') } }
     data.processCalls.push(e)
     return { value: await data.run(e) }
@@ -461,13 +462,26 @@ test('the Git row opens a branch graph: lanes, labels, uncommitted work on HEAD,
   expect(await ui.find({ type: 'Text', text: /^分支圖・本地分支・4 個提交・/ })).toBeDefined()
   // Uncommitted work sits on HEAD's line, above it.
   expect(await ui.find({ type: 'Text', text: '未提交的變更　3 個檔案' })).toBeDefined()
+  // Line style by default: commits are the bright, heavy stretch of a line that has no gaps.
+  expect(await ui.find({ type: 'Text', text: '┇' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '┟' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '─╮' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '┖' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^╽ 提交　┇ 未提交/ })).toBeDefined()
+  // ● 圓點 switches this session to dots, ┃ 線段 back.
+  await ui.press({ key: 'm-info-graph-style' })
   expect(await ui.find({ type: 'Text', text: '○' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '◉─╮' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '●─╯' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'feature/parser' })).toBeDefined()
+  expect((await ui.find({ key: 'm-info-graph-style' }))?.text).toBe('┃ 線段')
+  expect(await ui.find({ type: 'Text', text: /^ feature\/parser/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: ' ⇄ origin' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'v1.0.0' })).toBeDefined()
+  // Labels are pills; commits are grouped by when they were made, the work row above them.
+  expect(await ui.find({ type: 'Text', text: ' ◇ v1.0.0 ' })).toBeDefined()
+  for (const day of ['今天', '昨天', '最近一週']) expect(await ui.find({ type: 'Text', text: day })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '2 時' })).toBeDefined()
+  // Hashes now open their commit, so they sit inside the row's button.
+  expect(await ui.find({ key: 'm-info-g-0123456789abcdef-open' })).toBeDefined()
   expect(await ui.find({ key: 'm-info-graph-more' })).toBeUndefined()
   expect(JSON.stringify(await ui.drawn()).includes('undefined')).toBe(false)
   // The graph already lists the commits, so the 提交 field steps aside while it is open.
@@ -479,6 +493,57 @@ test('the Git row opens a branch graph: lanes, labels, uncommitted work on HEAD,
   // b closes it again from the menu.
   await ui.post({ key: 'b' }, { in: 'rows' } as any)
   expect(await ui.find({ type: 'Text', text: /^分支圖・/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a graph row opens its commit; push state and pull requests mark the graph; a commit rides along with the next prompt', OPTIONS, async ($, on) => {
+  const { data } = fixture(on)
+  data.git = GIT_STATUS
+  const t = (h: number) => Math.floor(Date.parse('2030-01-05T12:00:00Z') / 1000) - h * 3600
+  const line = (hash: string, parents: string, refs: string, hours: number, subject: string) => [hash, parents, refs, t(hours), subject].join('\x1f')
+  data.gitGraph = [
+    line('eeeeeee1', '0123456789abcdef', 'refs/remotes/origin/feature/parser', 1, 'Review fix from CI'),
+    line('0123456789abcdef', 'bbbbbbb1', 'HEAD -> refs/heads/feature/parser', 2, 'Parse nested tables'),
+    line('bbbbbbb1', '', '', 5, 'init'),
+  ].join('\n') + '\n'
+  data.gitUnpushed = '0123456789abcdef\n'
+  data.gitIncoming = 'eeeeeee1\n'
+  data.ghList = JSON.stringify([{ number: 17, title: 'Parser rewrite', state: 'OPEN', isDraft: false, url: 'u', headRefName: 'feature/parser', statusCheckRollup: [{ name: 'test', status: 'COMPLETED', conclusion: 'FAILURE' }] }])
+  data.gitCommit = `0123456789abcdef\x1fAnn\x1f${t(2)}\x1fParse nested tables\n\nHandles tables in tables.\x1e\n\n10\t2\tsrc/parser.ts\n-\t-\tlogo.png\n`
+  data.gitPatch = 'commit 0123456789abcdef\nAuthor: Ann\n\n    Parse nested tables\n\ndiff --git a/src/parser.ts b/src/parser.ts\n+nested\n'
+  const submissions: any[] = []
+  on('prompt.submit', (_: any, e: any) => { submissions.push(e); return { text: e.text, context: e.context } })
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount({ ...PANE('terminal'), props: { ...PANE('terminal').props, bodyColumns: 100 } })
+  await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)
+  await ui.press({ key: 'm-info-git-graph' })
+  expect(data.gitCalls.some(call => call.argv[0] === 'gh' && call.argv[2] === 'list' && call.init.cwd === 'D:/Project Alpha')).toBe(true)
+  expect(await ui.find({ type: 'Text', text: '↑ 1 個提交還沒推送' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '↓ 1 個提交可以拉取' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '↑' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '↓' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: ' PR #17 ' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '✕1 ' })).toBeDefined()
+  // Nothing is read for a commit until its row is pressed.
+  expect(data.gitCalls.some(call => call.argv.includes('--first-parent'))).toBe(false)
+  await ui.press({ key: 'm-info-g-0123456789abcdef-open' })
+  expect(data.gitCalls.find(call => call.argv.includes('--first-parent')).argv.slice(-2)).toEqual(['0123456789abcdef', '--'])
+  expect(await ui.find({ type: 'Text', text: 'Handles tables in tables.' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '2 個檔案　' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'src/parser.ts' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '二進位' })).toBeDefined()
+  expect(JSON.stringify(await ui.drawn()).includes('undefined')).toBe(false)
+  await ui.press({ key: 'm-info-g-0123456789abcdef-attach' })
+  expect(await ui.find({ type: 'Text', text: '✎ 已附上 Project 的提交 0123456' })).toBeDefined()
+  await $.prompt.submit({ text: 'Review this' } as any)
+  const ctx = submissions[0].context.join('\n')
+  expect(ctx.includes('使用者從主控台的分支圖附上「Project」的提交 0123456（Parse nested tables）')).toBe(true)
+  expect(ctx.includes('+nested')).toBe(true)
+  expect(data.state.attachedCommit).toBeNull()
+  await $.prompt.submit({ text: 'Another' } as any)
+  expect((submissions[1].context ?? []).join('\n').includes('<commit>')).toBe(false)
+  await ui.press({ key: 'm-info-g-0123456789abcdef-close' })
+  expect(await ui.find({ type: 'Text', text: 'Handles tables in tables.' })).toBeUndefined()
   await ui.unmount()
 })
 

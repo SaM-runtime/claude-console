@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -86,6 +86,12 @@
       "title": "Git and PR status",
       "description": "on: each project's branch, uncommitted and unpushed work (git) plus its pull request and CI checks (gh, when installed). git: local git only. off: neither.",
       "default": "on"
+    },
+    "gitGraph": {
+      "type": "string",
+      "title": "Branch graph style",
+      "description": "line: each commit is a bright stretch of its branch line, drawn edge to edge with no gap. dot: each commit is a dot (HEAD a ringed dot), as in 0.22.0.",
+      "default": "line"
     },
     "commandGuard": {
       "type": "string",
