@@ -190,6 +190,19 @@ export function parseGitStatus(text: string): GitInfo | null {
   return info
 }
 
+/** `gh pr list --json …,headRefName`: open pull requests by branch name; anything odd is no PR. */
+export function parsePrList(text: string): Record<string, PrInfo> {
+  let data: unknown
+  try { data = JSON.parse(text) } catch { return {} }
+  const out: Record<string, PrInfo> = {}
+  for (const item of Array.isArray(data) ? data : []) {
+    const branch = item && typeof item === 'object' ? String((item as any).headRefName ?? '') : ''
+    const pr = branch ? parsePrView(JSON.stringify(item)) : null
+    if (pr && !out[branch]) out[branch] = pr
+  }
+  return out
+}
+
 const FAIL = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'])
 const PASS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED'])
 

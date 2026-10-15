@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { cellRuns, clipCells, gitGraphArgs, graphStyle, graphWidth, layoutGraph, mix, parseGraphLog, parseRefs, refLabels, shortAgo } from '../hooks/graph'
+import { DAY_GROUPS, cellRuns, clipCells, clipPatch, dayGroup, gitCommitArgs, parseCommitDetail, parseHashes, gitGraphArgs, graphStyle, throughCells, graphWidth, layoutGraph, mix, parseGraphLog, parseRefs, refLabels, shortAgo } from '../hooks/graph'
 import type { GraphCommit } from '../types'
 
 const c = (hash: string, parents: string[] = [], subject = hash): GraphCommit => ({ hash, parents, refs: [], at: 0, subject })
@@ -74,6 +74,29 @@ test('clipping folds extra lanes into …, keeps an off-screen commit visible, a
   expect(clipCells(wide[4]!, 2).map(x => x.ch).join('')).toBe('●─…')
   expect(graphWidth(wide, 3)).toBe(5)
   expect(cellRuns([{ ch: '●', color: 0 }, { ch: '─', color: 1 }, { ch: '╮', color: 1 }], 5)).toEqual([{ text: '●', color: 0 }, { text: '─╮', color: 1 }, { text: '  ', color: -1 }])
+})
+
+test('divider rows carry every lane still running, and time groups follow the age column', () => {
+  const rows = layoutGraph([c('M', ['A', 'F']), c('F', ['B']), c('A', ['B']), c('B')], { style: 'dot' })
+  expect(rows.map(r => r.after)).toEqual([[0, 1], [0, 1], [0, 1], []])
+  expect(throughCells(rows[0]!).map(x => x.ch).join('')).toBe('│ │')
+  expect(throughCells(rows[3]!)).toEqual([])
+  const now = new Date(2030, 0, 5, 12, 0).getTime()
+  const at = (d: number, h = 12) => new Date(2030, 0, 5 - d, h, 0).getTime()
+  expect([at(0, 1), at(1, 23), at(2), at(6), at(7), at(29), at(30)].map(t => dayGroup(t, now))).toEqual(['今天', '昨天', '最近一週', '最近一週', '最近一個月', '最近一個月', '更早'])
+  expect(DAY_GROUPS).toEqual(['今天', '昨天', '最近一週', '最近一個月', '更早'])
+})
+
+test('a commit opened in the graph: who, when, message and files; hashes and long patches', () => {
+  expect(gitCommitArgs('D:/A', 'abc1234').slice(4)).toEqual(['show', '--no-color', '--no-renames', '-m', '--first-parent', '--numstat', '--format=%H%x1f%an%x1f%ct%x1f%B%x1e', 'abc1234', '--'])
+  expect(parseCommitDetail('abc1234\x1fAnn\x1f1700000000\x1fTitle\r\n\r\nBody\x1e\n\n3\t1\ta.ts\n-\t-\tb.png\n3\t1\ta.ts\n')).toEqual({
+    hash: 'abc1234', author: 'Ann', at: 1700000000000, body: 'Title\r\n\r\nBody', files: [{ path: 'a.ts', lines: { add: 3, del: 1 } }, { path: 'b.png' }],
+  })
+  expect(parseCommitDetail('fatal: bad revision')).toBeNull()
+  expect(parseHashes('abc1234\r\nnot a hash\n\ndef5678\n')).toEqual(['abc1234', 'def5678'])
+  expect(clipPatch('a\nb\n', 5)).toBe('a\nb')
+  expect(clipPatch('1\n2\n3\n4', 2)).toBe('1\n2\n…（後面還有 2 行沒有附上）')
+  expect(clipPatch('abcdef', 5, 3)).toBe('abc\n…（內容太長，後面的部分沒有附上）')
 })
 
 test('ages stay short for the graph column', () => {

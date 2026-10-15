@@ -110,7 +110,8 @@ export function graphStyle(value: unknown): GraphStyle {
  * marks a commit (drawn bright; the lines between commits are drawn softer in the `line` style).
  */
 export type GraphCell = { ch: string; color: number; node?: boolean }
-export type GraphRow = { cells: GraphCell[]; col: number; commit?: GraphCommit }
+/** `after`: the colour slot of each lane still running below the row (-1: none), for a divider row. */
+export type GraphRow = { cells: GraphCell[]; col: number; commit?: GraphCommit; after: number[] }
 
 /**
  * Lays commits (newest first, children before parents) out in lanes. Each lane waits for one
@@ -132,7 +133,7 @@ export function layoutGraph(commits: GraphCommit[], opts: { colors?: number; hea
   if (opts.work && opts.head && shown.has(opts.head)) {
     lanes.push(opts.head)
     laneColor.push(fresh())
-    rows.push({ cells: [{ ch: line ? '┇' : '○', color: laneColor[0]!, node: true }], col: 0 })
+    rows.push({ cells: [{ ch: line ? '┇' : '○', color: laneColor[0]!, node: true }], col: 0, after: [laneColor[0]!] })
   }
   for (const commit of commits) {
     const hits: number[] = []
@@ -177,8 +178,8 @@ export function layoutGraph(commits: GraphCommit[], opts: { colors?: number; hea
       if (i < width - 1) cells.push(i >= col && i < right || i < col && i >= left ? { ch: '─', color: owner(i >= col ? i + 1 : i) } : { ch: ' ', color: -1 })
     }
     if (commit.hash === opts.head && !line) cells[col * 2] = { ch: '◉', color, node: true }
-    rows.push({ cells, col, commit })
     while (lanes.length && lanes[lanes.length - 1] === null) lanes.pop()
+    rows.push({ cells, col, commit, after: lanes.map((h, i) => (h === null ? -1 : laneColor[i]!)) })
   }
   return rows
 }
@@ -231,4 +232,89 @@ export function mix(color: string, to: string, amount: number): string {
   const a = rgb(color), b = rgb(to)
   if (a.some(Number.isNaN) || b.some(Number.isNaN)) return color
   return '#' + a.map((v, i) => Math.round(v + (b[i]! - v) * amount).toString(16).padStart(2, '0')).join('')
+}
+
+/** The cells of a divider row under `row`: every lane still running goes straight through. */
+export function throughCells(row: GraphRow): GraphCell[] {
+  const out: GraphCell[] = []
+  row.after.forEach((color, i) => {
+    if (i) out.push({ ch: ' ', color: -1 })
+    out.push(color < 0 ? { ch: ' ', color: -1 } : { ch: '│', color })
+  })
+  return out
+}
+
+/** The graph's divider labels, newest first. */
+export const DAY_GROUPS = ['今天', '昨天', '最近一週', '最近一個月', '更早']
+
+/** Which stretch of time a commit falls in, by local calendar day: the graph's divider labels. */
+export function dayGroup(t: number, now: number): string {
+  const day = (ms: number) => { const d = new Date(ms); return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000 }
+  const days = day(now) - day(t)
+  if (days <= 0) return '今天'
+  if (days === 1) return '昨天'
+  // Past yesterday, count whole days elapsed, the way the age column (`6 天`) counts them.
+  const elapsed = Math.floor(Math.max(0, now - t) / 86_400_000)
+  return elapsed < 7 ? '最近一週' : elapsed < 30 ? '最近一個月' : '更早'
+}
+
+/** Commits on local branches that no remote has: what a push would send. */
+export function gitUnpushedArgs(root: string): string[] {
+  return ['git', '--no-optional-locks', '-C', root, 'log', '-500', '--format=%H', '--branches', '--not', '--remotes', '--']
+}
+
+/** Commits the upstream has and HEAD does not: what a pull would bring. Fails harmlessly with no upstream. */
+export function gitIncomingArgs(root: string): string[] {
+  return ['git', '--no-optional-locks', '-C', root, 'rev-list', '-500', '@{upstream}', '--not', 'HEAD', '--']
+}
+
+/** Every open pull request with its branch and checks, so each branch label can carry its PR. */
+export function prListArgs(): string[] {
+  return ['gh', 'pr', 'list', '--state', 'open', '--limit', '50', '--json', 'number,title,state,isDraft,url,reviewDecision,statusCheckRollup,headRefName']
+}
+
+/** Full hashes, one per line. */
+export function parseHashes(text: string): string[] {
+  return text.split(/\r?\n/).map(line => line.trim()).filter(line => /^[0-9a-f]{7,64}$/.test(line))
+}
+
+/** One commit opened in the graph: who, when, the whole message and the files with their lines. */
+export function gitCommitArgs(root: string, hash: string): string[] {
+  return ['git', '--no-optional-locks', '-C', root, 'show', '--no-color', '--no-renames', '-m', '--first-parent', '--numstat', '--format=%H%x1f%an%x1f%ct%x1f%B%x1e', hash, '--']
+}
+
+export type CommitDetail = { hash: string; author: string; at: number; body: string; files: { path: string; lines?: { add: number; del: number } }[] }
+
+/** `git show` read by gitCommitArgs; a merge's files are what it brought into its first parent. */
+export function parseCommitDetail(text: string): CommitDetail | null {
+  const cut = text.indexOf('\x1e')
+  if (cut < 0) return null
+  const [hash, author, at, ...body] = text.slice(0, cut).split('\x1f')
+  const seconds = Number(at)
+  if (!hash || !/^[0-9a-f]{7,64}$/.test(hash.trim()) || !Number.isFinite(seconds)) return null
+  const files: CommitDetail['files'] = []
+  const seen = new Set<string>()
+  for (const line of text.slice(cut + 1).split(/\r?\n/)) {
+    const m = /^(\d+|-)\t(\d+|-)\t(.+)$/.exec(line)
+    if (!m || seen.has(m[3]!)) continue
+    seen.add(m[3]!)
+    files.push(m[1] === '-' || m[2] === '-' ? { path: m[3]! } : { path: m[3]!, lines: { add: Number(m[1]), del: Number(m[2]) } })
+  }
+  return { hash: hash.trim(), author: (author ?? '').trim(), at: seconds * 1000, body: body.join('\x1f').trim(), files }
+}
+
+/** What a commit attached to a prompt carries: its message, the files and the patch, cut to fit. */
+export function gitAttachArgs(root: string, hash: string): string[] {
+  return ['git', '--no-optional-locks', '-C', root, 'show', '--no-color', '-m', '--first-parent', '--stat', '--patch', '--format=commit %H%nAuthor: %an%nDate: %ci%n%n%B', hash, '--']
+}
+
+/** At most `maxLines` lines and `maxChars` characters, saying how much was left out. */
+export function clipPatch(text: string, maxLines = 400, maxChars = 24_000): string {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\n+$/, '').split('\n')
+  let out = lines.slice(0, maxLines).join('\n')
+  const cutChars = out.length > maxChars
+  if (cutChars) out = out.slice(0, maxChars)
+  if (cutChars) return `${out}\n…（內容太長，後面的部分沒有附上）`
+  if (lines.length <= maxLines) return out
+  return `${out}\n…（後面還有 ${lines.length - maxLines} 行沒有附上）`
 }

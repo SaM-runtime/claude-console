@@ -47,8 +47,16 @@ export type GraphCommit = { hash: string; parents: string[]; refs: GraphRef[]; a
 /** The branch graph a person opens from a project's Git row; read on demand, laid out when drawn. */
 export type GraphView = {
   at: number; sig: string; scope: 'local' | 'all'; limit: number; commits: GraphCommit[]; more: boolean
+  /** Local commits no remote has, and upstream commits HEAD lacks (full hashes). */
+  unpushed?: string[]; incoming?: string[]
+  /** Open pull requests by head branch name, when gh is in use. */
+  prs?: Record<string, PrInfo>
   error?: string
 }
+/** One commit opened under its graph row. */
+export type GraphCommitDetail = { hash: string; author: string; at: number; body: string; files: { path: string; lines?: { add: number; del: number } }[]; error?: string }
+/** The commit whose contents ride along with the next prompt. */
+export type AttachedCommit = { statusPath: string; project: string; hash: string; subject: string }
 export type GitInfo = {
   branch: string; detached?: boolean; oid?: string; upstream?: string; ahead: number; behind: number; changed: number; untracked: number; conflicts: number
   /** HEAD's full id (absent before the first commit), the key the commit list is cached under. */
@@ -171,6 +179,10 @@ declare module 'claude-code' {
       graphOpen: string | null
       graphViews: Record<string, GraphView | 'loading'>
       graphStyleOverride: 'line' | 'dot' | null
+      /** `statusPath\nhash` of the commit open under the graph, and the details read so far. */
+      graphPick: string | null
+      graphDetails: Record<string, GraphCommitDetail | 'loading'>
+      attachedCommit: AttachedCommit | null
       /** `statusPath\nask` → decision index → the option key picked in the pane; kept after filling, dropped when the ask changes. */
       decisionPicks: Record<string, DecisionPicks>
       dispatchPicker: 'executor' | 'model' | 'effort' | null
