@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -90,8 +90,8 @@
     "gitGraph": {
       "type": "string",
       "title": "Branch graph style",
-      "description": "line: each commit is a bright stretch of its branch line, drawn edge to edge with no gap. dot: each commit is a dot (HEAD a ringed dot), as in 0.22.0.",
-      "default": "line"
+      "description": "spaced: VS Code Git Graph style, a dot per commit with a row of lines between commits where branches bend in and out. line: one row per commit, each a bright stretch of its branch line. dot: one row per commit, each a dot (HEAD a ringed dot), as in 0.22.0.",
+      "default": "spaced"
     },
     "commandGuard": {
       "type": "string",

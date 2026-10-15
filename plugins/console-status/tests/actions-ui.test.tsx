@@ -462,25 +462,32 @@ test('the Git row opens a branch graph: lanes, labels, uncommitted work on HEAD,
   expect(await ui.find({ type: 'Text', text: /^分支圖・本地分支・4 個提交・/ })).toBeDefined()
   // Uncommitted work sits on HEAD's line, above it.
   expect(await ui.find({ type: 'Text', text: '未提交的變更　3 個檔案' })).toBeDefined()
-  // Line style by default: commits are the bright, heavy stretch of a line that has no gaps.
+  // Spaced style by default: a dot per commit, a row of lines between commits where branches bend.
+  expect(await ui.find({ type: 'Text', text: '○' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '├─╮' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '├─╯' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^● 提交　○ 未提交/ })).toBeDefined()
+  // Its age column replaces the day dividers; the hash sits at the right and opens the commit too.
+  expect(await ui.find({ type: 'Text', text: '今天' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '2 小時前' })).toBeDefined()
+  expect((await ui.find({ key: 'm-info-g-0123456789abcdef-hash' }))?.text).toBe('0123456')
+  // 樣式 steps through 寬鬆 → 線段 → 圓點 for this session.
+  expect((await ui.find({ key: 'm-info-graph-style' }))?.text).toBe('樣式：寬鬆')
+  await ui.press({ key: 'm-info-graph-style' })
   expect(await ui.find({ type: 'Text', text: '┇' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '┟' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '─╮' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '┖' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^╽ 提交　┇ 未提交/ })).toBeDefined()
-  // ● 圓點 switches this session to dots, ┃ 線段 back.
   await ui.press({ key: 'm-info-graph-style' })
-  expect(await ui.find({ type: 'Text', text: '○' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '◉─╮' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '●─╯' })).toBeDefined()
-  expect((await ui.find({ key: 'm-info-graph-style' }))?.text).toBe('┃ 線段')
+  expect((await ui.find({ key: 'm-info-graph-style' }))?.text).toBe('樣式：圓點')
   expect(await ui.find({ type: 'Text', text: /^ feature\/parser/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: ' ⇄ origin' })).toBeDefined()
   // Labels are pills; commits are grouped by when they were made, the work row above them.
   expect(await ui.find({ type: 'Text', text: ' ◇ v1.0.0 ' })).toBeDefined()
+  // The one-row styles keep the day dividers.
   for (const day of ['今天', '昨天', '最近一週']) expect(await ui.find({ type: 'Text', text: day })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '2 時' })).toBeDefined()
-  // Hashes now open their commit, so they sit inside the row's button.
   expect(await ui.find({ key: 'm-info-g-0123456789abcdef-open' })).toBeDefined()
   expect(await ui.find({ key: 'm-info-graph-more' })).toBeUndefined()
   expect(JSON.stringify(await ui.drawn()).includes('undefined')).toBe(false)

@@ -22,8 +22,8 @@ import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
 import { FETCH_STALE_MS, agoText, commitLine, fileGroups, fileKind, gitBadge, gitFilesArgs, gitParts, gitLogArgs, gitNumstatArgs, gitProbeMode, gitShowArgs, gitSignature, gitStatusArgs, linesText, parseGitFiles, parseGitLog, parseGitShow, parseGitStatus, parseNumstat, parseNumstatFiles, parsePrList, parsePrView, prLine, prViewArgs } from './git'
 import type { PrInfo, CacheClock, GitCommit, GitDetail, GitInfo, GraphCommitDetail, GraphView, UpdateInfo } from '../types'
-import { GRAPH_MAX, GRAPH_PAGE, DAY_GROUPS, cellRuns, clipCells, clipPatch, dayGroup, gitAttachArgs, gitCommitArgs, gitGraphArgs, gitIncomingArgs, gitUnpushedArgs, parseCommitDetail, parseHashes, prListArgs, graphStyle, graphWidth, layoutGraph, mix, throughCells, parseGraphLog, refLabels, shortAgo } from './graph'
-import type { GraphScope } from './graph'
+import { GRAPH_MAX, GRAPH_PAGE, DAY_GROUPS, cellRuns, clipCells, clipPatch, dayGroup, gitAttachArgs, gitCommitArgs, gitGraphArgs, gitIncomingArgs, gitUnpushedArgs, parseCommitDetail, parseHashes, prListArgs, graphStyle, graphWidth, layoutGraph, mix, throughCells, parseGraphLog, refLabels, GRAPH_STYLES } from './graph'
+import type { GraphScope, GraphStyle } from './graph'
 import { CACHE_WARN_MS, cacheChip, compactedClock, cacheTtlOption, cacheView, cacheWarning, hitRate, hitText, leftText, learnTtl, priceOverride, tokensText, transcriptCache, transcriptPathFor, ttlLabel, usd } from './cache'
 import { limitPace } from './pace'
 import { LOOP_NOTE, LoopMemory, loopKey, loopMode } from './loop'
@@ -2705,6 +2705,7 @@ export const register: Register = (on, options) => {
       // Labels sit on a tint of their own colour, like GitKraken's branch pills; the current branch's is stronger.
       const PILL: Record<string, string> = { current: mix(C.green, C.bar, 0.72), branch: mix(C.green, C.bar, 0.85), remote: mix(C.blue, C.bar, 0.85), tag: mix(C.amber, C.bar, 0.85), head: mix(C.teal, C.bar, 0.72) }
       const HEAD_BG = mix(C.teal, C.bar, 0.9)
+      const STYLE_NAME: Record<GraphStyle, string> = { spaced: '寬鬆', line: '線段', dot: '圓點' }
       const narrow = width < 72
       const lanesCap = narrow ? 5 : 8
       const work = Boolean(p.git && (p.git.changed || p.git.untracked || p.git.conflicts))
@@ -2722,8 +2723,9 @@ export const register: Register = (on, options) => {
           oldest = Math.max(oldest, rank)
         }
       }
-      if (dividers.filter(Boolean).length < 2) dividers.fill(null)
-      const showHash = width >= 64, showAge = !narrow
+      // The spaced style reads like VS Code Git Graph: its age column does the dividers' job.
+      if (style === 'spaced' || dividers.filter(Boolean).length < 2) dividers.fill(null)
+      const showHash = width >= 76, showAge = width >= 60
       const graphCells = (key: string, cells: ReturnType<typeof clipCells>) => (
         <Box key={key} width={cols} flexShrink={0}>
           <Text>{cellRuns(cells, cols).map((run, i) => <Text key={key + '-' + i} color={run.color < 0 ? C.faint : (run.node ? LANE : SOFT)[run.color % LANE.length]}>{run.text}</Text>)}</Text>
@@ -2791,7 +2793,7 @@ export const register: Register = (on, options) => {
         <Box justifyContent="space-between" gap={1}>
           <Text color={view && view !== 'loading' && view.error ? C.red : C.dim} wrap="truncate-end">{header}</Text>
           <Box flexShrink={0} gap={1}>
-            {ready && <Button key={prefix + 'graph-style'} plain dimColor label={style === 'line' ? '● 圓點' : '┃ 線段'} onPress={() => void update($, graphStyleOverride, () => (style === 'line' ? 'dot' : 'line'))} />}
+            {ready && <Button key={prefix + 'graph-style'} plain dimColor label={`樣式：${STYLE_NAME[style]}`} onPress={() => void update($, graphStyleOverride, () => GRAPH_STYLES[(GRAPH_STYLES.indexOf(style) + 1) % GRAPH_STYLES.length]!)} />}
             {ready && <Button key={prefix + 'graph-scope'} plain dimColor label={ready.scope === 'all' ? '⇄ 只看本地' : '⇄ 含遠端'} onPress={() => void loadGraph($, p, { scope: ready.scope === 'all' ? 'local' : 'all' })} />}
             <Button key={prefix + 'graph-reload'} plain dimColor label="↻ 重讀" onPress={() => void loadGraph($, p)} />
           </Box>
@@ -2802,8 +2804,10 @@ export const register: Register = (on, options) => {
           </Text>
         ) : null}
         {rows.flatMap((row, n) => {
-          const key = prefix + 'g-' + (row.commit?.hash ?? 'work')
+          const key = prefix + 'g-' + (row.link ? 'link-' + n : row.commit?.hash ?? 'work')
           const cells = clipCells(row, lanesCap)
+          // The spaced style's lines between two commits, where branches bend in and out.
+          if (row.link) return [<Box key={key} height={1}>{graphCells(key + '-cells', cells)}</Box>]
           // A divider where the commits move to an earlier stretch of time, its lanes running through.
           const prev = rows[n - 1]
           const group = dividers[n]
@@ -2821,7 +2825,6 @@ export const register: Register = (on, options) => {
             return [<Box key={key} gap={1}>
               {graphCells(key + '-cells', cells)}
               <Box width={1} flexShrink={0}><Text> </Text></Box>
-              {showHash && <Box width={7} flexShrink={0}><Text color={C.faint}>{'·······'}</Text></Box>}
               <Box flexGrow={1} flexShrink={1}><Text color={p.git?.conflicts ? C.red : C.amber} wrap="truncate-end">{`未提交的變更　${count} 個檔案`}<Text color={C.dim}>{lines}</Text></Text></Box>
             </Box>]
           }
@@ -2842,24 +2845,23 @@ export const register: Register = (on, options) => {
             <Box width={1} flexShrink={0}><Text color={mark?.color ?? C.faint}>{mark?.ch ?? ' '}</Text></Box>
             <Box flexGrow={1} flexShrink={1} height={1} overflow="hidden">
               <Box flexWrap="nowrap">
-                {showHash && <Button key={key + '-hash'} plain dimColor={!isHead} label={c.hash.slice(0, 7)} onPress={() => void toggleCommit($, p, c.hash)} />}
-                {showHash && <Text key={key + '-hs'}>{' '}</Text>}
-                {labels.length > 0 && <Text key={key + '-refs'} wrap="truncate-end">
+                {labels.length > 0 && <Box key={key + '-refs'} flexShrink={0}><Text wrap="truncate-end">
                   {labels.map((l, j) => [
                     <Text key={key + '-r' + j} color={REF[l.kind]} backgroundColor={PILL[l.kind]} bold={l.kind === 'current' || l.kind === 'head'}>{' ' + (l.kind === 'tag' ? '◇ ' : '') + l.text}{l.synced ? <Text color={C.blue} bold={false}>{' ⇄ ' + l.synced}</Text> : ''}{' '}</Text>,
                     <Text key={key + '-rs' + j}>{' '}</Text>,
                   ])}
                   {prChips}
-                </Text>}
+                </Text></Box>}
                 <Button key={key + '-open'} plain dimColor={false} label={c.subject || '（沒有標題）'} onPress={() => void toggleCommit($, p, c.hash)} />
               </Box>
             </Box>
-            {showAge && <Box width={5} flexShrink={0} justifyContent="flex-end"><Text color={C.faint}>{shortAgo(c.at, renderedAt)}</Text></Box>}
+            {showAge && <Box width={9} flexShrink={0}><Text color={C.dim}>{agoText(c.at, renderedAt)}</Text></Box>}
+            {showHash && <Box width={7} flexShrink={0}><Button key={key + '-hash'} plain dimColor label={c.hash.slice(0, 7)} onPress={() => void toggleCommit($, p, c.hash)} /></Box>}
           </Box>, open ? commitView(p, row, c, key, cells.length) : null].filter(Boolean)
         })}
         {ready && ready.commits.length > 0 && <Box justifyContent="space-between" gap={1}>
           <Text color={C.faint} wrap="truncate-end">
-            {style === 'line' ? [<Text key={prefix + 'gl1'} color={C.text}>╽</Text>, ' 提交　', <Text key={prefix + 'gl2'} color={C.text}>┇</Text>, ' 未提交　'] : [<Text key={prefix + 'gd1'} color={C.text}>◉</Text>, ' 目前　', <Text key={prefix + 'gd2'} color={C.text}>○</Text>, ' 未提交　']}
+            {style === 'spaced' ? [<Text key={prefix + 'gs1'} color={C.text}>●</Text>, ' 提交　', <Text key={prefix + 'gs2'} color={C.text}>○</Text>, ' 未提交　'] : style === 'line' ? [<Text key={prefix + 'gl1'} color={C.text}>╽</Text>, ' 提交　', <Text key={prefix + 'gl2'} color={C.text}>┇</Text>, ' 未提交　'] : [<Text key={prefix + 'gd1'} color={C.text}>◉</Text>, ' 目前　', <Text key={prefix + 'gd2'} color={C.text}>○</Text>, ' 未提交　']}
             <Text color={C.green} backgroundColor={PILL.branch}> 本地 </Text>{' '}<Text color={C.blue} backgroundColor={PILL.remote}> 遠端 </Text>{' '}<Text color={C.amber} backgroundColor={PILL.tag}> ◇ 標籤 </Text>{'　'}<Text color={C.amber}>↑</Text>{' 未推送　'}<Text color={C.blue}>↓</Text>{' 可拉取　點一列看細節　⇄ 與遠端同步'}
           </Text>
           {ready.more && ready.limit < GRAPH_MAX && <Box flexShrink={0}><Button key={prefix + 'graph-more'} plain dimColor label={`▾ 再 ${GRAPH_PAGE} 個`} onPress={() => void loadGraph($, p, { limit: ready.limit + GRAPH_PAGE })} /></Box>}
