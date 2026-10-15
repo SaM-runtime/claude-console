@@ -19,7 +19,7 @@ function fixture(on: any) {
     agentsDelay: 0,
     files: {} as Record<string, string>,
     /** `git status --porcelain=v2 --branch` and `gh pr view --json` output; empty: not a repository / no PR. */
-    git: '', gh: '', gitLog: '', gitDiff: '', gitFiles: '', gitShow: '', gitCalls: [] as any[],
+    git: '', gh: '', gitLog: '', gitDiff: '', gitFiles: '', gitShow: '', gitGraph: '', gitCalls: [] as any[],
   }
   on('fs.list', () => ({ value: [{ name: 'Project Alpha-hash', kind: 'dir' }] }))
   on('fs.read', (_: any, e: any) => {
@@ -45,7 +45,7 @@ function fixture(on: any) {
     if (e.argv[0] === 'git') {
       data.gitCalls.push(e)
       if (!data.git) return { value: result(128, '', 'not a git repository') }
-      return { value: result(0, e.argv.includes('log') ? data.gitLog ?? '' : e.argv.includes('diff') ? data.gitDiff ?? '' : e.argv.includes('show') ? data.gitShow ?? '' : e.argv.includes('--porcelain=v1') ? data.gitFiles ?? '' : data.git) }
+      return { value: result(0, e.argv.includes('--topo-order') ? data.gitGraph : e.argv.includes('log') ? data.gitLog ?? '' : e.argv.includes('diff') ? data.gitDiff ?? '' : e.argv.includes('show') ? data.gitShow ?? '' : e.argv.includes('--porcelain=v1') ? data.gitFiles ?? '' : data.git) }
     }
     if (e.argv[0] === 'gh') { data.gitCalls.push(e); return { value: data.gh ? result(0, data.gh) : result(1, '', 'no pull requests found') } }
     data.processCalls.push(e)
@@ -397,12 +397,12 @@ test('the action menu shows the branch, uncommitted work and the PR checks, and 
   await wide.unmount()
   const ui = await $.ui.mount(PANE('terminal'))
   await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)
-  expect(await ui.find({ type: 'Text', text: 'feature/parser → origin/feature/parser　領先 2　2 個檔案未提交（+12 −3）　1 個未追蹤　stash 1' })).toBeDefined()
+  for (const part of ['feature/parser → origin/feature/parser', '領先 2', '2 個檔案未提交（+12 −3）', '1 個未追蹤', 'stash 1']) expect(await ui.find({ type: 'Text', text: part })).toBeDefined()
   // The latest commit leads the 提交 field, as git log would show it.
   expect(await ui.find({ type: 'Text', text: /^abc1234 Parse nested tables（\d+ 小時前）$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^def5678 Add parser tests（1 天前）$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /#17 Parser rewrite（開啟）　CI ✕ 1 失敗：build \(windows\)　1 進行中　待審查/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /快捷鍵　v 執行驗證・c 繼續下一步・o 開啟 STATUS\.md・p 開啟 PR・f Git 檔案・a 自動接力・Esc 關閉/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /快捷鍵　v 執行驗證・c 繼續下一步・o 開啟 STATUS\.md・p 開啟 PR・f Git 檔案・b 分支圖・a 自動接力・Esc 關閉/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -435,6 +435,50 @@ test('the Git row opens a file view grouped like git status, with what HEAD touc
   // f closes it again from the menu.
   await ui.post({ key: 'f' }, { in: 'rows' } as any)
   expect(await ui.find({ type: 'Text', text: '未暫存 2' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the Git row opens a branch graph: lanes, labels, uncommitted work on HEAD, wider scope and more on demand', OPTIONS, async ($, on) => {
+  const { data } = fixture(on)
+  data.git = GIT_STATUS
+  const t = (h: number) => Math.floor(Date.parse('2030-01-05T12:00:00Z') / 1000) - h * 3600
+  const line = (hash: string, parents: string, refs: string, hours: number, subject: string) => [hash, parents, refs, t(hours), subject].join('\x1f')
+  data.gitGraph = [
+    line('0123456789abcdef', 'bbbbbbb1 ccccccc1', 'HEAD -> refs/heads/feature/parser, refs/remotes/origin/feature/parser', 2, 'Merge main into feature/parser'),
+    line('bbbbbbb1', 'ddddddd1', '', 5, 'Parse nested tables'),
+    line('ccccccc1', 'ddddddd1', 'refs/heads/main, tag: refs/tags/v1.0.0', 30, 'Fix typo'),
+    line('ddddddd1', '', '', 50, 'init'),
+  ].join('\n') + '\n'
+  data.gitLog = `abc1234\x1f${t(2)}\x1fParse nested tables\n`
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  const ui = await $.ui.mount({ ...PANE('terminal'), props: { ...PANE('terminal').props, bodyColumns: 100 } })
+  await ui.post({ menu: 'Project Alpha' }, { in: 'rows' } as any)
+  expect(data.gitCalls.some(call => call.argv.includes('--topo-order'))).toBe(false)
+  expect(await ui.find({ type: 'Text', text: /^abc1234 Parse nested tables（/ })).toBeDefined()
+  await ui.press({ key: 'm-info-git-graph' })
+  const argv = data.gitCalls.find(call => call.argv.includes('--topo-order')).argv
+  expect(argv).toEqual(['git', '--no-optional-locks', '-C', 'D:/Project Alpha', 'log', '--topo-order', '--decorate=full', '--no-color', '-31', '--format=%H%x1f%P%x1f%D%x1f%ct%x1f%s', 'HEAD', '--branches', '--remotes=origin/feature/parser', '--'])
+  expect(await ui.find({ type: 'Text', text: /^分支圖・本地分支・4 個提交・/ })).toBeDefined()
+  // Uncommitted work sits on HEAD's line, above it.
+  expect(await ui.find({ type: 'Text', text: '未提交的變更　3 個檔案' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '○' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '◉─╮' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '●─╯' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'feature/parser' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: ' ⇄ origin' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'v1.0.0' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '2 時' })).toBeDefined()
+  expect(await ui.find({ key: 'm-info-graph-more' })).toBeUndefined()
+  expect(JSON.stringify(await ui.drawn()).includes('undefined')).toBe(false)
+  // The graph already lists the commits, so the 提交 field steps aside while it is open.
+  expect(await ui.find({ type: 'Text', text: /^abc1234 Parse nested tables（/ })).toBeUndefined()
+  await ui.press({ key: 'm-info-graph-scope' })
+  const wide = data.gitCalls.filter(call => call.argv.includes('--topo-order')).pop().argv
+  expect(wide.slice(-5)).toEqual(['HEAD', '--branches', '--remotes', '--tags', '--'])
+  expect(await ui.find({ type: 'Text', text: /^分支圖・全部分支與標籤/ })).toBeDefined()
+  // b closes it again from the menu.
+  await ui.post({ key: 'b' }, { in: 'rows' } as any)
+  expect(await ui.find({ type: 'Text', text: /^分支圖・/ })).toBeUndefined()
   await ui.unmount()
 })
 

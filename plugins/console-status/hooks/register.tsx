@@ -20,8 +20,10 @@ import { stateFormatIssues, stateFormatWarning } from './jobs'
 import { pipeline, projectForCwd, projectModeSection, progressContext, progressSignature } from './pipeline'
 import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
-import { FETCH_STALE_MS, agoText, commitLine, fileGroups, fileKind, gitBadge, gitFilesArgs, gitLine, gitLogArgs, gitNumstatArgs, gitProbeMode, gitShowArgs, gitSignature, gitStatusArgs, linesText, parseGitFiles, parseGitLog, parseGitShow, parseGitStatus, parseNumstat, parseNumstatFiles, parsePrView, prLine, prViewArgs } from './git'
-import type { PrInfo, CacheClock, GitCommit, GitDetail, GitInfo, UpdateInfo } from '../types'
+import { FETCH_STALE_MS, agoText, commitLine, fileGroups, fileKind, gitBadge, gitFilesArgs, gitParts, gitLogArgs, gitNumstatArgs, gitProbeMode, gitShowArgs, gitSignature, gitStatusArgs, linesText, parseGitFiles, parseGitLog, parseGitShow, parseGitStatus, parseNumstat, parseNumstatFiles, parsePrView, prLine, prViewArgs } from './git'
+import type { PrInfo, CacheClock, GitCommit, GitDetail, GitInfo, GraphView, UpdateInfo } from '../types'
+import { GRAPH_MAX, GRAPH_PAGE, cellRuns, clipCells, gitGraphArgs, graphWidth, layoutGraph, parseGraphLog, refLabels, shortAgo } from './graph'
+import type { GraphScope } from './graph'
 import { CACHE_WARN_MS, cacheChip, compactedClock, cacheTtlOption, cacheView, cacheWarning, hitRate, hitText, leftText, learnTtl, priceOverride, tokensText, transcriptCache, transcriptPathFor, ttlLabel, usd } from './cache'
 import { limitPace } from './pace'
 import { LOOP_NOTE, LoopMemory, loopKey, loopMode } from './loop'
@@ -74,6 +76,9 @@ const menuFor = atom({ plugin: 'console-status', key: 'menuFor' } as const, null
 /** The project (statusPath) whose Git file view is open, and the views read so far. */
 const gitOpen = atom({ plugin: 'console-status', key: 'gitOpen' } as const, null)
 const gitViews = atom({ plugin: 'console-status', key: 'gitViews' } as const, {})
+/** The project (statusPath) whose branch graph is open, and the graphs read so far. */
+const graphOpen = atom({ plugin: 'console-status', key: 'graphOpen' } as const, null)
+const graphViews = atom({ plugin: 'console-status', key: 'graphViews' } as const, {})
 const decisionPicks = atom({ plugin: 'console-status', key: 'decisionPicks' } as const, {})
 /** Which dispatch setting has its choices spread out under the pane header, if any. */
 const dispatchPicker = atom({ plugin: 'console-status', key: 'dispatchPicker' } as const, null)
@@ -1507,13 +1512,44 @@ async function toggleGitDetail($: any, p: Project) {
   if (open !== p.statusPath) await loadGitDetail($, p)
 }
 
-/** After a refresh, an open file view whose project's Git state moved is read again. */
+/** After a refresh, an open file view or branch graph whose project's Git state moved is read again. */
 async function followGitDetail($: any) {
+  const projects = (await read($, snapshot))?.projects ?? []
   const open = await read($, gitOpen)
-  if (!open) return
-  const p = (await read($, snapshot))?.projects.find(item => item.statusPath === open)
-  const view = (await read($, gitViews))[open]
+  const p = open ? projects.find(item => item.statusPath === open) : undefined
+  const view = open ? (await read($, gitViews))[open] : undefined
   if (p && view && view !== 'loading' && view.sig !== gitSignature(p.git)) await loadGitDetail($, p)
+  const graph = await read($, graphOpen)
+  const g = graph ? projects.find(item => item.statusPath === graph) : undefined
+  const drawn = graph ? (await read($, graphViews))[graph] : undefined
+  if (g && drawn && drawn !== 'loading' && drawn.sig !== gitSignature(g.git)) await loadGraph($, g)
+}
+
+/**
+ * Reads a project's branch graph: `git log` over HEAD and the local branches (`all`: every remote
+ * branch and tag too). A re-read keeps the scope and length the person chose.
+ */
+async function loadGraph($: any, p: Project, change: { scope?: GraphScope; limit?: number } = {}) {
+  const root = projectRoot(p.statusPath)
+  const prior = (await read($, graphViews))[p.statusPath]
+  const known = prior && prior !== 'loading' ? prior : null
+  const scope = change.scope ?? known?.scope ?? 'local'
+  const limit = Math.min(GRAPH_MAX, change.limit ?? known?.limit ?? GRAPH_PAGE)
+  await update($, graphViews, views => ({ ...views, [p.statusPath]: known ?? ('loading' as const) }))
+  const res = await $.process.run(gitGraphArgs(root, scope, limit, p.git?.upstream), { timeoutMs: 15_000 }).catch(() => null)
+  const now = await $.clock.now()
+  const commits = res?.exitCode === 0 ? parseGraphLog(String(res.stdout ?? '')) : []
+  const view: GraphView = res?.exitCode === 0
+    ? { at: now, sig: gitSignature(p.git), scope, limit, commits: commits.slice(0, limit), more: commits.length > limit }
+    : { at: now, sig: gitSignature(p.git), scope, limit, commits: [], more: false, error: String(res?.stderr ?? '').trim().split(/\r?\n/)[0] || '無法執行 git log' }
+  await update($, graphViews, views => ({ ...views, [p.statusPath]: view }))
+}
+
+/** Opens or closes a project's branch graph; opening always reads it fresh. */
+async function toggleGraph($: any, p: Project) {
+  const open = await read($, graphOpen)
+  await update($, graphOpen, () => (open === p.statusPath ? null : p.statusPath))
+  if (open !== p.statusPath) await loadGraph($, p)
 }
 
 /** Opens a project's pull request in the browser: `gh pr view --web`, else the OS URL handler. */
@@ -2211,6 +2247,7 @@ export const register: Register = (on, options) => {
         }
         if (k === 'p' && menuProject.pr) { void openPullRequest($, menuProject); return {} }
         if (k === 'f' && menuProject.git) { void toggleGitDetail($, menuProject); return {} }
+        if (k === 'b' && menuProject.git) { void toggleGraph($, menuProject); return {} }
       }
       if (k === 'escape') {
         if (await read($, menuFor)) await update($, menuFor, () => null)
@@ -2241,6 +2278,8 @@ export const register: Register = (on, options) => {
     const menu = await read($, menuFor)
     const openGit = demo ? null : await read($, gitOpen)
     const gitViewMap = demo ? {} : await read($, gitViews)
+    const openGraph = demo ? null : await read($, graphOpen)
+    const graphViewMap = demo ? {} : await read($, graphViews)
     const picks = await read($, decisionPicks)
     const refreshing = await read($, isRefreshing)
     const pending = await read($, pendingActions)
@@ -2601,6 +2640,78 @@ export const register: Register = (on, options) => {
         ].filter(Boolean)}
       </Box>
     }
+    /**
+     * The branch graph under a project's Git row: one row per commit with its lanes, short hash,
+     * branch and tag labels, subject and age, columns aligned down the whole view. Uncommitted
+     * changes sit on top of HEAD's line. Lanes past the cap fold into `…`; narrow panes drop the age,
+     * then the hash, before the subject.
+     */
+    const graphView = (p: Project, prefix: string) => {
+      const view = graphViewMap[p.statusPath]
+      const ready = view && view !== 'loading' && !view.error ? view : null
+      const LANE = [C.teal, C.blue, C.purple, C.amber, C.green, C.orange]
+      const REF: Record<string, string> = { current: C.green, branch: C.green, remote: C.blue, tag: C.amber, head: C.teal }
+      const narrow = width < 72
+      const lanesCap = narrow ? 5 : 8
+      const work = Boolean(p.git && (p.git.changed || p.git.untracked || p.git.conflicts))
+      // HEAD as the log itself saw it: the card's Git state can be a refresh behind a fresh read.
+      const head = ready?.commits.find(c => c.refs.some(r => r.current || r.kind === 'head'))?.hash ?? p.git?.head
+      const rows = ready ? layoutGraph(ready.commits, { colors: LANE.length, head, work }) : []
+      const cols = graphWidth(rows, lanesCap)
+      const showHash = width >= 64, showAge = !narrow
+      const graphCells = (key: string, cells: ReturnType<typeof clipCells>) => (
+        <Box key={key} width={cols} flexShrink={0}>
+          <Text>{cellRuns(cells, cols).map((run, i) => <Text key={key + '-' + i} color={run.color < 0 ? C.faint : LANE[run.color % LANE.length]}>{run.text}</Text>)}</Text>
+        </Box>
+      )
+      const scopeText = ready?.scope === 'all' ? '全部分支與標籤' : '本地分支'
+      const header = !view || view === 'loading' ? '讀取中…'
+        : view.error ? `讀取失敗：${view.error}`
+        : !view.commits.length ? '還沒有任何提交'
+        : `分支圖・${scopeText}・${view.commits.length}${view.more ? '+' : ''} 個提交・${agoText(view.at, renderedAt)}讀取`
+      return <Box key={prefix + 'graph-view'} flexDirection="column" borderStyle="round" borderColor={C.faint} paddingX={1} marginLeft={narrow ? 0 : 8}>
+        <Box justifyContent="space-between" gap={1}>
+          <Text color={view && view !== 'loading' && view.error ? C.red : C.dim} wrap="truncate-end">{header}</Text>
+          <Box flexShrink={0} gap={1}>
+            {ready && <Button key={prefix + 'graph-scope'} plain dimColor label={ready.scope === 'all' ? '⇄ 只看本地' : '⇄ 含遠端'} onPress={() => void loadGraph($, p, { scope: ready.scope === 'all' ? 'local' : 'all' })} />}
+            <Button key={prefix + 'graph-reload'} plain dimColor label="↻ 重讀" onPress={() => void loadGraph($, p)} />
+          </Box>
+        </Box>
+        {rows.map(row => {
+          const key = prefix + 'g-' + (row.commit?.hash ?? 'work')
+          const cells = clipCells(row, lanesCap)
+          if (!row.commit) {
+            const lines = p.git?.lines && (p.git.lines.add || p.git.lines.del) ? `　+${p.git.lines.add} −${p.git.lines.del}` : ''
+            const count = (p.git?.changed ?? 0) + (p.git?.untracked ?? 0) + (p.git?.conflicts ?? 0)
+            return <Box key={key} gap={1}>
+              {graphCells(key + '-cells', cells)}
+              {showHash && <Box width={7} flexShrink={0}><Text color={C.faint}>{'·······'}</Text></Box>}
+              <Box flexGrow={1} flexShrink={1}><Text color={p.git?.conflicts ? C.red : C.amber} wrap="truncate-end">{`未提交的變更　${count} 個檔案`}<Text color={C.dim}>{lines}</Text></Text></Box>
+            </Box>
+          }
+          const c = row.commit
+          const isHead = c.hash === head
+          const labels = refLabels(c.refs)
+          return <Box key={key} gap={1}>
+            {graphCells(key + '-cells', cells)}
+            {showHash && <Box width={7} flexShrink={0}><Text color={isHead ? C.text : C.dim}>{c.hash.slice(0, 7)}</Text></Box>}
+            <Box flexGrow={1} flexShrink={1}>
+              <Text color={isHead ? C.strong : C.text} wrap="truncate-end">
+                {labels.map((l, j) => <Text key={key + '-r' + j} color={REF[l.kind]} bold={l.kind === 'current' || l.kind === 'head'}>{l.text}{l.synced ? <Text color={C.blue} bold={false}>{' ⇄ ' + l.synced}</Text> : ''}{'  '}</Text>)}
+                {c.subject}
+              </Text>
+            </Box>
+            {showAge && <Box width={5} flexShrink={0} justifyContent="flex-end"><Text color={C.faint}>{shortAgo(c.at, renderedAt)}</Text></Box>}
+          </Box>
+        })}
+        {ready && ready.commits.length > 0 && <Box justifyContent="space-between" gap={1}>
+          <Text color={C.faint} wrap="truncate-end">
+            <Text color={C.text}>◉</Text>{' 目前　'}<Text color={C.text}>○</Text>{' 未提交　'}<Text color={C.green}>本地</Text>{'　'}<Text color={C.blue}>遠端</Text>{'　'}<Text color={C.amber}>標籤</Text>{'　⇄ 與遠端同一個提交'}
+          </Text>
+          {ready.more && ready.limit < GRAPH_MAX && <Box flexShrink={0}><Button key={prefix + 'graph-more'} plain dimColor label={`▾ 再 ${GRAPH_PAGE} 個`} onPress={() => void loadGraph($, p, { limit: ready.limit + GRAPH_PAGE })} /></Box>}
+        </Box>}
+      </Box>
+    }
     /** What a person needs to decide the next move: what is running (and its last output), then the CARD. */
     const projectInfo = (p: Project, prefix: string, opts: { state?: boolean } = {}) => {
       // A value made of `；` clauses lists one clause per line instead of one dense paragraph.
@@ -2656,13 +2767,17 @@ export const register: Register = (on, options) => {
         {p.git && (
           <Box key={prefix + 'git'} gap={2}>
             <Box width={6} flexShrink={0}><Text color={C.dim}>Git</Text></Box>
-            <Box flexGrow={1} flexShrink={1}><Text color={p.git.conflicts ? C.red : p.git.changed || p.git.untracked ? C.amber : p.git.ahead || p.git.behind ? C.blue : C.dim} wrap="wrap">{gitLine(p.git)}</Text></Box>
-            {!demo && <Box flexShrink={0}><Button key={prefix + 'git-files'} plain dimColor label={openGit === p.statusPath ? '▾ 收起' : '▸ 檔案'} onPress={() => void toggleGitDetail($, p)} /></Box>}
+            <Box flexGrow={1} flexShrink={1} flexWrap="wrap" columnGap={2}>{gitParts(p.git).map((part, i) => <Text key={prefix + 'git-part-' + i} color={p.git!.conflicts ? C.red : p.git!.changed || p.git!.untracked ? C.amber : p.git!.ahead || p.git!.behind ? C.blue : C.dim} wrap="truncate-end">{part}</Text>)}</Box>
+            {!demo && <Box flexShrink={0} gap={1}>
+              <Button key={prefix + 'git-files'} plain dimColor label={openGit === p.statusPath ? '▾ 檔案' : '▸ 檔案'} onPress={() => void toggleGitDetail($, p)} />
+              <Button key={prefix + 'git-graph'} plain dimColor label={openGraph === p.statusPath ? '▾ 分支圖' : '▸ 分支圖'} onPress={() => void toggleGraph($, p)} />
+            </Box>}
           </Box>
         )}
         {p.git && openGit === p.statusPath && gitView(p, prefix)}
+        {p.git && openGraph === p.statusPath && graphView(p, prefix)}
         {p.git?.upstream && p.git.fetchedAt !== undefined && renderedAt - p.git.fetchedAt > FETCH_STALE_MS && field('遠端', `${agoText(p.git.fetchedAt, renderedAt)}抓過遠端（git fetch），領先／落後可能不是最新`, C.amber)}
-        {p.git?.commits?.length ? (
+        {p.git?.commits?.length && openGraph !== p.statusPath ? (
           <Box key={prefix + 'commits'} gap={2}>
             <Box width={6} flexShrink={0}><Text color={C.dim}>提交</Text></Box>
             <Box flexGrow={1} flexShrink={1} flexDirection="column">
@@ -2863,7 +2978,7 @@ export const register: Register = (on, options) => {
                 const keys = actionKinds(menuProject, st).filter(kind => HOTKEY_OF[kind]).map(kind => `${HOTKEY_OF[kind]} ${actionLabel(kind, menuProject).replace(/^\S+\s*/, '')}`)
                 if (hasAsk(menuProject) && parseAsk(menuProject.ask).some(d => d.options.length)) keys.unshift('1–9 選選項')
                 if (menuProject.pr) keys.push('p 開啟 PR')
-                if (menuProject.git) keys.push('f Git 檔案')
+                if (menuProject.git) keys.push('f Git 檔案', 'b 分支圖')
                 if (cycles[menuProject.statusPath] ? !foreign(cycles[menuProject.statusPath]!) : !isManual(menuProject) && menuProject.hasCard && st !== 'ACTION') keys.push(cycles[menuProject.statusPath] ? 'a 停止接力' : 'a 自動接力')
                 return <Text key="m-keys" color={C.faint} wrap="wrap">{`快捷鍵　${[...keys, 'Esc 關閉'].join('・')}`}</Text>
               })()}

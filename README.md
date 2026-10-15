@@ -21,7 +21,7 @@ claude plugin install console-status@claude-console
 - **決策用按的。** 卡片裡每個選項都能直接點；動作選單開著時，數字鍵依序作答（按 `2` 再按 `1` 就是 `1B 2-1`），Backspace 退回上一個。`✎ 填入決策` 或 `✎ 做決定` 把答案放進輸入框，按 Enter 送出。
 - **一鍵動作。** 驗證、同步 STATUS、繼續下一步、審核關卡、開啟 STATUS.md：右鍵或 `m` 開動作選單，每個動作都有單鍵快捷。執行者做完卻沒寫回 CARD 時，主控台會自動派一次同步（`autoSync`），同步進度一步一步顯示。執行者停下來問你時，直接在主控台回覆（`↩ 回覆執行者`），不用切過去；下一步會以灰字建議放在輸入框，按 Tab 再 Enter 就好（`suggestNext`）。按 `⟳ 自動接力`（`a`）則讓面板替你一路按下去：繼續、同步、把關卡交給主控台，每次更新最多一跳，停在需要你拍板的決策、執行者提問、release 關卡、失敗、跳數上限或額度門檻。
 - **派工可選執行者。** 預設用 Claude Code 背景 agent，也可整體或單一專案改用 Codex；Codex 不能用或額度不足時可退回 Claude。選取專案後送出的提示會附上「執行者摘要」（最後在做什麼、最後三個工具呼叫、最後一句話），專案卡的「執行者」區塊也顯示同樣內容。見[派工設定](#dispatch-settings派工設定)。
-- **Git、PR 與 CI 不用切視窗。** 分支與領先／落後、未提交行數、stash、最近幾筆提交、fetch 太久沒更新的提醒；`▸ 檔案` 展開依 `git status` 分組的檔案清單；PR 審查狀態與失敗的 CI 檢查，CI 失敗時橫帶亮紅。見 [Git、PR 與 CI](#gitpr-與-ci)。
+- **Git、PR 與 CI 不用切視窗。** 分支與領先／落後、未提交行數、stash、最近幾筆提交、fetch 太久沒更新的提醒；`▸ 檔案` 展開依 `git status` 分組的檔案清單，`▸ 分支圖` 展開彩色的分支／合併圖；PR 審查狀態與失敗的 CI 檢查，CI 失敗時橫帶亮紅。見 [Git、PR 與 CI](#gitpr-與-ci)。
 - **用量與快取。** Claude 的 5 小時、本週、各模型額度與 Codex 額度在同一張「用量」表，並估算照目前速度何時用完；提示快取的倒數、冷掉後重寫的費用與上次命中率。見[用量配速](#用量配速)與[快取與費用](#快取與費用)。
 - **護欄。** 不可逆的指令（`rm -r`、force push、`git reset --hard`、`DROP TABLE` 等）先問你；同一個工具呼叫以同樣錯誤失敗兩次，就不讓模型試第三次。見[指令護欄](#指令護欄)與[重複失敗護欄](#重複失敗護欄)。
 - **只在需要的 session 啟動。** 預設只有輸入過 `/console` 的 session 跑主控台（resume 後自動再啟動），其他 session 只有護欄；在已登錄專案的資料夾裡會切到專案模式。見[輕量 session](#輕量-session)。
@@ -275,6 +275,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 - 專案表格多一欄 `Git`（寬度 80 欄以上），顯示最需要處理的一項：`✕衝突n` 合併衝突、`CI✕n` 開啟中 PR 的檢查失敗、`●n` 未提交或未追蹤檔案、`↑n` 未推送、`↓n` 落後上游、`CI…` 檢查進行中、`✓` 乾淨。
 - 動作選單與展開的專案卡顯示分支與上游、領先／落後、未提交與未追蹤數量，以及 PR 的審查狀態與失敗檢查名稱，並提供 `↗ 開啟`（`gh pr view --web`，失敗時改用系統預設瀏覽器）。
 - **Git 檔案清單**：Git 那一行右邊的 `▸ 檔案`（動作選單裡也可按 `f`）會在下方展開，照 `git status` 的順序分組：衝突、已暫存（下次 commit 會帶走）、未暫存、未追蹤，每個檔案標示修改／新增／刪除／改名與行數；接著是最新提交改了哪些檔案，最後是被 `.gitignore` 排除的檔案與資料夾。平常不讀，點開才執行 `git status -z --ignored`、`git diff --numstat HEAD` 與 `git show --numstat HEAD`；開著時 Git 狀態一變就自動重讀，也可按 `↻ 重讀`。每組最多列 12 個，路徑太長時保留開頭與檔名。逐行看 diff、挑行暫存、解衝突仍建議用編輯器或 lazygit。
+- **分支圖**：Git 那一行右邊的 `▸ 分支圖`（動作選單裡也可按 `b`）會在下方畫出專案的提交歷史，一個提交一列：分支線、短 hash、分支與標籤、提交訊息，寬面板右邊再加上多久以前（`3 時`、`2 天`）。分支分出去或合併回來都直接彎在那個提交的同一列（`●─╮`、`●─╯`、`├─●`），所以圖不會比提交清單高；每條分支線各有顏色，交叉處畫 `┼`。`◉` 是目前的 HEAD，有未提交的變更時，HEAD 那條線最上面多一列 `○ 未提交的變更`。標籤顏色：目前分支粗體綠、其他本地分支綠、遠端分支藍、標籤黃；本地分支和它的遠端在同一個提交時合成一個，寫成 `main ⇄ origin`。預設只讀本地分支、HEAD 與上游；`⇄ 含遠端` 會加上所有遠端分支與標籤，`▾ 再 30 個` 往前多讀（最多 150 個），`↻ 重讀` 重新讀取，開著時 Git 狀態一變就自動重讀。平常不讀，點開才執行 `git log --topo-order --decorate=full`（不含 `refs/stash`）。面板窄時先省略時間、再省略 hash；超過 8 條分支線（窄面板 5 條）的部分收成 `…`。分支圖開著時，卡片上的「提交」欄會先收起，避免重複。
 - 原本要自己打指令看的資訊：Git 那一行加上未提交變更的行數 `（+120 −34）`（`git diff --numstat HEAD`，只在有未提交變更時讀）與 `stash n`；`提交` 欄位列出最新一筆 commit（短 hash、標題、多久前）和之前幾筆，動作選單 3 筆、專案卡 5 筆（`git log -5`，HEAD 沒動就不重讀）；上次 `git fetch` 超過一天時多一行 `Fetch`，提醒領先／落後可能不是最新（依 `.git/FETCH_HEAD` 的時間）。
 - 開啟中的 PR 有檢查失敗時，橫帶以紅色顯示 `CI 失敗 n`。新的失敗會 toast 並寫入紅色動態；恢復通過與合併寫入綠色動態。
 - 選取專案後，下一則提示會附上它的 Git、最新提交與 PR 資訊，主控台不用再問就知道分支與失敗的檢查。
@@ -415,7 +416,7 @@ claude plugin install paste-preview@paste-preview
 
 0.11.0 起 Git 那一行的未提交行數，參考 arasovic 的 [claude-code-mods](https://github.com/arasovic/claude-code-mods) 裡的 change-ledger（MIT 授權），它在 session 改過的檔案旁顯示 `git diff --numstat`；stash 數量參考 [jarrodwatts](https://github.com/jarrodwatts) 的 [claude-hud](https://github.com/jarrodwatts/claude-hud) 的 git 檔案統計（MIT 授權）。同上，程式碼都是 console-status 自己寫的。感謝 jarrodwatts。
 
-0.13.0 起面板的區段標題（名稱、延伸到邊緣的細線、右側數字）參考 [jesseduffield](https://github.com/jesseduffield) 的 [lazygit](https://github.com/jesseduffield/lazygit) 的面板標題（MIT 授權），只借外觀，沒有用到它的程式碼。感謝 jesseduffield。
+0.13.0 起面板的區段標題（名稱、延伸到邊緣的細線、右側數字）參考 [jesseduffield](https://github.com/jesseduffield) 的 [lazygit](https://github.com/jesseduffield/lazygit) 的面板標題（MIT 授權），只借外觀，沒有用到它的程式碼。0.22.0 的分支圖（一個提交一列、圓角分支線在提交那一列轉彎、每條線各自上色）也是參考 lazygit 的提交圖畫法，排線程式是 console-status 自己寫的。感謝 jesseduffield。
 
 0.17.0 起輸入框的「Tab 接受下一步」參考 [hamzafer](https://github.com/hamzafer) 的 [claude-code-mods](https://github.com/hamzafer/claude-code-mods) 裡的 next-steps（MIT 授權），它在每輪結束後建議可能的下一則提示。console-status 改從 STATUS 卡推出建議、不呼叫模型，沒有包含它的程式碼。
 
@@ -438,6 +439,7 @@ claude plugin install paste-preview@paste-preview
 
 | 版本 | 重點 |
 | --- | --- |
+| 0.22 | Git 分支圖：`▸ 分支圖` 或 `b` 展開彩色的分支／合併圖，HEAD、未提交的變更、本地／遠端分支與標籤一眼看清 |
 | 0.21 | `⟳ 自動接力`：按一次讓面板一路繼續、同步、送審核關卡，停在需要你的地方（決策、執行者提問、release、失敗、跳數上限 `cycleMaxHops`、額度門檻 `cycleQuotaStop`） |
 | 0.20 | 每個主控台都能派工，改成以專案為單位上鎖；自動同步會等你回覆執行者，工作進行中鎖住做決定；0.20.2 把面板裡中英夾雜的用語改成直白中文（例如 broker → Codex 背景程式、CARD → 狀態卡、session → 對話） |
 | 0.19 | 審核獨立：Codex 審核開新 thread，審核者不先看到執行者的結論；STATUS 版本規則統一 |

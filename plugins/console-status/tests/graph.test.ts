@@ -1,0 +1,70 @@
+import { expect, test } from 'claude-code/testing'
+import { cellRuns, clipCells, gitGraphArgs, graphWidth, layoutGraph, parseGraphLog, parseRefs, refLabels, shortAgo } from '../hooks/graph'
+import type { GraphCommit } from '../types'
+
+const c = (hash: string, parents: string[] = [], subject = hash): GraphCommit => ({ hash, parents, refs: [], at: 0, subject })
+const draw = (rows: ReturnType<typeof layoutGraph>) => rows.map(r => r.cells.map(x => x.ch).join('').trimEnd())
+
+test('graph args read the local branches and the upstream, or everything, never the stash', () => {
+  expect(gitGraphArgs('D:/A', 'local', 30, 'origin/main').slice(4)).toEqual(['log', '--topo-order', '--decorate=full', '--no-color', '-31', '--format=%H%x1f%P%x1f%D%x1f%ct%x1f%s', 'HEAD', '--branches', '--remotes=origin/main', '--'])
+  expect(gitGraphArgs('D:/A', 'local', 30).slice(-3)).toEqual(['HEAD', '--branches', '--'])
+  expect(gitGraphArgs('D:/A', 'all', 60).slice(-5)).toEqual(['HEAD', '--branches', '--remotes', '--tags', '--'])
+})
+
+test('refs: the current branch first, a remote twin on the same commit folds into it, origin/HEAD is dropped', () => {
+  const refs = parseRefs('HEAD -> refs/heads/main, refs/remotes/origin/main, refs/remotes/origin/HEAD, refs/remotes/upstream/main, tag: refs/tags/v1.0, refs/heads/docs, refs/remotes/origin/feature/x')
+  expect(refs).toEqual([
+    { kind: 'branch', name: 'main', current: true }, { kind: 'remote', name: 'origin/main' }, { kind: 'remote', name: 'upstream/main' },
+    { kind: 'tag', name: 'v1.0' }, { kind: 'branch', name: 'docs' }, { kind: 'remote', name: 'origin/feature/x' },
+  ])
+  expect(refLabels(refs)).toEqual([
+    { text: 'main', kind: 'current', synced: 'origin・upstream' }, { text: 'docs', kind: 'branch' },
+    { text: 'origin/feature/x', kind: 'remote' }, { text: 'v1.0', kind: 'tag' },
+  ])
+  expect(refLabels(parseRefs('HEAD, refs/heads/main'))).toEqual([{ text: 'HEAD', kind: 'head' }, { text: 'main', kind: 'branch' }])
+})
+
+test('the log parses parents, refs and subjects with separators kept; junk lines are skipped', () => {
+  const text = ['a'.repeat(40) + '\x1f' + 'b'.repeat(40) + ' ' + 'c'.repeat(40) + '\x1fHEAD -> refs/heads/main\x1f1700000000\x1fMerge: a\x1fb', 'warning: something', ''].join('\r\n')
+  expect(parseGraphLog(text)).toEqual([{ hash: 'a'.repeat(40), parents: ['b'.repeat(40), 'c'.repeat(40)], refs: [{ kind: 'branch', name: 'main', current: true }], at: 1700000000000, subject: 'Merge: a\x1fb' }])
+})
+
+test('a merge bends out and the branch bends back in on the commits own rows', () => {
+  // M merges F into main; F and A both come from B.
+  const rows = layoutGraph([c('M', ['A', 'F']), c('F', ['B']), c('A', ['B']), c('B')], { head: 'M', work: true })
+  expect(draw(rows)).toEqual(['○', '◉─╮', '│ ●', '● │', '●─╯'])
+  expect(rows.map(r => r.col)).toEqual([0, 0, 1, 0, 0])
+  // The merged branch keeps its own colour on its bend and its line.
+  expect(rows[1]!.cells[2]!.color).toBe(rows[2]!.cells[2]!.color)
+  expect(rows[1]!.cells[0]!.color).not.toBe(rows[1]!.cells[2]!.color)
+})
+
+test('a bend that crosses a line shows the crossing and joins a lane already waiting for that parent', () => {
+  const rows = layoutGraph([c('T', ['M1']), c('X', ['D', 'M2']), c('D', ['M2']), c('M1', ['M2', 'H']), c('H', ['M2']), c('M2')])
+  expect(draw(rows)).toEqual(['●', '│ ●─╮', '│ ● │', '●─┼─┼─╮', '│ │ │ ●', '●─┴─┴─╯'])
+})
+
+test('a lane that ends on a row is not reused on it: the new branch line starts beyond it', () => {
+  // M merges H while the D line bends into M on the same row.
+  const rows = layoutGraph([c('T', ['M']), c('D', ['M']), c('M', ['B', 'H']), c('H', ['B']), c('B')])
+  expect(draw(rows)).toEqual(['●', '│ ●', '●─┴─╮', '│   ●', '●───╯'])
+})
+
+test('a second tip gets its own lane; a commit merging into a waiting lane draws ├ or ┤', () => {
+  const rows = layoutGraph([c('A', ['P']), c('B', ['Q', 'P']), c('Q', ['P']), c('P')])
+  expect(draw(rows)).toEqual(['●', '├─●', '│ ●', '●─╯'])
+})
+
+test('clipping folds extra lanes into …, keeps an off-screen commit visible, and runs merge colours', () => {
+  const wide = layoutGraph([c('a', ['z']), c('b', ['z']), c('c', ['z']), c('d', ['z']), c('z')])
+  expect(draw(wide)).toEqual(['●', '│ ●', '│ │ ●', '│ │ │ ●', '●─┴─┴─╯'])
+  expect(clipCells(wide[3]!, 2).map(x => x.ch).join('')).toBe('│ ●')
+  expect(clipCells(wide[4]!, 2).map(x => x.ch).join('')).toBe('●─…')
+  expect(graphWidth(wide, 3)).toBe(5)
+  expect(cellRuns([{ ch: '●', color: 0 }, { ch: '─', color: 1 }, { ch: '╮', color: 1 }], 5)).toEqual([{ text: '●', color: 0 }, { text: '─╮', color: 1 }, { text: '  ', color: -1 }])
+})
+
+test('ages stay short for the graph column', () => {
+  const now = Date.parse('2030-01-05T12:00:00Z')
+  expect([0, 5, 90, 60 * 30, 60 * 24 * 40, 60 * 24 * 800].map(m => shortAgo(now - m * 60_000, now))).toEqual(['剛剛', '5 分', '1 時', '1 天', '1 月', '2 年'])
+})

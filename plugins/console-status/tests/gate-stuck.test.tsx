@@ -117,7 +117,8 @@ test('a submit that resolves only after its wrapped turn has ended still unlocks
   await ui.unmount()
 })
 
-test('a review no turn ever answers unlocks the row after GATE_PENDING_MS, at the next refresh', { options: { ...OPTIONS.options, cacheHint: 'off', gitProbe: 'off' } }, async ($, on) => {
+// Ten simulated minutes of refreshes take about 3 s alone; a busy runner needs more than the 5 s default.
+test('a review no turn ever answers unlocks the row after GATE_PENDING_MS, at the next refresh', { timeoutMs: 15_000, options: { ...OPTIONS.options, cacheHint: 'off', gitProbe: 'off' } }, async ($, on) => {
   const { data, clock } = fixture(on)
   const ui = await open($)
   await ui.press({ key: 'detail-Project Alpha-gate' })
