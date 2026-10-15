@@ -461,9 +461,18 @@ test('the Git row opens a branch graph: lanes, labels, uncommitted work on HEAD,
   expect(await ui.find({ type: 'Text', text: /^分支圖・本地分支・4 個提交・/ })).toBeDefined()
   // Uncommitted work sits on HEAD's line, above it.
   expect(await ui.find({ type: 'Text', text: '未提交的變更　3 個檔案' })).toBeDefined()
+  // Line style by default: commits are the bright, heavy stretch of a line that has no gaps.
+  expect(await ui.find({ type: 'Text', text: '┇' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '┟' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '─╮' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '┖' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^╽ 提交　┇ 未提交/ })).toBeDefined()
+  // ● 圓點 switches this session to dots, ┃ 線段 back.
+  await ui.press({ key: 'm-info-graph-style' })
   expect(await ui.find({ type: 'Text', text: '○' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '◉─╮' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '●─╯' })).toBeDefined()
+  expect((await ui.find({ key: 'm-info-graph-style' }))?.text).toBe('┃ 線段')
   expect(await ui.find({ type: 'Text', text: 'feature/parser' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: ' ⇄ origin' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'v1.0.0' })).toBeDefined()

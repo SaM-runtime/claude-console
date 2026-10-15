@@ -170,6 +170,7 @@ declare module 'claude-code' {
       gitViews: Record<string, GitDetail | 'loading'>
       graphOpen: string | null
       graphViews: Record<string, GraphView | 'loading'>
+      graphStyleOverride: 'line' | 'dot' | null
       /** `statusPath\nask` → decision index → the option key picked in the pane; kept after filling, dropped when the ask changes. */
       decisionPicks: Record<string, DecisionPicks>
       dispatchPicker: 'executor' | 'model' | 'effort' | null

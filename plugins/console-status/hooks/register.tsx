@@ -22,7 +22,7 @@ import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
 import { FETCH_STALE_MS, agoText, commitLine, fileGroups, fileKind, gitBadge, gitFilesArgs, gitParts, gitLogArgs, gitNumstatArgs, gitProbeMode, gitShowArgs, gitSignature, gitStatusArgs, linesText, parseGitFiles, parseGitLog, parseGitShow, parseGitStatus, parseNumstat, parseNumstatFiles, parsePrView, prLine, prViewArgs } from './git'
 import type { PrInfo, CacheClock, GitCommit, GitDetail, GitInfo, GraphView, UpdateInfo } from '../types'
-import { GRAPH_MAX, GRAPH_PAGE, cellRuns, clipCells, gitGraphArgs, graphWidth, layoutGraph, parseGraphLog, refLabels, shortAgo } from './graph'
+import { GRAPH_MAX, GRAPH_PAGE, cellRuns, clipCells, gitGraphArgs, graphStyle, graphWidth, layoutGraph, mix, parseGraphLog, refLabels, shortAgo } from './graph'
 import type { GraphScope } from './graph'
 import { CACHE_WARN_MS, cacheChip, compactedClock, cacheTtlOption, cacheView, cacheWarning, hitRate, hitText, leftText, learnTtl, priceOverride, tokensText, transcriptCache, transcriptPathFor, ttlLabel, usd } from './cache'
 import { limitPace } from './pace'
@@ -79,6 +79,8 @@ const gitViews = atom({ plugin: 'console-status', key: 'gitViews' } as const, {}
 /** The project (statusPath) whose branch graph is open, and the graphs read so far. */
 const graphOpen = atom({ plugin: 'console-status', key: 'graphOpen' } as const, null)
 const graphViews = atom({ plugin: 'console-status', key: 'graphViews' } as const, {})
+/** This session's pick between the graph styles, over the `gitGraph` option; null follows the option. */
+const graphStyleOverride = atom({ plugin: 'console-status', key: 'graphStyleOverride' } as const, null)
 const decisionPicks = atom({ plugin: 'console-status', key: 'decisionPicks' } as const, {})
 /** Which dispatch setting has its choices spread out under the pane header, if any. */
 const dispatchPicker = atom({ plugin: 'console-status', key: 'dispatchPicker' } as const, null)
@@ -2280,6 +2282,7 @@ export const register: Register = (on, options) => {
     const gitViewMap = demo ? {} : await read($, gitViews)
     const openGraph = demo ? null : await read($, graphOpen)
     const graphViewMap = demo ? {} : await read($, graphViews)
+    const graphStylePick = await read($, graphStyleOverride)
     const picks = await read($, decisionPicks)
     const refreshing = await read($, isRefreshing)
     const pending = await read($, pendingActions)
@@ -2650,18 +2653,21 @@ export const register: Register = (on, options) => {
       const view = graphViewMap[p.statusPath]
       const ready = view && view !== 'loading' && !view.error ? view : null
       const LANE = [C.teal, C.blue, C.purple, C.amber, C.green, C.orange]
+      const style = graphStylePick ?? graphStyle((options as any).gitGraph)
+      // In the line style a commit is the bright stretch of its line; the line between commits is softer.
+      const SOFT = LANE.map(color => style === 'line' ? mix(color, C.bar, 0.45) : color)
       const REF: Record<string, string> = { current: C.green, branch: C.green, remote: C.blue, tag: C.amber, head: C.teal }
       const narrow = width < 72
       const lanesCap = narrow ? 5 : 8
       const work = Boolean(p.git && (p.git.changed || p.git.untracked || p.git.conflicts))
       // HEAD as the log itself saw it: the card's Git state can be a refresh behind a fresh read.
       const head = ready?.commits.find(c => c.refs.some(r => r.current || r.kind === 'head'))?.hash ?? p.git?.head
-      const rows = ready ? layoutGraph(ready.commits, { colors: LANE.length, head, work }) : []
+      const rows = ready ? layoutGraph(ready.commits, { colors: LANE.length, head, work, style }) : []
       const cols = graphWidth(rows, lanesCap)
       const showHash = width >= 64, showAge = !narrow
       const graphCells = (key: string, cells: ReturnType<typeof clipCells>) => (
         <Box key={key} width={cols} flexShrink={0}>
-          <Text>{cellRuns(cells, cols).map((run, i) => <Text key={key + '-' + i} color={run.color < 0 ? C.faint : LANE[run.color % LANE.length]}>{run.text}</Text>)}</Text>
+          <Text>{cellRuns(cells, cols).map((run, i) => <Text key={key + '-' + i} color={run.color < 0 ? C.faint : (run.node ? LANE : SOFT)[run.color % LANE.length]}>{run.text}</Text>)}</Text>
         </Box>
       )
       const scopeText = ready?.scope === 'all' ? '全部分支與標籤' : '本地分支'
@@ -2673,6 +2679,7 @@ export const register: Register = (on, options) => {
         <Box justifyContent="space-between" gap={1}>
           <Text color={view && view !== 'loading' && view.error ? C.red : C.dim} wrap="truncate-end">{header}</Text>
           <Box flexShrink={0} gap={1}>
+            {ready && <Button key={prefix + 'graph-style'} plain dimColor label={style === 'line' ? '● 圓點' : '┃ 線段'} onPress={() => void update($, graphStyleOverride, () => (style === 'line' ? 'dot' : 'line'))} />}
             {ready && <Button key={prefix + 'graph-scope'} plain dimColor label={ready.scope === 'all' ? '⇄ 只看本地' : '⇄ 含遠端'} onPress={() => void loadGraph($, p, { scope: ready.scope === 'all' ? 'local' : 'all' })} />}
             <Button key={prefix + 'graph-reload'} plain dimColor label="↻ 重讀" onPress={() => void loadGraph($, p)} />
           </Box>
@@ -2706,7 +2713,7 @@ export const register: Register = (on, options) => {
         })}
         {ready && ready.commits.length > 0 && <Box justifyContent="space-between" gap={1}>
           <Text color={C.faint} wrap="truncate-end">
-            <Text color={C.text}>◉</Text>{' 目前　'}<Text color={C.text}>○</Text>{' 未提交　'}<Text color={C.green}>本地</Text>{'　'}<Text color={C.blue}>遠端</Text>{'　'}<Text color={C.amber}>標籤</Text>{'　⇄ 與遠端同一個提交'}
+            {style === 'line' ? [<Text key={prefix + 'gl1'} color={C.text}>╽</Text>, ' 提交　', <Text key={prefix + 'gl2'} color={C.text}>┇</Text>, ' 未提交　'] : [<Text key={prefix + 'gd1'} color={C.text}>◉</Text>, ' 目前　', <Text key={prefix + 'gd2'} color={C.text}>○</Text>, ' 未提交　']}<Text color={C.green}>本地</Text>{'　'}<Text color={C.blue}>遠端</Text>{'　'}<Text color={C.amber}>標籤</Text>{'　⇄ 與遠端同一個提交'}
           </Text>
           {ready.more && ready.limit < GRAPH_MAX && <Box flexShrink={0}><Button key={prefix + 'graph-more'} plain dimColor label={`▾ 再 ${GRAPH_PAGE} 個`} onPress={() => void loadGraph($, p, { limit: ready.limit + GRAPH_PAGE })} /></Box>}
         </Box>}

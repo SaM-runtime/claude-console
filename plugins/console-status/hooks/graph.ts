@@ -86,8 +86,30 @@ const BOX: Record<string, string> = {
   '1000': '│', '0100': '│', '0010': '─', '0001': '─',
 }
 
-/** One drawn cell: a character and the colour slot of the line it belongs to (-1: no line). */
-export type GraphCell = { ch: string; color: number }
+/**
+ * The `line` style's commit: a heavy stretch of its own lane, joined to the bends beside it, so the
+ * line runs through the commit with no gap. A dot (`●`) is a font glyph that never reaches the top
+ * and bottom of its cell, so a line above or below it always shows a break; box lines do reach the
+ * edges, and Windows Terminal draws them itself edge to edge. Keyed up, down, left, right.
+ */
+const NODE: Record<string, string> = {
+  '1100': '╽', '1101': '┟', '1110': '┧', '1111': '╁', '1000': '╹', '1001': '┖', '1010': '┚', '1011': '┸',
+  '0100': '╻', '0101': '┎', '0110': '┒', '0111': '┰', '0000': '┃', '0001': '┃', '0010': '┃', '0011': '┃',
+}
+
+/** `line`: commits are heavy stretches of a seamless line; `dot`: commits are `●` (HEAD `◉`). */
+export type GraphStyle = 'line' | 'dot'
+
+/** `gitGraph` option: `dot` on request, anything else is `line`. */
+export function graphStyle(value: unknown): GraphStyle {
+  return String(value ?? '').trim().toLowerCase() === 'dot' ? 'dot' : 'line'
+}
+
+/**
+ * One drawn cell: a character and the colour slot of the line it belongs to (-1: no line). `node`
+ * marks a commit (drawn bright; the lines between commits are drawn softer in the `line` style).
+ */
+export type GraphCell = { ch: string; color: number; node?: boolean }
 export type GraphRow = { cells: GraphCell[]; col: number; commit?: GraphCommit }
 
 /**
@@ -98,7 +120,8 @@ export type GraphRow = { cells: GraphCell[]; col: number; commit?: GraphCommit }
  * `┼`. Every new line gets the next of `colors` colour slots, so two branches side by side differ.
  * `work` adds a row above for uncommitted changes, on HEAD's line, which then stays leftmost.
  */
-export function layoutGraph(commits: GraphCommit[], opts: { colors?: number; head?: string; work?: boolean } = {}): GraphRow[] {
+export function layoutGraph(commits: GraphCommit[], opts: { colors?: number; head?: string; work?: boolean; style?: GraphStyle } = {}): GraphRow[] {
+  const line = (opts.style ?? 'line') === 'line'
   const colors = Math.max(1, opts.colors ?? 6)
   const lanes: (string | null)[] = []
   const laneColor: number[] = []
@@ -109,7 +132,7 @@ export function layoutGraph(commits: GraphCommit[], opts: { colors?: number; hea
   if (opts.work && opts.head && shown.has(opts.head)) {
     lanes.push(opts.head)
     laneColor.push(fresh())
-    rows.push({ cells: [{ ch: '○', color: laneColor[0]! }], col: 0 })
+    rows.push({ cells: [{ ch: line ? '┇' : '○', color: laneColor[0]!, node: true }], col: 0 })
   }
   for (const commit of commits) {
     const hits: number[] = []
@@ -150,10 +173,10 @@ export function layoutGraph(commits: GraphCommit[], opts: { colors?: number; hea
       const inner = (i > col && i <= right) || (i < col && i >= left)
       const outer = (i > col && i < right) || (i < col && i > left)
       const [l, r] = i > col ? [inner, outer] : [outer, inner]
-      cells.push(i === col ? { ch: '●', color } : { ch: BOX[`${+up}${+down}${+l}${+r}`]!, color: up || down ? laneColor[i]! : l || r ? owner(i) : -1 })
+      cells.push(i === col ? { ch: line ? NODE[`${+(hits.length > 0)}${+(lanes[col] != null)}${+(left < col)}${+(right > col)}`]! : '●', color, node: true } : { ch: BOX[`${+up}${+down}${+l}${+r}`]!, color: up || down ? laneColor[i]! : l || r ? owner(i) : -1 })
       if (i < width - 1) cells.push(i >= col && i < right || i < col && i >= left ? { ch: '─', color: owner(i >= col ? i + 1 : i) } : { ch: ' ', color: -1 })
     }
-    if (commit.hash === opts.head) cells[col * 2] = { ch: '◉', color }
+    if (commit.hash === opts.head && !line) cells[col * 2] = { ch: '◉', color, node: true }
     rows.push({ cells, col, commit })
     while (lanes.length && lanes[lanes.length - 1] === null) lanes.pop()
   }
@@ -178,14 +201,15 @@ export function graphWidth(rows: GraphRow[], lanes: number): number {
 }
 
 /** Consecutive cells of one colour merged into runs, to draw a row with few Text nodes. */
-export function cellRuns(cells: GraphCell[], width: number): { text: string; color: number }[] {
-  const out: { text: string; color: number }[] = []
+export function cellRuns(cells: GraphCell[], width: number): { text: string; color: number; node?: boolean }[] {
+  const out: { text: string; color: number; node?: boolean }[] = []
   const padded = cells.concat(Array.from({ length: Math.max(0, width - cells.length) }, () => ({ ch: ' ', color: -1 })))
-  for (const cell of padded) {
+  for (const cell of padded as GraphCell[]) {
     const color = cell.ch === ' ' ? -1 : cell.color
+    const node = Boolean(cell.node)
     const last = out[out.length - 1]
-    if (last && last.color === color) last.text += cell.ch
-    else out.push({ text: cell.ch, color })
+    if (last && last.color === color && Boolean(last.node) === node) last.text += cell.ch
+    else out.push(node ? { text: cell.ch, color, node } : { text: cell.ch, color })
   }
   return out
 }
@@ -199,4 +223,12 @@ export function shortAgo(t: number, now: number): string {
   if (m < 60 * 24 * 30) return `${Math.floor(m / 1440)} 天`
   if (m < 60 * 24 * 365) return `${Math.floor(m / 43200)} 月`
   return `${Math.floor(m / 525600)} 年`
+}
+
+/** `#rrggbb` moved `amount` of the way toward `to`: a softer shade of a line on a dark pane. */
+export function mix(color: string, to: string, amount: number): string {
+  const rgb = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16))
+  const a = rgb(color), b = rgb(to)
+  if (a.some(Number.isNaN) || b.some(Number.isNaN)) return color
+  return '#' + a.map((v, i) => Math.round(v + (b[i]! - v) * amount).toString(16).padStart(2, '0')).join('')
 }

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { cellRuns, clipCells, gitGraphArgs, graphWidth, layoutGraph, parseGraphLog, parseRefs, refLabels, shortAgo } from '../hooks/graph'
+import { cellRuns, clipCells, gitGraphArgs, graphStyle, graphWidth, layoutGraph, mix, parseGraphLog, parseRefs, refLabels, shortAgo } from '../hooks/graph'
 import type { GraphCommit } from '../types'
 
 const c = (hash: string, parents: string[] = [], subject = hash): GraphCommit => ({ hash, parents, refs: [], at: 0, subject })
@@ -31,7 +31,7 @@ test('the log parses parents, refs and subjects with separators kept; junk lines
 
 test('a merge bends out and the branch bends back in on the commits own rows', () => {
   // M merges F into main; F and A both come from B.
-  const rows = layoutGraph([c('M', ['A', 'F']), c('F', ['B']), c('A', ['B']), c('B')], { head: 'M', work: true })
+  const rows = layoutGraph([c('M', ['A', 'F']), c('F', ['B']), c('A', ['B']), c('B')], { head: 'M', work: true, style: 'dot' })
   expect(draw(rows)).toEqual(['○', '◉─╮', '│ ●', '● │', '●─╯'])
   expect(rows.map(r => r.col)).toEqual([0, 0, 1, 0, 0])
   // The merged branch keeps its own colour on its bend and its line.
@@ -39,24 +39,36 @@ test('a merge bends out and the branch bends back in on the commits own rows', (
   expect(rows[1]!.cells[0]!.color).not.toBe(rows[1]!.cells[2]!.color)
 })
 
+test('the line style draws each commit as a heavy stretch joined to its line and bends, with no gap', () => {
+  const rows = layoutGraph([c('M', ['A', 'F']), c('F', ['B']), c('A', ['B']), c('B')], { head: 'M', work: true })
+  // Uncommitted work is dashed; a commit is heavy below its centre, so commits in a row stay apart.
+  expect(draw(rows)).toEqual(['┇', '┟─╮', '│ ╽', '╽ │', '┖─╯'])
+  expect(rows[1]!.cells.map(x => Boolean(x.node))).toEqual([true, false, false])
+  expect(draw(layoutGraph([c('T')]))).toEqual(['┃'])
+  expect(cellRuns([{ ch: '╽', color: 0, node: true }, { ch: '─', color: 0 }, { ch: '╮', color: 1 }], 3)).toEqual([{ text: '╽', color: 0, node: true }, { text: '─', color: 0 }, { text: '╮', color: 1 }])
+  expect([graphStyle(undefined), graphStyle('line'), graphStyle(' Dot '), graphStyle('x')]).toEqual(['line', 'line', 'dot', 'line'])
+  expect(mix('#8BD5CA', '#1C222B', 0.45)).toBe('#598482')
+  expect(mix('bad', '#000000', 0.5)).toBe('bad')
+})
+
 test('a bend that crosses a line shows the crossing and joins a lane already waiting for that parent', () => {
-  const rows = layoutGraph([c('T', ['M1']), c('X', ['D', 'M2']), c('D', ['M2']), c('M1', ['M2', 'H']), c('H', ['M2']), c('M2')])
+  const rows = layoutGraph([c('T', ['M1']), c('X', ['D', 'M2']), c('D', ['M2']), c('M1', ['M2', 'H']), c('H', ['M2']), c('M2')], { style: 'dot' })
   expect(draw(rows)).toEqual(['●', '│ ●─╮', '│ ● │', '●─┼─┼─╮', '│ │ │ ●', '●─┴─┴─╯'])
 })
 
 test('a lane that ends on a row is not reused on it: the new branch line starts beyond it', () => {
   // M merges H while the D line bends into M on the same row.
-  const rows = layoutGraph([c('T', ['M']), c('D', ['M']), c('M', ['B', 'H']), c('H', ['B']), c('B')])
+  const rows = layoutGraph([c('T', ['M']), c('D', ['M']), c('M', ['B', 'H']), c('H', ['B']), c('B')], { style: 'dot' })
   expect(draw(rows)).toEqual(['●', '│ ●', '●─┴─╮', '│   ●', '●───╯'])
 })
 
 test('a second tip gets its own lane; a commit merging into a waiting lane draws ├ or ┤', () => {
-  const rows = layoutGraph([c('A', ['P']), c('B', ['Q', 'P']), c('Q', ['P']), c('P')])
+  const rows = layoutGraph([c('A', ['P']), c('B', ['Q', 'P']), c('Q', ['P']), c('P')], { style: 'dot' })
   expect(draw(rows)).toEqual(['●', '├─●', '│ ●', '●─╯'])
 })
 
 test('clipping folds extra lanes into …, keeps an off-screen commit visible, and runs merge colours', () => {
-  const wide = layoutGraph([c('a', ['z']), c('b', ['z']), c('c', ['z']), c('d', ['z']), c('z')])
+  const wide = layoutGraph([c('a', ['z']), c('b', ['z']), c('c', ['z']), c('d', ['z']), c('z')], { style: 'dot' })
   expect(draw(wide)).toEqual(['●', '│ ●', '│ │ ●', '│ │ │ ●', '●─┴─┴─╯'])
   expect(clipCells(wide[3]!, 2).map(x => x.ch).join('')).toBe('│ ●')
   expect(clipCells(wide[4]!, 2).map(x => x.ch).join('')).toBe('●─…')
