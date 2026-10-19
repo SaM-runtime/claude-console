@@ -486,14 +486,15 @@ claude plugin test plugins/console-status
 node scripts/check-docs.mjs
 ```
 
-## Star growth
+## Star History
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/star-history/en-dark.svg">
-  <img src="docs/star-history/en-light.svg" alt="Fastest star growth: from 1 to 66 stars in 26 hours starting 2026-10-08 16:00 (UTC+8)" width="800">
-</picture>
-
-Only the fastest-growing stretch is drawn, from GitHub's stargazer timestamps; run `node scripts/star-history/render.mjs --fetch` to refetch and redraw.
+<a href="https://www.star-history.com/#SaM-runtime/claude-console&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=SaM-runtime/claude-console&type=Date&theme=dark">
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=SaM-runtime/claude-console&type=Date">
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=SaM-runtime/claude-console&type=Date">
+  </picture>
+</a>
 
 ## License
 
