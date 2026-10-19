@@ -486,6 +486,15 @@ claude plugin test plugins/console-status
 node scripts/check-docs.mjs
 ```
 
+## Star growth
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/star-history/en-dark.svg">
+  <img src="docs/star-history/en-light.svg" alt="Fastest star growth: from 1 to 66 stars in 26 hours starting 2026-10-08 16:00 (UTC+8)" width="800">
+</picture>
+
+Only the fastest-growing stretch is drawn, from GitHub's stargazer timestamps; run `node scripts/star-history/render.mjs --fetch` to refetch and redraw.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
