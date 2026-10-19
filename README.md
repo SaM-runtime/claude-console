@@ -485,6 +485,15 @@ claude plugin test plugins/console-status
 node scripts/check-docs.mjs
 ```
 
+## Star 成長
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/star-history/zh-dark.svg">
+  <img src="docs/star-history/zh-light.svg" alt="Star 成長最快的時候：2026/10/8 16 點起 26 小時內從 1 顆增加到 66 顆" width="800">
+</picture>
+
+只畫成長最快的那一段，資料取自 GitHub 的 stargazer 時間；用 `node scripts/star-history/render.mjs --fetch` 重新抓取並重畫。
+
 ## License
 
 MIT，見 [LICENSE](LICENSE)。
