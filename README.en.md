@@ -372,7 +372,7 @@ The project table has a six-mark `流程` column (from 64 columns wide); project
 
 ## Command guard
 
-A Bash or PowerShell command that cannot be taken back asks first in Claude Code's own question dialog, with the reason and the command, even when the permission mode or an allow rule would run it unseen: `執行一次` runs it once, anything else (or no one to ask, as in `claude -p`) refuses it and tells the model not to retry the same effect another way. The activity feed records each decision.
+A Bash or PowerShell command that cannot be taken back asks first in Claude Code's own question dialog, with the reason, the command and (since 0.25.0) a plain-words line on what it does and what it loses (`這個指令在做什麼：…`), even when the permission mode or an allow rule would run it unseen: `執行一次` runs it once, anything else (or no one to ask, as in `claude -p`) refuses it and tells the model not to retry the same effect another way. The activity feed records each decision.
 
 It covers recursive deletes (`rm -r`, `Remove-Item -Recurse`, `rd /s`) except build output and caches (`node_modules`, `dist`, `build`, `.next`, `target`, `coverage`, `__pycache__` and similar), force or mirror pushes and remote deletes, `git reset --hard`, `git clean -f`, discarding all working-tree changes, `git branch -D`, `git stash drop|clear`, history rewrites, `DROP TABLE`/`TRUNCATE TABLE`, disk formatting and raw device writes, `terraform destroy`, bulk `kubectl delete`, `helm uninstall`, `docker system prune -a`, `gh repo|release delete`, and publishing (`npm|pnpm|yarn|cargo publish`, `gh release create`). It also looks inside `bash -c`, `powershell -Command`, `cmd /c`, `eval` and `Invoke-Expression`/`iex`, past wrappers and their options (`sudo -u root`, `env`, `nice -n 10`, `timeout 60`, `xargs -0`), treats a recursive `rm` fed by `xargs` as deleting whatever the pipe sends, reads `-Recurse:$true` as `-Recurse`, and catches `+branch` force refspecs, `push --prune`, `checkout -f`/`switch -f`, `find -delete` and `find -exec rm -r`. `--force-with-lease`, single-file deletes, ordinary pushes, dry runs (`-n`, `--dry-run`, `-WhatIf`), deletes inside a temp directory (`/tmp/…`, `$TMPDIR/…`, `$env:TEMP\…`), PowerShell's `rm -Force` on a file and SQL words in text a command only searches or records (`git commit -m "drop table…"`, `grep`) pass.
 
@@ -441,6 +441,7 @@ One line per version, newest first; see [CHANGELOG.md](CHANGELOG.md) or [GitHub 
 
 | Version | Highlights |
 | --- | --- |
+| 0.25 | The command guard explains in plain words what a caught command does and what it loses |
 | 0.24 | Branch graph defaults to a VS Code Git Graph look: a row of lines between commits, dots on their lines, aligned age and hash |
 | 0.23 | Branch graph: open a commit and attach it to a prompt, see unpushed and incoming commits and each branch's PR and CI; unbroken lines, label pills and time dividers |
 | 0.22 | Git branch graph: `▸ 分支圖` or `b` opens a coloured branch and merge graph with HEAD, uncommitted work, local and remote branches and tags |

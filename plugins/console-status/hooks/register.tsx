@@ -29,7 +29,7 @@ import { limitPace } from './pace'
 import { LOOP_NOTE, LoopMemory, loopKey, loopMode } from './loop'
 import type { TtlSource } from './cache'
 import type { CacheTtl } from './cache'
-import { commandPreview, dangerReason, guardMode } from './guard'
+import { commandPreview, dangerOf, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction } from '../types'
@@ -1462,19 +1462,20 @@ async function commandGuard($: any, options: PluginOptions, e: any): Promise<{ d
   if (tool !== 'Bash' && tool !== 'PowerShell') return null
   const mode = guardMode((options as any).commandGuard)
   const command = String((e as any).command ?? '')
-  const reason = mode === 'off' ? null : dangerReason(command)
-  if (!reason) return null
+  const found = mode === 'off' ? null : dangerOf(command)
+  if (!found) return null
+  const { reason, explain } = found
   const preview = commandPreview(command)
   let allowed = false
   if (mode === 'ask') {
-    const answer = await $.ui.ask(`指令護欄：${reason}。\n${preview}\n要執行這個指令嗎？`, { header: '指令護欄', options: ['執行一次', '拒絕'] }).catch(() => '')
+    const answer = await $.ui.ask(`指令護欄：${reason}。\n${preview}\n這個指令在做什麼：${explain}\n要執行這個指令嗎？`, { header: '指令護欄', options: ['執行一次', '拒絕'] }).catch(() => '')
     allowed = answer === '執行一次'
   }
   const at = await $.clock.now()
   await update($, feedAtom, list => [{ at, text: `指令護欄${allowed ? '放行' : '攔下'}：${reason}`, tone: allowed ? 'amber' : 'red' } as const, ...list].slice(0, 20))
   if (allowed) return null
   $.ui.toast(`指令護欄攔下：${reason}`, { timeoutMs: 6000 })
-  return { deny: `console-status 指令護欄攔下這個指令（${reason}）${mode === 'deny' ? '：commandGuard 設為 deny' : '：使用者沒有同意'}。不要換個寫法重試同樣的效果；改用可復原的做法，或請使用者自己執行。` }
+  return { deny: `console-status 指令護欄攔下這個指令（${reason}）${mode === 'deny' ? '：commandGuard 設為 deny' : '：使用者沒有同意'}。這個指令在做什麼：${explain}不要換個寫法重試同樣的效果；改用可復原的做法，或請使用者自己執行。` }
 }
 
 /** Redraws the countdown and warns once, shortly before the cache goes cold. */

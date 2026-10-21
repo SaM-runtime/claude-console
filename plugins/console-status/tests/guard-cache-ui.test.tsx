@@ -38,6 +38,7 @@ test('a force push asks first; "執行一次" runs it, an ordinary command never
   const answer: any = await $.tool.call({ tool: 'Bash', command: 'git push --force origin main' } as any)
   expect(answer.deny).toBeUndefined()
   expect(data.asked[0]).toMatch(/強制推送會覆寫遠端歷史[\s\S]*git push --force origin main/)
+  expect(data.asked[0]).toMatch(/git push --force origin main\n這個指令在做什麼：用本機的版本直接蓋掉遠端分支/)
   expect(data.ran).toEqual(['npm test', 'git push --force origin main'])
   expect(data.state.feed[0].text).toBe('指令護欄放行：強制推送會覆寫遠端歷史')
 })
@@ -45,7 +46,7 @@ test('a force push asks first; "執行一次" runs it, an ordinary command never
 test('a refusal or a dismissed question denies the command and tells the model not to retry it', OPTIONS, async ($, on) => {
   const { data } = fixture(on, '拒絕')
   const refused: any = await $.tool.call({ tool: 'Bash', command: 'rm -rf src' } as any)
-  expect(refused.deny).toMatch(/指令護欄攔下這個指令（遞迴刪除 src）：使用者沒有同意/)
+  expect(refused.deny).toMatch(/指令護欄攔下這個指令（遞迴刪除 src）：使用者沒有同意。這個指令在做什麼：rm -r 會/)
   expect(data.ran).toEqual([])
   expect(data.toasts.some(t => t.includes('指令護欄攔下：遞迴刪除 src'))).toBe(true)
 })
