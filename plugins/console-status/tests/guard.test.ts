@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { dangerReason, guardMode, segments } from '../hooks/guard'
+import { dangerOf, dangerReason, guardMode, segments } from '../hooks/guard'
 
 test('irreversible commands are named; ordinary ones and build-output cleanup pass', () => {
   const dangerous: [string, RegExp][] = [
@@ -101,6 +101,22 @@ test('wrapper options, piped targets, eval and -Recurse:$true do not hide a comm
     'sudo rm -rf node_modules', 'rm -rf',
   ]
   for (const command of ordinary) expect([command, dangerReason(command)]).toEqual([command, null])
+})
+
+test('every caught command explains what it does in plain words', () => {
+  const caught = [
+    'rm -rf src', 'ls | xargs rm -rf', 'Remove-Item -Recurse C:\\proj', 'rd /s /q C:\\proj', 'del /s /q *.log', 'find . -delete',
+    'git push --force', 'git push origin :old', 'git reset --hard', 'git clean -fdx', 'git restore .', 'git checkout -f main',
+    'git branch -D x', 'git stash clear', 'git filter-repo --path a', 'git update-ref -d refs/heads/x', 'mkfs.ext4 /dev/sdb1',
+    'dd if=a of=/dev/sda', 'chmod -R 777 /', 'terraform destroy', 'kubectl delete ns a', 'helm uninstall a', 'docker system prune --all',
+    'gh repo delete a/b', 'gh release delete v1', 'npm publish', 'npm unpublish a', 'gh release create v1', 'psql -c "drop table a"',
+  ]
+  for (const command of caught) {
+    const found = dangerOf(command)
+    expect([command, found?.reason === dangerReason(command), (found?.explain.length ?? 0) > 10]).toEqual([command, true, true])
+  }
+  expect(dangerOf('git reset --hard')?.explain).toMatch(/還沒 commit 的修改會直接被蓋掉/)
+  expect(dangerOf('npm test')).toBeNull()
 })
 
 test('segments keep quoted separators together', () => {

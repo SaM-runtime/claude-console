@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.25.0
+
+- **The command guard says what a command does.** When it asks about a command, the question now carries a line in plain Traditional Chinese, `這個指令在做什麼：…`, saying what the command does and what is lost if it runs (for `git reset --hard`: the branch and every file go back to that commit, and changes not yet committed are overwritten and cannot be recovered with git), so you can decide without looking the command up. Each kind of command the guard catches has its own line; a refusal sent back to the model carries it too.
+
 ## 0.24.0
 
 - **The branch graph looks like VS Code Git Graph and GitKraken.** The new default `spaced` style draws a `●` per commit with a row of lines between commits, so the dots are threaded on their branch lines instead of stacked against each other, and branches bend in and out on those rows (`├─╮` where a merge takes in a branch, `├─╯` where a branch starts). Each row ends in two aligned columns, how long ago (`3 小時前`) and the short hash (which opens the commit, like the subject); the age column replaces the day dividers in this style. Branch and tag pills no longer get squeezed into `…` on a narrow pane: the subject gives way first. `樣式：寬鬆` in the graph's header steps through 寬鬆 → 線段 → 圓點 for this session, and the `gitGraph` option (`spaced`, `line`, `dot`) sets the default. The spaced graph is about twice as tall as the one-row styles.

@@ -371,7 +371,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 ## 指令護欄
 
-Bash 或 PowerShell 要執行無法復原的指令時，會先用 Claude Code 自己的提問對話框問你，列出原因與完整指令；即使權限模式或允許規則本來會直接放行也一樣。選「執行一次」才會執行；其他回答（或沒有人可問，例如 `claude -p`）都會拒絕，並告訴模型不要換個寫法達成同樣效果。每次決定都會寫入動態。
+Bash 或 PowerShell 要執行無法復原的指令時，會先用 Claude Code 自己的提問對話框問你，列出原因與完整指令，並用白話說明這個指令在做什麼、執行後會失去什麼（0.25.0 起，例如 `git reset --hard`：「把目前分支和所有檔案退回指定的 commit；還沒 commit 的修改會直接被蓋掉，git 也找不回來。」）；即使權限模式或允許規則本來會直接放行也一樣。選「執行一次」才會執行；其他回答（或沒有人可問，例如 `claude -p`）都會拒絕，並告訴模型不要換個寫法達成同樣效果。每次決定都會寫入動態。
 
 涵蓋：遞迴刪除（`rm -r`、`Remove-Item -Recurse`、`rd /s`，但 `node_modules`、`dist`、`build`、`.next`、`target`、`coverage`、`__pycache__` 等建置輸出與快取除外）、強制或鏡像推送與刪除遠端分支、`git reset --hard`、`git clean -f`、丟棄整個工作區變更、`git branch -D`、`git stash drop|clear`、改寫歷史、`DROP TABLE`／`TRUNCATE TABLE`、格式化磁碟與直接寫裝置、`terraform destroy`、大量 `kubectl delete`、`helm uninstall`、`docker system prune -a`、`gh repo|release delete`，以及發布（`npm|pnpm|yarn|cargo publish`、`gh release create`）。也會檢查 `bash -c`、`powershell -Command`、`cmd /c`、`eval`、`Invoke-Expression`／`iex` 裡的指令，看穿包裝指令與其選項（`sudo -u root`、`env`、`nice -n 10`、`timeout 60`、`xargs -0`），把經 `xargs` 執行的遞迴 `rm` 視為刪除管線傳入的所有項目，把 `-Recurse:$true` 視同 `-Recurse`，並攔下 `+分支` 強制推送、`push --prune`、`checkout -f`／`switch -f`、`find -delete` 與 `find -exec rm -r`。`--force-with-lease`、刪單一檔案、一般推送、試跑（`-n`、`--dry-run`、`-WhatIf`）、刪除暫存目錄裡的東西（`/tmp/…`、`$TMPDIR/…`、`$env:TEMP\…`）、PowerShell 對單一檔案的 `rm -Force`，以及只是搜尋或記錄文字的指令中出現的 SQL 字樣（`git commit -m "drop table…"`、`grep`）不會被攔。
 
@@ -440,6 +440,7 @@ claude plugin install paste-preview@paste-preview
 
 | 版本 | 重點 |
 | --- | --- |
+| 0.25 | 指令護欄攔下指令時，用白話說明這個指令在做什麼、會失去什麼 |
 | 0.24 | 分支圖預設改成 VS Code Git Graph 那樣：提交之間多一列畫線，圓點串在線上，右邊對齊時間與 hash |
 | 0.23 | 分支圖：點提交看細節、附給 Claude，標出未推送／可拉取與各分支的 PR 和 CI；線條不再在提交處斷開，分支標籤改成膠囊、依時間分段 |
 | 0.22 | Git 分支圖：`▸ 分支圖` 或 `b` 展開彩色的分支／合併圖，HEAD、未提交的變更、本地／遠端分支與標籤一眼看清 |
