@@ -83,6 +83,8 @@ test('(d) one press runs continue → review → gate → fix and stops at relea
   await refresh($)
   expect((await arm($)).text).toMatch(/開始自動接力，最多 6 跳/)
   expect(h.launches.length).toBe(0)
+  // No response yet in this console, so no 5-hour window: the start says the brake has nothing to read.
+  expect(h.feed.some(text => text.includes('額度煞車目前讀不到 Claude 5 小時額度'))).toBe(true)
 
   // Hop 1: continue, confirmed by the press of ⟳ (no second press).
   await refresh($)

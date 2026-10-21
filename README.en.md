@@ -441,7 +441,7 @@ One line per version, newest first; see [CHANGELOG.md](CHANGELOG.md) or [GitHub 
 
 | Version | Highlights |
 | --- | --- |
-| 0.25 | The command guard explains in plain words what a caught command does and what it loses |
+| 0.25 | The command guard explains in plain words what a caught command does and what it loses; 0.25.1 fixes false "executor waits for you", stale quota after a reset, a silent blind quota brake, and the version shown after another session updates |
 | 0.24 | Branch graph defaults to a VS Code Git Graph look: a row of lines between commits, dots on their lines, aligned age and hash |
 | 0.23 | Branch graph: open a commit and attach it to a prompt, see unpushed and incoming commits and each branch's PR and CI; unbroken lines, label pills and time dividers |
 | 0.22 | Git branch graph: `▸ 分支圖` or `b` opens a coloured branch and merge graph with HEAD, uncommitted work, local and remote branches and tags |

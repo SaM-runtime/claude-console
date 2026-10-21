@@ -925,6 +925,19 @@ export function taskMeta(t: ExecutorTask, now: number): { icon: string; tone: 't
 }
 
 /**
+ * Claude's rate-limit windows as the session last saw them. They come with a response, so a console that has
+ * not answered since a window reset still holds the old percent: a window past its reset counts as unused,
+ * as Codex's do, instead of showing (and braking on) the old number.
+ */
+export function claudeLimits(raw: unknown, now: number): { kind: string; percent: number; resetsAt?: string }[] {
+  return (Array.isArray(raw) ? raw : []).map((l: any) => {
+    const reset = l?.resetsAt ? Date.parse(String(l.resetsAt)) : NaN
+    const past = Number.isFinite(reset) && reset <= now
+    return { kind: String(l?.kind), percent: past ? 0 : Number(l?.percentUsed) || 0, ...(l?.resetsAt && !past ? { resetsAt: String(l.resetsAt) } : {}) }
+  })
+}
+
+/**
  * Parse `codex-quota.ps1` output (`{ at, rate_limits }`) or the raw rollout event that
  * `codex-quota.sh` prints (`{ timestamp, payload: { rate_limits | info.rate_limits } }`);
  * a window past its reset counts as unused.

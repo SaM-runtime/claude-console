@@ -407,9 +407,12 @@ export async function codexHasThread(deps: Pick<ExecutorDeps, 'run'>, config: Pi
  * Read only from the final line, so a question asked and answered earlier in the turn does not count.
  */
 export function endsAsking(text: string): boolean {
-  const line = text.trim()
-  if (!line) return false
-  if (/[?？]\s*[)）」』"'`*]*$/.test(line)) return true
+  const last = text.trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean).pop() ?? ''
+  if (!last) return false
+  if (/[?？]\s*[)）」』"'`*]*$/.test(last)) return true
+  // A negated ask says nothing is needed (`沒有需要我處理的`, `不需要你確認`, `no need for your approval`): drop it
+  // up to the next punctuation. `要不要我…`, `是不是`, `可不可以` still ask.
+  const line = last.replace(/(?:(?<![要是可])不|沒有?|無須|無需|毋須|\b(?:no|not|don't|doesn't|never|without)\b)[^，。、；！,.;!]*/gi, ' ')
   return /(要我|是否要|是否需要|可以嗎|好嗎|請確認|請問|請授權|需要[你您](?:確認|決定|同意|授權|提供|回覆)|等你回覆|等候你|授權我|允許我|同意嗎|請選擇|should i\b|do you want|would you like|shall i\b|may i\b|please confirm|please approve|needs? (?:your )?(?:approval|permission)|grant (?:me )?permission)/i.test(line)
 }
 
