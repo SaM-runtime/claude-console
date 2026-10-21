@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.25.1
+
+- **An executor that says it needs nothing no longer waits for you.** A Codex turn whose last line negates an ask (`沒有需要我處理的事項，已完成。`, `不需要你確認`, `no need for your approval`) was read as a question: auto-sync skipped it and `⟳ 自動接力` stopped with `執行者在等你回覆`. Negated phrases are now left out, `要不要我…` still asks, and only the last line counts, as documented.
+- **Claude's quota after a reset.** The 5-hour and weekly windows come with the console's own responses, so a console that has not answered since a window reset kept showing the old percent with a reset time in the past, and `⟳ 自動接力` refused to start or stopped on it (`額度煞車：…已用 92%`). A window past its reset now reads as unused, as Codex's windows already did.
+- **`⟳ 自動接力` says when its quota brake is blind.** Before the console's first response there is no 5-hour window to read, so the brake cannot stop anything; the start line used to promise `5 小時額度到 70% 就停` anyway. It now says the brake has nothing to read yet and the cycle relies on `cycleMaxHops`, in amber.
+- **The version after another session updates.** With console-status loaded from a local folder, `⬆ 更新` in one session runs `git pull` there; every other open session then read the new manifest and called itself up to date while still running the old code. A session now keeps the version it loaded until it reloads, so the others still offer `⬆ 更新` (which pulls nothing and reloads them).
+
 ## 0.25.0
 
 - **The command guard says what a command does.** When it asks about a command, the question now carries a line in plain Traditional Chinese, `這個指令在做什麼：…`, saying what the command does and what is lost if it runs (for `git reset --hard`: the branch and every file go back to that commit, and changes not yet committed are overwritten and cannot be recovered with git), so you can decide without looking the command up. Each kind of command the guard catches has its own line; a refusal sent back to the model carries it too.

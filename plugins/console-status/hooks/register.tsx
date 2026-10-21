@@ -33,7 +33,7 @@ import { commandPreview, dangerOf, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction } from '../types'
-import { jobWarnings, waitingNames, parseGate, parseCodexQuota, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, gateText, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
+import { jobWarnings, waitingNames, parseGate, parseCodexQuota, claudeLimits, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, gateText, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, parseLimitKind, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody, METER } from './battery'
@@ -239,6 +239,11 @@ const loops = new LoopMemory()
 let transcriptPath: string | null = null
 let updateTimer: { cancel(): void } | undefined
 let updateCheck: Promise<UpdateInfo | null> | null = null
+/**
+ * The version this module was loaded as, read at session start. A local folder updated by another session's
+ * `git pull` has the new manifest on disk while this session still runs the old code until a reload.
+ */
+let loadedVersion: string | null = null
 /** The newest version already announced by a toast (kept in `$.store`, so once per version). */
 const UPDATE_NOTIFIED_KEY = 'updateNotified'
 const RELOAD_DELAY_MS = 1500
@@ -681,7 +686,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
       contextPercent: usage?.context?.percent ?? null, error,
       ...(typeof usage?.cost?.usd === 'number' ? { costUsd: usage.cost.usd } : {}),
       codexQuota: parseCodexQuota(codexQuotaText, now),
-      limits: (usage?.rateLimits ?? []).map((l: any) => ({ kind: String(l.kind), percent: Number(l.percentUsed) || 0, ...(l.resetsAt ? { resetsAt: String(l.resetsAt) } : {}) })),
+      limits: claudeLimits(usage?.rateLimits, now),
     }
     if (executorSignature((await readDispatch(io, config)).settings) !== refreshingExecutor) { owner.queued = true; return }
     await publishDisplay(async () => {
@@ -1271,7 +1276,10 @@ async function toggleCycle($: any, options: PluginOptions, p: Project, want?: bo
   const max = cycleMaxHops((options as any).cycleMaxHops)
   const now = await $.clock.now()
   await saveCycle($, p.statusPath, () => newCycleRun(now, max, me))
-  await cycleNotice($, `⟳ ${name} 開始自動接力（最多 ${max} 跳${quotaStop === null ? '' : `，5 小時額度到 ${quotaStop}% 就停`}；停在決策、執行者提問、release 關卡與失敗）`, 'teal', true)
+  // The brake reads the 5-hour window from this console's own responses; with none yet it has nothing to stop on.
+  const blind = quotaStop !== null && !(s?.limits ?? []).some((l: { kind: string }) => parseLimitKind(l.kind)?.window === 'five_hour')
+  const brakeText = quotaStop === null ? '' : blind ? `，額度煞車目前讀不到 Claude 5 小時額度（主控台回應過一次才有），先只靠跳數上限` : `，5 小時額度到 ${quotaStop}% 就停`
+  await cycleNotice($, `⟳ ${name} 開始自動接力（最多 ${max} 跳${brakeText}；停在決策、執行者提問、release 關卡與失敗）`, blind ? 'amber' : 'teal', true)
   return `${name}：開始自動接力，最多 ${max} 跳`
 }
 
@@ -1610,7 +1618,7 @@ function checkUpdate($: any, force = false): Promise<UpdateInfo | null> {
     const now = await $.clock.now()
     if (!force && prev && prev.phase === 'idle' && !prev.error && now - prev.checkedAt < UPDATE_CHECK_MS - 60_000) return prev
     await update($, updateInfo, value => ({ current: value?.current ?? null, latest: value?.latest ?? null, checkedAt: value?.checkedAt ?? 0, phase: 'checking' }) as UpdateInfo)
-    const current = manifestVersion(await Promise.resolve().then(() => $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)).catch(() => null))
+    const current = loadedVersion ?? manifestVersion(await Promise.resolve().then(() => $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)).catch(() => null))
     let latest: string | null = null
     let error: string | undefined
     try {
@@ -1781,6 +1789,7 @@ export const register: Register = (on, options) => {
     await loadTrust($)
     await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；reply <專案> <回覆> 回覆停下來問你的執行者；sync / continue / gate / verify <專案> 執行動作；cycle <專案> [off] 自動接力（一路按下去，停在需要你的地方）；band 橫帶；demo 示範；version 版本；update 更新外掛；off 這個對話關閉主控台' })
     transcriptPath = null
+    loadedVersion ??= manifestVersion(await Promise.resolve().then(() => $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)).catch(() => null))
     // A reload after an update starts a fresh check, which reads the newly installed manifest.
     await update($, updateInfo, value => value && value.phase !== 'idle' ? { ...value, phase: 'idle', checkedAt: 0 } as UpdateInfo : value)
     // A light session (a quick side task, `claude -p`) gets the guard only: no polling, band or prompt additions.

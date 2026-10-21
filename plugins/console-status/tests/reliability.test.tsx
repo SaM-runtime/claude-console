@@ -52,6 +52,14 @@ test('a Codex turn that ends on a question or a request for permission asks the 
   expect(endsAsking('No permission changes were needed.')).toBe(false)
   expect(endsAsking('不需要你處理，已寫回 CARD。')).toBe(false)
   expect(endsAsking('')).toBe(false)
+  // A negated ask needs nothing; a question earlier in the turn is not its last words.
+  expect(endsAsking('沒有需要我處理的事項，已完成。')).toBe(false)
+  expect(endsAsking('已完成，不需要你確認。')).toBe(false)
+  expect(endsAsking('Done, no need for your approval.')).toBe(false)
+  expect(endsAsking('請確認。\n已寫回狀態卡。')).toBe(false)
+  expect(endsAsking('要不要我直接改 package.json，請回覆')).toBe(true)
+  expect(endsAsking('不確定原因，請確認要不要回退')).toBe(true)
+  expect(endsAsking('已完成。\n請確認是否可以合併')).toBe(true)
 })
 
 // --- A1: the CARD names the job that wrote it ---

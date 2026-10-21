@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { AUTO_SYNC_GRACE_MS } from '../hooks/sync'
 import { CYCLE_DEFAULT_HOPS, CYCLE_DEFAULT_QUOTA_STOP, cardRev, cycleMaxHops, cyclePlan, cycleQuotaStop, newCycleRun, quotaBrake } from '../hooks/cycle'
 import type { CycleRun } from '../hooks/cycle'
+import { claudeLimits } from '../hooks/logic'
 
 const NOW = Date.parse('2030-01-05T12:00:00Z')
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -104,4 +105,19 @@ test('quota brake: a 5-hour window at the threshold, or a window running out wit
   expect(cyclePlan(project(), 'IDLE', run(), NOW, opts({ limits: [fiveHour(95)], quotaStop: null }))).toEqual({ action: 'continue' })
   // A cycle that is only waiting is not stopped by quota: nothing would be spent.
   expect(cyclePlan(project({ jobs: [{ ...job(), kind: 'running', status: 'running' }] }), 'RUNNING', run(), NOW, opts({ limits: [fiveHour(95)] }))).toEqual({ wait: '等執行者' })
+})
+
+test('a 5-hour window past its reset is read as unused, so an old percent neither shows nor brakes', () => {
+  const now = Date.parse('2030-01-05T12:00:00Z')
+  const raw = [
+    { kind: 'five_hour', percentUsed: 92, resetsAt: '2030-01-05T11:00:00Z' },
+    { kind: 'seven_day', percentUsed: 40, resetsAt: '2030-01-09T00:00:00Z' },
+  ]
+  expect(claudeLimits(raw, now)).toEqual([
+    { kind: 'five_hour', percent: 0 },
+    { kind: 'seven_day', percent: 40, resetsAt: '2030-01-09T00:00:00Z' },
+  ])
+  expect(quotaBrake(claudeLimits(raw, now), 70, now)).toBeNull()
+  expect(quotaBrake(claudeLimits([{ ...raw[0], resetsAt: '2030-01-05T14:00:00Z' }], now), 70, now)).toMatch(/額度煞車/)
+  expect(claudeLimits(null, now)).toEqual([])
 })

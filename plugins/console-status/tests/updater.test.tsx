@@ -45,11 +45,11 @@ const IN_FOLDER = JSON.stringify([{ id: 'console-status@claude-console', enabled
 function fixture(on: any, latest: string | null, update = UPDATED, list = CACHED) {
   const clock = mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:/Users/example', LOCALAPPDATA: 'D:/Local' })
-  const data = { refuseReload: false, pulled: '0.4.3', pull: result('Updating 1234..5678\nFast-forward'), isRepo: true, fetched: [] as string[], ran: [] as string[][], commands: [] as string[], reloadArgs: [] as string[], toasts: [] as string[], state: {} as Record<string, any> }
+  const data = { refuseReload: false, onDisk: '0.4.2', pulled: '0.4.3', pull: result('Updating 1234..5678\nFast-forward'), isRepo: true, fetched: [] as string[], ran: [] as string[][], commands: [] as string[], reloadArgs: [] as string[], toasts: [] as string[], state: {} as Record<string, any> }
   on('fs.read', (_: any, e: any) => {
     const path = fixturePath(e.path)
     if (path === `${FOLDER}/plugins/console-status/.claude-plugin/plugin.json`) return { value: JSON.stringify({ version: data.ran.some(argv => argv.includes('pull')) ? data.pulled : '0.4.2' }) }
-    return { value: path.endsWith('/.claude-plugin/plugin.json') ? '{"name":"console-status","version":"0.4.2"}' : path.includes('claude-sessions') ? '{"version":1,"roots":{}}' : '' }
+    return { value: path.endsWith('/.claude-plugin/plugin.json') ? JSON.stringify({ name: 'console-status', version: data.onDisk }) : path.includes('claude-sessions') ? '{"version":1,"roots":{}}' : '' }
   })
   on('fs.list', () => ({ value: [] }))
   on('http.fetch', (_: any, e: any) => {
@@ -95,6 +95,16 @@ test('a session start finds a newer version on main and toasts it once per versi
   await $.command.run({ command: 'console', args: 'version' } as any)
   expect(data.toasts.filter(t => t.includes('有新版 v0.4.3')).length).toBe(1)
   await data.clock.settle() // the session start's background refresh
+})
+
+test('a session keeps the version it loaded when another session pulls the new one into the folder', OPTIONS, async ($, on) => {
+  const data = fixture(on, '0.4.3', UPDATED, IN_FOLDER)
+  await $.session.start({ cwd: 'C:/console' } as any)
+  // Another session's ⬆ 更新 ran git pull in the shared folder: the manifest on disk is new, this code is not.
+  data.onDisk = '0.4.3'
+  const out: any = await $.command.run({ command: 'console', args: 'version' } as any)
+  expect(out.text).toMatch(/v0\.4\.2　有新版 v0\.4\.3/)
+  await data.clock.settle()
 })
 
 test('/console update runs claude plugin update, then /reload-plugins', OPTIONS, async ($, on) => {
