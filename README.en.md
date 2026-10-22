@@ -6,14 +6,20 @@
 <p align="center"><a href="docs/demo.mp4">▶ Watch the 45-second demo (MP4)</a> · <a href="#version-history">Version history</a> · <a href="README.md">繁體中文</a></p>
 <p align="center"><sub>The real screen of Claude Code 2.1.294 with console-status 0.15.0 in a terminal (captured frame by frame with tmux, then encoded), showing <code>/console demo</code> data; the captions and mouse pointer were added afterwards.</sub></p>
 
-## Try the demo
+## Quick start
 
-```powershell
-claude plugin marketplace add SaM-runtime/claude-console
-claude plugin install console-status@claude-console
-```
+1. **Install.** Type these two lines in Claude Code; the plugin works at once, no restart. Press Esc on the settings screen the install opens to keep every default. To install from a terminal, see [Install](#install).
 
-Run `/console demo` in any Claude Code session to see the whole pane without a registry; `/console refresh` goes back to real state. To connect your own projects, see [Configure](#configure).
+   ```text
+   /plugin marketplace add SaM-runtime/claude-console
+   /plugin install console-status@claude-console
+   ```
+
+2. **See the demo.** `/console demo` shows the whole pane with no project at all; `/console refresh` goes back to your own data.
+3. **Add your projects.** Open Claude Code in a project's folder and run `/console add`. It makes the registry and the STATUS card (`.console/STATUS.md`) for you, once per project (see [Adding a project](#adding-a-project)).
+4. **Use it.** Run `/console` in any session to open the pane. Write a next step in the project's CARD (`o` in the action menu opens the file; change `- 下一步：無` to the task), press `⇢ 繼續下一步`, and a background executor does it. From then on, what waits on you sits in the next-step card, and `n` walks through it.
+
+Every setting has a default, so nothing needs configuring; to change one, see [Configure](#configure).
 
 ## Features
 
@@ -42,12 +48,21 @@ Panel refreshes query local files and CLIs, then update mod-owned managed-state 
 
 ## Requirements
 
-- Windows or macOS (macOS uses the bundled POSIX `sh` probes; no PowerShell needed)
-- Claude Code 2.1.289 or later with mod support
-- A project registry and one STATUS file per registered project
+- Windows, macOS or Linux (macOS and Linux use the bundled POSIX `sh` probes; no PowerShell needed)
+- Claude Code 2.1.291 or later (CI tests that version and the latest)
+- A project registry and one STATUS file per registered project: `/console add` makes both, or write them by hand from [the example](workflow/projects-scope.example.md)
 - For `executor: codex` only: Node.js, Codex Companion and a Codex account. Windows probes need PowerShell and the Codex desktop app; macOS probes need the `codex` CLI on `PATH` (Homebrew prefixes are added automatically)
 
 ## Install
+
+In Claude Code (works at once):
+
+```text
+/plugin marketplace add SaM-runtime/claude-console
+/plugin install console-status@claude-console
+```
+
+Or in a terminal (loaded by the Claude Code sessions you start afterwards):
 
 ```powershell
 claude plugin marketplace add SaM-runtime/claude-console
@@ -65,25 +80,13 @@ Marketplace management is covered by the official [plugin marketplace documentat
 
 ## Configure
 
-`claude plugin configure` accepts a JSON object whose values are single-line strings. Unspecified options retain their current values.
+Nothing needs configuring: every option has a default (see the table). To change one:
+
+- In Claude Code, run `/plugin configure console-status@claude-console`, pick the options to change, then **Save configuration**;
+- Or in a terminal, `claude plugin configure console-status@claude-console` shows the current values, and `--values-stdin` changes them: a JSON object whose values are single-line strings, where options left out keep their values.
 
 ```powershell
-@'
-{
-  "registryPath": "C:\\Projects\\console\\projects-scope.md",
-  "dispatchSettingsPath": "~/.claude/handoffs/dispatch.json",
-  "claudeSessionsPath": "~/.claude/handoffs/claude-sessions.json",
-  "executor": "claude",
-  "defaultModel": "",
-  "defaultEffort": "",
-  "companionScript": "",
-  "companionStateDir": "",
-  "companionStateRoots": "",
-  "modelsCachePath": "~/.codex/models_cache.json",
-  "codexFallback": "ask",
-  "codexMinQuotaPercent": "10"
-}
-'@ | claude plugin configure console-status@claude-console --values-stdin
+echo '{"registryPath": "D:/Work/projects-scope.md", "staleDays": "5"}' | claude plugin configure console-status@claude-console --values-stdin
 ```
 
 | Key | Purpose | Default |
@@ -115,7 +118,7 @@ Marketplace management is covered by the official [plugin marketplace documentat
 | `activation` | `auto`: only a session where you ran `/console` runs the console, and it starts again when that session resumes; other sessions get the command guard only (see [Light sessions](#light-sessions)). `always`: every interactive session, except the executor sessions the console dispatched; non-interactive sessions still get the guard only | `auto` |
 | `projectMode` | `auto`: a session opened inside a registered project switches to project mode (see [Pipeline and project mode](#pipeline-and-project-mode)); `off`: always the multi-project console | `auto` |
 
-Paths beginning with `~` expand on Windows, macOS, and Linux. Run `/reload-plugins` or start another Claude Code session after plugin configuration changes. See [the registry example](workflow/projects-scope.example.md).
+Paths beginning with `~` expand on Windows, macOS, and Linux. A changed option applies after `/reload-plugins` or in a new Claude Code session. See [the registry example](workflow/projects-scope.example.md).
 
 ### Adding a project
 
@@ -125,7 +128,7 @@ Open Claude Code in the project's folder and run `/console add` (or `/console ad
 - a folder without `.console/STATUS.md` gets one from the [STATUS template](workflow/STATUS-template.md), its CARD saying it was just added; an existing one is kept;
 - in a git repository, `.console/` is added to `.git/info/exclude` so the STATUS file is not committed (delete that line to version it).
 
-That session does not become a console; an open console refreshes and shows the new project at once. Write the first task in the CARD's `下一步` and `⇢ 繼續下一步` dispatches it. Adding a folder from elsewhere: Claude Code must have been opened there once and trusted before background work can run in it.
+That session does not become a console; an open console refreshes and shows the new project at once. Change the CARD's `- 下一步：無` to the first task (`o` in the action menu opens the file) and `⇢ 繼續下一步` dispatches it. Adding a folder from elsewhere: Claude Code must have been opened there once and trusted before background work can run in it.
 
 ## Dispatch settings
 
@@ -280,7 +283,7 @@ The right-click menu (or `m` on the keyboard for the row under the cursor; Esc c
 
 **Sync progress.** A sync shows its steps on the project's `同步` line, `● 派工 ─ ◉ 執行 ─ ○ 寫回 STATUS` (● done, ◉ under way, ○ not reached, ✕ stopped there), with the executor, its phase and the elapsed time underneath, and the band shows `↻ 同步：執行中 1 分 20 秒`. It is done when the CARD's `更新` changes; a sync that ends without changing it says so (`✕ 寫回 STATUS`) instead of quietly leaving 待同步. The outcome stays on screen for five minutes and is also a toast. While a job or a sync runs, the console refreshes every 20 seconds instead of every minute.
 
-With the menu open, one key runs an action on offer: `v` verify, `s` sync, `c` continue (still asks for the second press), `r` reply to the executor, `d` decide, `g` gate, `o` open STATUS.md, `p` open the pull request. The menu lists the keys that apply to that project; a key for an action not on offer does nothing.
+With the menu open, one key runs an action on offer: `v` verify, `s` sync, `c` continue (a second press with `confirmContinue: on`), `r` reply to the executor or retry, `d` decide, `g` gate, `a` auto-cycle, `x` stop the job, `t` take over the session, `o` open STATUS.md, `p` open the pull request, `f` Git files, `b` branch graph, `1`–`9` pick decision options. The menu lists the keys that apply to that project; a key for an action not on offer does nothing. Anywhere in the pane: `↑` `↓` (or `k` `j`) move, Enter selects, `m` opens or closes the action menu, `n` goes to the next thing waiting on you, Esc closes the menu.
 
 **Executor section.** An expanded card (the action menu, or the focused project of `↧ 各專案詳細`) has a 執行者 section with the same four lines as the executor digest. It is read when the card opens (`執行者：讀取中…` until then) and again only when the transcript changed; a card that is not open reads nothing.
 
@@ -364,7 +367,7 @@ A suggestion is offered when the way on changes, and again at the next refresh w
 
 With `activation: auto` (the default), a new session is light: it gets the command guard and the `/console` command, and nothing else. It runs no git, `gh`, `claude agents` or Codex probes, draws no band, adds nothing to the system prompt or to prompts, and shows no cache or update toasts. A quick side session, a `claude -p` run and a background executor stay that way.
 
-The first `/console` command in a session (any of them except `version`, `update` and `off`) starts the console there, and the session is remembered: resuming it or reloading plugins starts the console again without asking. `/console off` returns the session to light. Project mode also waits for `/console` in that session. Set `activation` to `always` for the behaviour before 0.6.0, where every session runs the console; non-interactive sessions and the executors the console dispatched (the sessions `claude-sessions.json` records) still stay light.
+The first `/console` command in a session (any of them except `add`, `version`, `update` and `off`) starts the console there, and the session is remembered: resuming it or reloading plugins starts the console again without asking. `/console off` returns the session to light. Project mode also waits for `/console` in that session. Set `activation` to `always` for the behaviour before 0.6.0, where every session runs the console; non-interactive sessions and the executors the console dispatched (the sessions `claude-sessions.json` records) still stay light.
 
 ## Pipeline and project mode
 
@@ -464,7 +467,7 @@ One line per version, newest first; see [CHANGELOG.md](CHANGELOG.md) or [GitHub 
 
 | Version | Highlights |
 | --- | --- |
-| 0.30 | `n` jumps to each thing waiting on you and `/console inbox` lists them; `/console add` adds a project in one command; projects left alone for days read `久未動` and are offered first (`staleDays`) |
+| 0.30 | `n` jumps to each thing waiting on you and `/console inbox` lists them; `/console add` adds a project in one command; projects left alone for days read `久未動` and are offered first (`staleDays`); 0.30.1 points a first run without a registry to `/console add`, leads the `/console` menu line with the common commands, and opens the README with a four-step quick start |
 | 0.29 | With a `驗證` on the CARD, `⟳ 自動接力` runs it between hops and stops on a failure; quota numbers more than 45 minutes old stop a cycle instead of braking on them; the usage table says how old Claude's windows are |
 | 0.28 | `confirmContinue: off` makes continue and retry one press; a Codex project's digest has its last words; the cache countdown in Chinese units (`快取 4分`); a claim another console overwrote is no longer lost; CI also runs the latest Claude Code |
 | 0.27 | An executor an error stopped (a lapsed login, a used-up quota) is no longer "waiting for you": the row says why and offers `↻ 重試`; new `■ 停止工作` (`x`) and `↗ 接手對話` (`t`, a new Windows Terminal tab) |

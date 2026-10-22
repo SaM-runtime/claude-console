@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.30.1
+
+- **A first run points to `/console add`.** With no registry yet, the pane said to build one by following the README. It now says that `/console add` in a project's folder makes the registry and adds the first project, or `/console demo` shows the pane first.
+- **The `/console` menu line leads with what a new user needs.** The typeahead's description starts with opening the pane, `add`, `demo` and `inbox`, then the project actions and the dispatch settings. The old one never named `add`, `inbox` or `executor`, and the typeahead cut it off before `demo`.
+- **README: a four-step quick start.** Install from inside Claude Code (`/plugin marketplace add`, `/plugin install`; it works at once, and Esc on the settings screen keeps every default), look at `/console demo`, run `/console add` in each project, then `/console` and the first next step. Settings change with `/plugin configure console-status@claude-console` or one line of `--values-stdin`, instead of a twelve-line block. The requirements name Linux and Claude Code 2.1.291 (the version CI tests), the action-menu keys are all listed (`a`, `x`, `t`, `f`, `b`, the digits, and `n`, `j`/`k` in the pane), and `add` is among the commands that leave a session light.
+
 ## 0.30.0
 
 - **`n`: the next thing waiting on you.** With many projects, what waits on you was spread over decisions, gates, syncs, failed CI and failed verifications in different rows. `n` in the pane now selects the next one, most urgent first, and opens its action menu with the right button on offer; pressing it again moves on, and past the last it starts over. The next-step card counts them (`共 3 件・n 下一件`), and `/console inbox` lists them as text, with sessions waiting at a prompt and projects left alone, for a phone or Remote Control.

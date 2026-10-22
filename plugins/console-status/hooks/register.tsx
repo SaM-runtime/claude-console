@@ -605,7 +605,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
     refreshConfig = config
     let error: string | null = null
     const registry = await io.fs.read(config.registryPath).catch(() => null) as string | null
-    if (registry === null) error = `找不到登錄表 ${config.registryPath}；依 README 建立（範例 workflow/projects-scope.example.md），或 /console demo 先看示範`
+    if (registry === null) error = `找不到登錄表 ${config.registryPath}：在專案資料夾輸入 /console add 就會建立並加入第一個專案，或 /console demo 先看示範`
     const registryRows = parseRegistry(registry ?? '', home).map(row => ({ row, root: projectRoot(row.statusPath) }))
     const effective = registryRows.map(({ row, root }) => effectiveDispatch(settings, root, row.executor))
     const codexInUse = settings.executor === 'codex' || effective.some(item => item.executor === 'codex')
@@ -1998,7 +1998,7 @@ export const register: Register = (on, options) => {
     await update($, continueConfirmations, () => ({}))
     await update($, fallbackOffers, () => ({}))
     await loadTrust($)
-    await $.command.register({ name: 'console', description: '主控台總覽：/console 開關面板；model / effort 派工設定；refresh 更新；reply <專案> <回覆> 回覆停下來問你的執行者；sync / continue / gate / verify <專案> 執行動作；cycle <專案> [off] 自動接力（一路按下去，停在需要你的地方）；band 橫帶；demo 示範；version 版本；update 更新外掛；off 這個對話關閉主控台' })
+    await $.command.register({ name: 'console', description: '主控台：/console 開關面板；add 加入這個資料夾的專案；demo 示範；inbox 列出在等你的事；reply <專案> <回覆> 回覆執行者；continue / sync / gate / verify <專案> 執行動作；cycle <專案> [off] 自動接力；model / effort / executor 派工設定；refresh 更新；update 更新外掛；off 這個對話關閉' })
     transcriptPath = null
     loadedVersion ??= manifestVersion(await Promise.resolve().then(() => $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)).catch(() => null))
     // A reload after an update starts a fresh check, which reads the newly installed manifest.
