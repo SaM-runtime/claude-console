@@ -7,7 +7,7 @@ const result = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', 
 
 /** A console over one project, with the host reporting the given rate-limit windows. */
 function fixture(on: any, rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[]) {
-  mock.clock(on, { now: NOW })
+  const clock = mock.clock(on, { now: NOW })
   mock.env(on, { USERPROFILE: 'C:/Users/example', LOCALAPPDATA: 'D:/Local' })
   on('fs.read', (_: any, e: any) => ({ value: e.path.endsWith('registry.md') ? '## STATUS 卡位置\n| Project Alpha | `D:/Project Alpha/.console/STATUS.md` |'
     : e.path.endsWith('STATUS.md') ? '<!-- CARD -->\n- 更新：2030-01-05 11:48\n- 狀態：示範\n- 等使用者：無\n- 下一步：無\n- 關卡：無\n<!-- /CARD -->'
@@ -18,6 +18,7 @@ function fixture(on: any, rateLimits: { kind: string; percentUsed: number; reset
   on('session.usage', () => ({ value: { context: { percent: 40 }, rateLimits } } as any))
   on('session.id', () => ({ value: 'console-session' }))
   on('ui.toast', () => ({ value: undefined }))
+  return clock
 }
 
 const OPTIONS = { options: { activation: 'always', registryPath: 'D:/Fixtures/registry.md', companionStateRoots: '["D:/State"]' } }
@@ -82,5 +83,28 @@ test('a window used faster than it refills says when it runs out; one that lasts
   // One hour into the five-hour window at 31%: the rest lasts about 2 h 14 min, the reset is 4 h away.
   expect(await ui.find({ type: 'Text', text: '・照目前速度約 2 小時 14 分後用完' })).toBeDefined()
   expect(JSON.stringify(await ui.drawn()).match(/照目前速度/g)?.length).toBe(1)
+  await ui.unmount()
+})
+
+// Sixteen minutes of the console's timers take a few seconds to run through.
+test('windows the console read a while ago say how old they are; fresh ones do not', { ...OPTIONS, timeoutMs: 15_000 }, async ($, on) => {
+  const clock = fixture(on, [{ kind: 'five_hour', percentUsed: 31, resetsAt: new Date(NOW + 4 * 3_600_000).toISOString() }])
+  // The console's own response carries the windows: that is when they were read.
+  on('turn.step', async function* (_: any, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn',
+      usage: { model: 'claude-opus-5-5', input_tokens: 2_000, output_tokens: 3_000, cache_read_input_tokens: 150_000, cache_creation_input_tokens: 45_000 } }
+  })
+  on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
+  const step = $.turn.step({ turnId: 't', index: 0, model: 'claude-opus-5-5', messageCount: 3 } as any)
+  for await (const _ of step) { /* drain */ }
+  await $.turn.complete({ turnId: 't', answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' } as any)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  let ui = await $.ui.mount(pane('terminal'))
+  expect(JSON.stringify(await ui.drawn()).includes('讀到')).toBe(false)
+  await ui.unmount()
+  await clock.advance(16 * 60_000)
+  await $.command.run({ command: 'console', args: 'refresh' } as any)
+  ui = await $.ui.mount(pane('terminal'))
+  expect(JSON.stringify(await ui.drawn()).includes('16 分鐘前讀到')).toBe(true)
   await ui.unmount()
 })

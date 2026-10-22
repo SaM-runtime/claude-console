@@ -153,6 +153,8 @@ export type Snapshot = {
   /** What this console session has cost so far (USD at API prices), when the host keeps a ledger. */
   costUsd?: number
   limits?: { kind: string; percent: number; resetsAt?: string }[]
+  /** When the console read those windows: its last API response (they come with it), when known. */
+  limitsAt?: number
   /** Codex quota from its newest session log: windows, credit balance, when it was read. */
   codexQuota?: { at: string; limits: { label: string; percent: number; resetsAt?: string }[]; credits?: string } | null
   /** Some project resolves to codex, so Codex probes, health and quota are shown. */
