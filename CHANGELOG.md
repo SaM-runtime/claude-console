@@ -8,6 +8,7 @@
 - **An executor that stopped to ask is not announced as done.** Its toast and feed line said `執行者 完成（<job id>），狀態卡待更新`; they now say `執行者停下來等你回覆`, in amber. Toasts no longer carry the internal job id.
 - **A new project's first dispatch says what to do.** Claude Code refuses to start a background session in a folder it was never trusted in, and the feed showed its English line cut off (`✕ Workspace not trusted. Run …`). It now reads `專案資料夾還沒在 Claude Code 信任過：先在那裡開一次 claude、選「信任」，再派工（<folder>）`.
 - `✎ 填入決策` no longer shows `：1：` before any option is picked.
+- **A running Claude job's latest line is what it said, not the screen.** The line beside a running job comes from `claude logs`, a replay of the executor's screen, and it often showed the screen's own furniture: the prompt `❯`, a spinner, or hints with letters lost to cursor moves (`?shorcuts`). It now shows the newest reply, tool call or tool result (`Bash(npm test)`, `Invalid API key · Fix external API key`), and words a cursor move skipped over keep their space.
 
 ## 0.25.1
 

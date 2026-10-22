@@ -143,6 +143,20 @@ function lastMeaningfulLine(text: string): string {
   return (lines.pop() ?? '').replace(/^\[[^\]]*\]\s*/, '').slice(0, 80)
 }
 
+/** A replayed Claude Code screen's own furniture: the spinner, the prompt, the hints under it. */
+const SCREEN_CHROME = /^[\s❯›>✻✶✢✳✽✺·*•]*$|esc to interrupt|for shortcuts|\bmode on\b|for agents/i
+
+/**
+ * What a replayed Claude Code screen (`claude logs`) last says: its newest `●` line (a reply or a tool call)
+ * or `⎿` line (a tool's result), else the last line that is not the screen's own furniture.
+ */
+export function claudeLogLine(text: string): string {
+  const lines = terminalLines(text).map(line => line.trim()).filter(Boolean)
+  const said = lines.filter(line => /^[●⎿]/.test(line)).pop()
+  if (said) return said.replace(/^[●⎿]\s*/, '').slice(0, 80)
+  return lastMeaningfulLine(lines.filter(line => !SCREEN_CHROME.test(line)).join('\n'))
+}
+
 function parseCompanionId(stdout: string): string | null {
   try {
     const value = JSON.parse(stdout.trim())
@@ -559,7 +573,7 @@ function createClaude(deps: ExecutorDeps, config: ExecutorConfig): Executor {
       if (!nativeId) return ''
       const result = await deps.run(['claude', 'logs', nativeId], { timeoutMs: 60_000 })
       if (result.exitCode !== 0) throw new Error(lastMeaningfulLine(`${result.stdout}\n${result.stderr}`) || `Claude logs failed (exit ${result.exitCode}).`)
-      return lastMeaningfulLine(result.stdout)
+      return claudeLogLine(result.stdout)
     },
   }
 }
