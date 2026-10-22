@@ -86,8 +86,11 @@ export function digestLines(job: DigestJob | null, daemon: DaemonRecord | null, 
   const at = parsed.lastAt ? Date.parse(parsed.lastAt) : NaN
   const minutes = Number.isFinite(at) ? Math.max(0, Math.floor((now - at) / 60_000)) : null
   const words = oneLine(parsed.lastText)
+  const state = daemon?.state || job?.phase || '?'
+  // A finished turn the daemon still calls blocked ended on a question to the user, not at a permission prompt.
+  const stateText = job?.status === 'completed' && /^blocked\b/i.test(state) ? '等你回覆' : phaseText(state)
   return [
-    `執行者：${name} · ${job?.kind ? jobKindText(job.kind) : '-'} · ${job?.status ? phaseText(job.status) : '?'}／${phaseText(daemon?.state || job?.phase || '?')}`,
+    `執行者：${name} · ${job?.kind ? jobKindText(job.kind) : '-'} · ${job?.status ? phaseText(job.status) : '?'}／${stateText}`,
     parsed.lastAt ? `最後活動：${parsed.lastAt} （${minutes ?? '?'} 分鐘前）` : '最後活動：無',
     parsed.tools.length ? `最後動作：${parsed.tools.join(' → ')}` : '最後動作：無',
     words ? `最後一句：${words.length > 400 ? `…${words.slice(-399)}` : words}` : '最後一句：無',

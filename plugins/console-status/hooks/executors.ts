@@ -417,6 +417,44 @@ export async function codexHasThread(deps: Pick<ExecutorDeps, 'run'>, config: Pi
 }
 
 /**
+ * The API error that ended a Claude session's last turn, read from its transcript: Claude Code writes such a
+ * turn as an assistant entry marked `isApiErrorMessage`, with an `error` code and the message it showed.
+ * Null when the last assistant entry is an ordinary reply (a real question to the user).
+ */
+export function transcriptApiError(text: string): { code: string; message: string } | null {
+  const rows = text.split(/\r?\n/)
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]!.trim()
+    if (!row || !row.includes('"assistant"')) continue
+    let entry: any
+    try { entry = JSON.parse(row) } catch { continue }
+    if (entry?.type !== 'assistant') continue
+    if (entry.isApiErrorMessage !== true) return null
+    const content = Array.isArray(entry.message?.content) ? entry.message.content : []
+    const message = content.map((block: any) => typeof block?.text === 'string' ? block.text : '').join(' ').replace(/\s+/g, ' ').trim()
+    return { code: typeof entry.error === 'string' ? entry.error : String(entry.apiErrorStatus ?? ''), message }
+  }
+  return null
+}
+
+/**
+ * That error in words the person can act on: a lapsed login, a used-up quota (with its reset when the
+ * message names one), or the service's own message. `needs` is the daemon's note for a session that stopped.
+ */
+export function executorErrorText(error: { code: string; message: string } | null, needs = ''): string | null {
+  const text = `${error?.code ?? ''} ${error?.message ?? ''} ${error ? '' : needs}`
+  if (!error && !/login required|run \/login/i.test(needs)) return null
+  if (/invalid api key|external api key/i.test(text)) return 'API key 無效（先檢查金鑰設定）'
+  if (/authentication|unauthori[sz]ed|login required|run \/login|oauth|\b401\b|\b403\b/i.test(text)) return '登入失效（先在終端機重新登入）'
+  if (/rate.?limit|usage limit|hit your (?:usage )?limit|limit reached|quota|\b429\b/i.test(text)) {
+    const reset = /resets?\s+(?:at\s+)?([^·.。]+)/i.exec(error?.message ?? '')?.[1]?.trim()
+    return reset ? `額度用完（${reset} 重置）` : '額度用完'
+  }
+  const said = (error?.message || error?.code || '').slice(0, 60)
+  return said ? `服務出錯：${said}` : '服務出錯'
+}
+
+/**
  * Whether a finished turn's last words wait on the user: a question, or a request for permission or a choice.
  * Read only from the final line, so a question asked and answered earlier in the turn does not count.
  */

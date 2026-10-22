@@ -114,6 +114,8 @@ export function cyclePlan(project: Project, state: State, run: CycleRun, now: nu
   if (isManual(project)) return { stop: '手動交接的專案不接力' }
   // An executor that ended its turn on a question waits for you, whatever the row shows: rows() ranks a gate
   // above it, so a GATE row can hide one, and a gate hop then would answer past the question.
+  const failed = project.jobs.find(job => job.kind === 'newer' && job.asks && job.error)
+  if (failed) return { stop: `執行者出錯：${failed.error}` }
   if (project.jobs.some(job => job.kind === 'newer' && job.asks)) return { stop: '執行者在等你回覆' }
   // A gate hop waits for its review turn, and a gate the console left in place is not sent a second time.
   if (options.gatePending) return { wait: '等回合' }
@@ -122,7 +124,8 @@ export function cyclePlan(project: Project, state: State, run: CycleRun, now: nu
   if (state === 'ACTION' || hasAsk(project)) return { stop: '等你決定／回覆' }
   if (gate?.kind === 'release') return { stop: '到 release 關卡，等你核准' }
   if (gate && gate.kind === 'unknown') return { stop: '關卡無法辨識' }
-  if (project.jobs.some(job => job.kind === 'newer' && (job.status === 'failed' || job.status === 'cancelled'))) return { stop: '工作失敗' }
+  const ended = project.jobs.find(job => job.kind === 'newer' && (job.status === 'failed' || job.status === 'cancelled'))
+  if (ended) return { stop: ended.status === 'cancelled' ? '工作已停止' : '工作失敗' }
   if (state === 'RUNNING' || dispatchBlockReason(project)) return { wait: '等執行者' }
   let action: 'continue' | 'gate' | 'sync' | null = null
   if (state === 'SYNC') {

@@ -9,7 +9,43 @@ export const ACTION_LABEL: Record<ActionKind, string> = {
 }
 
 export function actionLabel(kind: ActionKind, project: Project): string {
+  if (kind === 'reply' && askingError(project)) return '↻ 重試'
   return kind === 'gate' && parseGate(project.gate)?.kind === 'release' ? '⚑ 最終審核' : ACTION_LABEL[kind]
+}
+
+/** The API error that ended the asking executor's turn, in words, when that is why it stopped. */
+export const askingError = (project: Project): string | undefined =>
+  project.jobs.find(job => job.kind === 'newer' && job.asks && job.error)?.error
+
+/** What ↻ 重試 sends to an executor whose turn an API error cut short. */
+export const RETRY_REPLY = '上一輪被錯誤中斷，現在重試：請從中斷的地方繼續。'
+
+/** The second-press signature of ↻ 重試: the asking job it resumes. */
+export const retrySignature = (project: Project): string =>
+  `retry:${project.jobs.filter(job => job.kind === 'newer' && job.asks && job.error).map(job => job.id).join(',')}`
+
+/** The second-press signature of ■ 停止工作: the running jobs it stops, so a job that starts meanwhile needs a new press. */
+export const stopSignature = (project: Project): string =>
+  `stop:${project.jobs.filter(job => job.kind === 'running').map(job => job.id).join(',')}`
+
+/**
+ * The background session ↗ 接手對話 attaches to: a running Claude job (at a permission prompt, or only to watch
+ * it), else the Claude job that stopped to ask. Codex jobs have no session to attach to.
+ */
+export function attachTarget(project: Project): string | undefined {
+  const claude = (job: Project['jobs'][number]) => job.executor !== 'codex' && !!job.nativeId
+  return (project.jobs.find(job => job.kind === 'running' && claude(job)) ?? project.jobs.find(job => job.kind === 'newer' && job.asks && claude(job)))?.nativeId
+}
+
+/** `claude attach` in a new Windows Terminal tab, in the project's folder; `cmd /k` finds claude.cmd or claude.exe and keeps an error on screen. */
+export function attachTabArgs(root: string, nativeId: string): string[] {
+  return ['wt', '-w', '0', 'new-tab', '-d', root.replace(/\//g, '\\'), 'cmd', '/k', 'claude', 'attach', nativeId]
+}
+
+/** How ■ 停止工作 stops one running job: `claude stop`, or the Codex companion's cancel; null when it cannot yet. */
+export function stopArgs(job: Project['jobs'][number], companionScript: string, root: string): string[] | null {
+  if (job.executor === 'codex') return companionScript ? ['node', companionScript, 'cancel', job.id, '--cwd', root, '--json'] : null
+  return job.nativeId ? ['claude', 'stop', job.nativeId] : null
 }
 
 export function dispatchBlockReason(project: Project): string {
@@ -248,7 +284,7 @@ export function suggestedPrompt(s: Snapshot, pending: Record<string, unknown> = 
     if (!p) return null
     const kinds = actionKinds(p, urgent.state)
     if (kinds.includes('decide')) return `「${p.name}」決策：`
-    if (kinds.includes('reply')) return `/console reply ${p.name} `
+    if (kinds.includes('reply')) return `/console reply ${p.name} ${askingError(p) ? RETRY_REPLY : ''}`
     if (kinds.includes('gate')) return `/console gate ${p.name}`
     if (kinds.includes('sync')) return `/console sync ${p.name}`
     return null

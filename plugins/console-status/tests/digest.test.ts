@@ -53,6 +53,9 @@ test('(d) the digest is always four lines: executor, last activity, last three a
     `最後動作：Bash: npm test -- --watch=false → Edit: D:/Project Alpha/b.ts → Bash: echo ${'x'.repeat(75)}`,
     '最後一句：測試全過。 CARD 已更新，關卡留無。',
   ])
+  // A finished turn left blocked asked the user something; one still running at a prompt waits for approval.
+  expect(digestLines({ id: 'j', status: 'completed' }, { state: 'blocked' }, parsed, NOW)[0]).toBe('執行者：j · - · 完成／等你回覆')
+  expect(digestLines({ id: 'j', status: 'running' }, { state: 'blocked' }, parsed, NOW)[0]).toBe('執行者：j · - · 執行中／等批准')
   const empty = digestLines({ id: 'j' }, null, parseTranscript(''), NOW)
   expect(empty).toEqual(['執行者：j · - · ?／?', '最後活動：無', '最後動作：無', '最後一句：無'])
   const long = digestLines({ id: 'j' }, null, parseTranscript(say('2030-01-05T11:59:00Z', 'z'.repeat(1000))), NOW)
