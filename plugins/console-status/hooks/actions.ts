@@ -339,3 +339,17 @@ export function commandTarget<P extends { name: string }>(projects: P[], rest: s
   const prefix = projects.filter(p => p.name.toLowerCase().startsWith(word.toLowerCase()))
   return prefix.length === 1 ? { project: prefix[0]!, text: text.slice(word.length).trim() } : null
 }
+
+/**
+ * What a command answers when `commandTarget` found no project: the projects its first word could mean when it
+ * starts more than one name, else that no project has it; '' with no name typed.
+ */
+export function missingTarget<P extends { name: string }>(projects: P[], rest: string): string {
+  const text = rest.trim()
+  const word = text.split(/\s+/)[0] ?? ''
+  if (!word) return ''
+  const matches = projects.filter(p => p.name.toLowerCase().startsWith(word.toLowerCase()))
+  return matches.length > 1
+    ? `「${word}」可能是 ${matches.map(p => p.name).join('、')}；請打完整的專案名稱。`
+    : `找不到專案「${text}」。`
+}

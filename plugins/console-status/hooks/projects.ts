@@ -87,14 +87,20 @@ function headOf(lines: string[], title: string): string[] {
   return head.length === 2 ? head : TABLE
 }
 
+/** A row's STATUS path as the console reads it (`~` expanded, slashes forward), compared without case. */
+const samePath = (raw: string | null, statusPath: string, home: string) =>
+  raw !== null && raw.replace(/^~/, home).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === statusPath.replace(/\/+$/, '').toLowerCase()
+
 /**
  * The registry with the project `name` moved from the `STATUS 卡位置` table to the `## 已封存` section (made at the
- * end of the file, with the same header, when missing). Null when the table has no such project.
+ * end of the file, with the same header, when missing). Its `statusPath`, when given, finds the row first: the pane
+ * numbers a name the registry uses twice (`api 2`). Null when the table has no such project.
  */
-export function registryArchive(text: string, name: string): string | null {
+export function registryArchive(text: string, name: string, statusPath?: string, home = ''): string | null {
   const file = toLines(text)
   const main = section(file.lines, 'STATUS 卡位置')
-  const at = main ? tableAt(file.lines, main).find(i => rowName(file.lines[i]!) === name) : undefined
+  const rows = main ? tableAt(file.lines, main) : []
+  const at = (statusPath ? rows.find(i => samePath(rowPath(file.lines[i]!), statusPath, home)) : undefined) ?? rows.find(i => rowName(file.lines[i]!) === name)
   if (at === undefined) return null
   const head = headOf(file.lines, 'STATUS 卡位置')
   const [row] = file.lines.splice(at, 1)

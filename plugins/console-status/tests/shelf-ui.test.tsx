@@ -133,7 +133,7 @@ test('back after awayMinutes, the pane and the band sum up what happened; ✓ �
   await h.clock.advance(4 * MIN)
   expect(await ui.find({ type: 'Text', text: '◷ 你離開的 6 分鐘裡' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '1 件新的等你處理・狀態卡更新 1 次' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '· Project　新的決策項目' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '· Project Delta　新的決策項目' })).toBeDefined()
   const band = await $.ui.mount(BAND)
   expect(await band.find({ type: 'Text', text: '◷ 離開期間 2 則' })).toBeDefined()
   await band.unmount()
@@ -142,8 +142,8 @@ test('back after awayMinutes, the pane and the band sum up what happened; ✓ �
   const inbox = ((await $.command.run({ command: 'console', args: 'inbox' } as any)) as any).text as string
   expect(inbox.split('\n').slice(0, 3)).toEqual([
     '你離開的 6 分鐘裡：1 件新的等你處理・狀態卡更新 1 次',
-    '・Project：新的決策項目（5 分鐘前）',
-    '・Project：STATUS 已更新（5 分鐘前）',
+    '・Project Delta：新的決策項目（5 分鐘前）',
+    '・Project Alpha：STATUS 已更新（5 分鐘前）',
   ])
   await h.clock.advance(MIN)
   expect(await ui.find({ type: 'Text', text: '◷ 你離開的 6 分鐘裡' })).toBeDefined()

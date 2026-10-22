@@ -165,6 +165,8 @@ export type Snapshot = {
   codexQuota?: { at: string; limits: { label: string; percent: number; resetsAt?: string }[]; credits?: string } | null
   /** Projects in the registry's `## 已封存` section: not refreshed, listed at the bottom of the pane to bring back. */
   archived?: { name: string; statusPath: string }[]
+  /** What the console changed or cannot tell apart in the registry (a name used twice, folders with one name), for the pane. */
+  notes?: string[]
   /** Some project resolves to codex, so Codex probes, health and quota are shown. */
   codexInUse?: boolean
   /** Which codex-companion.mjs dispatch uses, and a warning when the configured one was stale. */
@@ -197,7 +199,8 @@ declare module 'claude-code' {
       decisionPicks: Record<string, DecisionPicks>
       dispatchPicker: 'executor' | 'model' | 'effort' | null
       selected: string | null
-      cursor: number
+      /** The project the keyboard's row cursor is on (a name, so a refresh that reorders the rows keeps it). */
+      cursorAt: string | null
       feed: FeedEvent[]
       dispatchRevision: number
       pendingActions: Record<string, PendingAction>

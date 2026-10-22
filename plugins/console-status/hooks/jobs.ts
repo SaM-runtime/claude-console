@@ -65,6 +65,15 @@ function stateJobs(text: string, stateDir: string): { job: Job; updatedAt: numbe
 }
 
 /**
+ * A companion workspace directory of the project folder `base`: `<base>-<hash>`, the hash one token (16 hex), so
+ * `api` does not take `api-gateway-<hash>`.
+ */
+export function workspaceOf(dir: string, base: string): boolean {
+  const prefix = base.toLowerCase() + '-'
+  return dir.toLowerCase().startsWith(prefix) && /^[^-]+$/.test(dir.slice(prefix.length))
+}
+
+/**
  * Read all companion state roots in priority order. A workspace directory is
  * `<project basename>-<hash>`. Duplicate job ids use the newest updatedAt;
  * equal or missing timestamps retain the earlier root's copy.
@@ -78,7 +87,7 @@ export async function readJobs(files: JobFiles, roots: string[], projectRoot: st
     if (!root) continue
     const entries = await files.list(root).catch(() => [])
     for (const entry of entries) {
-      if (entry?.kind !== 'dir' || typeof entry.name !== 'string' || !entry.name.toLowerCase().startsWith(base.toLowerCase() + '-')) continue
+      if (entry?.kind !== 'dir' || typeof entry.name !== 'string' || !workspaceOf(entry.name, base)) continue
       const stateDir = `${root}/${entry.name}`
       const text = await files.read(`${stateDir}/state.json`).catch(() => null)
       if (typeof text !== 'string' || !text.trim()) { stateFormatIssues.delete(`${stateDir}/state.json`); continue }

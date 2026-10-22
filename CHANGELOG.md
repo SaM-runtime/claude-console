@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.32.2
+
+Fixes for a console with many projects.
+
+- **The keyboard cursor stays on its project.** It kept a row number, so when a refresh moved rows (a project starting to wait on you goes to the top), `m`, Enter and the detail view's focus landed on whichever project had slid into that place. It now keeps the project and moves from wherever that project is.
+- **Projects whose names start alike are told apart.** Feed lines, toasts, the band and the while-away digest wrote a project by its first word, so `Project Alpha` and `Project Beta` both read `Project`. A short name now takes as many words as it needs (`api gateway` beside `api`), up to the whole name; a commit attached from the branch graph carries the whole name into the prompt.
+- **A command never picks one of several projects by itself.** `/console project executor manual a` set whichever project came first among those starting with `a`; it now answers `「a」可能是 api-gateway、api、auth；請打完整的專案名稱。` and changes nothing. The project actions, `cycle`, `pin` and `archive` say the same instead of `找不到專案`.
+- **A name the registry lists twice is numbered.** Two rows named `api` made one of them impossible to select, open or command. The second now shows as `api 2`, with `⚠ 登錄表有兩個專案叫 api，第二個先顯示成「api 2」；改登錄表的名稱就好` under the project list; a STATUS file listed twice shows once. Archiving a numbered project moves its own row, found by its STATUS path, and says the name to bring it back by.
+- **`api` no longer takes `api-gateway`'s Codex jobs.** A project read every companion workspace whose folder name started with its own, so its row could show another project's running job and lock its dispatch. It now reads only `<folder>-<hash>`. Two projects in folders of one name still cannot be told apart: with Codex in use the pane says so under the project list, and `/console add` says so when it adds such a folder.
+- **One refresh shows three toasts at most.** A refresh that found many changes at once (back from sleep, several decisions arriving together) sent a toast for each, and the terminal dropped some before they were drawn (`a toast left the stack before it was ever drawn`). Past three, the third now reads `另有 N 則更新，見主控台動態`; every change is still in the feed.
+
 ## 0.32.1
 
 - **Windows: a Claude dispatch reaches its executor whole.** Where `claude` is npm's `claude.cmd` (the npm install), Claude Code runs it through cmd.exe, which ends an argument at its first line break and splits it at `&`. A dispatch prompt is several lines, so the executor got only its first line, without the STATUS path, the rules or the job code it is meant to write back, and a reply holding `"A & B"` was cut at the `&`. On Windows the prompt now goes to `claude --bg` on standard input, which reaches the session whole whether `claude` is `claude.cmd` or a native `claude.exe`. macOS and Linux keep passing it as the last argument.
