@@ -2,9 +2,9 @@
 
 **在 Claude Code 裡同時顧好幾個專案的主控台。** 一個面板看完每個專案卡在哪、在等誰；決策用按的、派工一鍵、Git／PR／CI 與額度都在旁邊，不用切視窗。
 
-<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" alt="claude-console 示範：/console demo 開啟主控台，右鍵動作選單、數字鍵作答、填入決策、各專案詳細卡片" width="900"></a></p>
-<p align="center"><a href="docs/demo.mp4">▶ 觀看 45 秒示範影片（MP4）</a> · <a href="#版本紀錄">版本紀錄</a> · <a href="README.en.md">English</a></p>
-<p align="center"><sub>Claude Code 2.1.294 與 console-status 0.15.0 在終端機中的實際畫面（tmux 逐格擷取後轉成影片），資料來自 <code>/console demo</code>；下方字幕與滑鼠指標為後製加上。</sub></p>
+<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" alt="claude-console 示範：/console demo 開啟主控台，按 n 逐件打開等你的事、數字鍵做決策並填入輸入框；接著換成五個真的 Git 專案，看分支圖、提交詳情與 ⟳ 自動接力" width="900"></a></p>
+<p align="center"><a href="docs/demo.mp4">▶ 觀看 65 秒示範影片（MP4）</a> · <a href="#版本紀錄">版本紀錄</a> · <a href="README.en.md">English</a></p>
+<p align="center"><sub>Claude Code 2.1.308 與 console-status 0.32.0 在終端機中的實際畫面（tmux 逐格擷取後轉成影片）。前半段是 <code>/console demo</code> 的示範資料，後半段是<a href="scripts/demo-video">錄影腳本</a>建立的五個 Git 專案；下方字幕與滑鼠指標為後製加上，錄影環境自己的啟動警告也拿掉了。</sub></p>
 
 ## 快速開始
 

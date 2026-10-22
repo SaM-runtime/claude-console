@@ -14,6 +14,7 @@ const start = Date.now()
 const frames = []
 let pointer = null // {x, y, down, button}
 let last = ''
+let shot = null // when the README still is taken (ms), set by a step's a.shot()
 function grab() {
   const screen = tmux('capture-pane', '-t', T, '-e', '-N', '-p')
   const key = screen + JSON.stringify(pointer)
@@ -67,12 +68,15 @@ const api = {
   moveTo, click,
   clickText: async (text, o = {}) => { const p = find(text, o); await click(p.x + (o.dx ?? 1), p.y, o.button ?? 0) },
   hoverText: async (text, o = {}) => { const p = find(text, o); await moveTo(p.x + (o.dx ?? 1), p.y) },
+  /** Mouse wheel over (x, y): `n` notches, down unless `up`. */
+  wheel: async (x, y, n, up = false, ms = 45) => { await moveTo(x, y, 300); for (let i = 0; i < n; i++) { mouse(up ? 64 : 65, x, y); await sleep(ms) } },
   hide: () => { pointer = null },
+  shot: () => { shot = Date.now() - start },
   find,
 }
 const marks = []
 for (const step of steps) { marks.push({ t: Date.now() - start, label: step.name }); await step.run(api) }
 clearInterval(timer)
 grab()
-fs.writeFileSync(out, JSON.stringify({ cols, rows, end: Date.now() - start, marks, frames }))
+fs.writeFileSync(out, JSON.stringify({ cols, rows, end: Date.now() - start, marks, frames, shot }))
 console.log(`${frames.length} frames, ${((Date.now() - start) / 1000).toFixed(1)}s`)

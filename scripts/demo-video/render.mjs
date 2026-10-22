@@ -103,7 +103,9 @@ function rowHtml(row) {
     if (c.d) st.push('opacity:.6')
     if (c.i) st.push('font-style:italic')
     if (c.u || c.s) st.push(`text-decoration:${c.u ? 'underline' : ''} ${c.s ? 'line-through' : ''}`)
-    html += `<i class="${c.w === 2 ? 'w' : 'c'}" style="${st.join(';')}">${c.ch === ' ' ? '&nbsp;' : esc(c.ch)}</i>`
+    // Box-drawing and block glyphs stretch to the full row, as a terminal draws them, so lines meet across rows.
+    const box = /[\u2500-\u259f]/.test(c.ch)
+    html += `<i class="${c.w === 2 ? 'w' : 'c'}${box ? ' x' : ''}" style="${st.join(';')}">${c.ch === ' ' ? '&nbsp;' : esc(c.ch)}</i>`
   }
   return `<div class="r">${html}</div>`
 }
@@ -118,7 +120,7 @@ html,body{margin:0;background:#1b1f27}
 #term{position:relative;padding:10px 12px;font:15px/${LH}px "DejaVu Sans Mono","WenQuanYi Zen Hei Mono",monospace;width:${cols * CW}px;height:${rows * LH}px;box-sizing:content-box}
 .r{height:${LH}px;white-space:pre;display:flex}
 i{font-style:normal;display:inline-block;height:${LH}px;overflow:visible;text-align:left}
-i.c{width:${CW}px} i.w{width:${2 * CW}px;font-family:"WenQuanYi Zen Hei Mono",monospace;font-size:17px;letter-spacing:-.5px}
+i.c{width:${CW}px} i.x{transform:scaleY(1.1)} i.w{width:${2 * CW}px;font-family:"WenQuanYi Zen Hei Mono",monospace;font-size:17px;letter-spacing:-.5px}
 #ptr{position:absolute;width:22px;height:22px;pointer-events:none;z-index:9;filter:drop-shadow(0 1px 2px rgba(0,0,0,.7))}
 #ring{position:absolute;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;border:2px solid rgba(255,214,102,.95);background:rgba(255,214,102,.18);z-index:8;display:none}
 #cap{position:absolute;left:28px;right:28px;height:44px;display:flex;align-items:center;justify-content:center;font:600 18px "WenQuanYi Zen Hei","DejaVu Sans",sans-serif;color:#e8e8e8;letter-spacing:.5px}

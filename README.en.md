@@ -2,9 +2,9 @@
 
 **A console for keeping several projects moving from inside Claude Code.** One pane shows where every project stands and who it is waiting on; decisions are pressed, dispatch is one button, and Git, PR, CI and quota sit beside them, so you don't switch windows.
 
-<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" alt="claude-console demo: /console demo opens the console, then the right-click action menu, decisions answered with number keys, the filled decision, and the per-project detail cards" width="900"></a></p>
-<p align="center"><a href="docs/demo.mp4">▶ Watch the 45-second demo (MP4)</a> · <a href="#version-history">Version history</a> · <a href="README.md">繁體中文</a></p>
-<p align="center"><sub>The real screen of Claude Code 2.1.294 with console-status 0.15.0 in a terminal (captured frame by frame with tmux, then encoded), showing <code>/console demo</code> data; the captions and mouse pointer were added afterwards.</sub></p>
+<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" alt="claude-console demo: /console demo opens the console, n opens what waits on you one by one, number keys answer a decision and fill it into the prompt; then five real Git projects with the branch graph, a commit's details and ⟳ auto-cycle" width="900"></a></p>
+<p align="center"><a href="docs/demo.mp4">▶ Watch the 65-second demo (MP4)</a> · <a href="#version-history">Version history</a> · <a href="README.md">繁體中文</a></p>
+<p align="center"><sub>The real screen of Claude Code 2.1.308 with console-status 0.32.0 in a terminal (captured frame by frame with tmux, then encoded). The first half shows <code>/console demo</code> data, the second half five Git projects the <a href="scripts/demo-video">recording script</a> builds; the captions and mouse pointer were added afterwards, and the recording host's own startup warnings removed.</sub></p>
 
 ## Quick start
 
