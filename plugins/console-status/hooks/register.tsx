@@ -45,7 +45,7 @@ import { layoutBand } from './band'
 import { ALIVE_MS, claim, claimBlocker, heartbeat, leave, parseLease, syncsHere, type Lease } from './lease'
 import { advanceSync, cardStamp, autoSyncPlan, autoSyncMode, bandSync, isSyncEnded, syncChip, syncStatus, syncStepsText } from './sync'
 import type { SyncProgress, ExecutorDigest, CycleRun } from '../types'
-import { CYCLE_MAX_AGE_MS, cardRev, cycleChip, cycleMaxHops, cyclePlan, cycleQuotaStop, hopDetail, newCycleRun, quotaBrake, storedCycles } from './cycle'
+import { CYCLE_MAX_AGE_MS, cardRev, cycleChip, cycleMaxHops, cycleMaxRunning, cyclePlan, cycleQueue, cycleQuotaStop, hopDetail, newCycleRun, queueReason, quotaBrake, runningPaths, storedCycles } from './cycle'
 import { DIGEST_NONE, DIGEST_TIMEOUT, PROMPT_DIGEST_MS, READ_LIMIT, codexDigestLines, digestContext, digestSource, loadDigest } from './digest'
 import type { DigestCache, DigestIo, DigestResult } from './digest'
 
@@ -1446,10 +1446,6 @@ async function unarchiveProject($: any, options: PluginOptions, words: string): 
 }
 
 /**
- * ⟳ on a project: arm its cycle (the first hop goes out at the next refresh), or stop it. Work already running
- * is not touched. Returns what happened, for a command's answer.
- */
-/**
  * ■ 停止工作: after a second press, stops the project's running jobs (`claude stop`, the Codex companion's cancel)
  * and ends this console's relay on it, so a stuck or wrong-way job no longer locks the project.
  */
@@ -1590,7 +1586,13 @@ async function addProject($: any, options: PluginOptions, words: string): Promis
   ].join('\n')
 }
 
-async function toggleCycle($: any, options: PluginOptions, p: Project, want?: boolean): Promise<string> {
+/**
+ * ⟳ on a project: arm its cycle (the first hop goes out at the next refresh), or stop it. Work already running
+ * is not touched. `steps` caps this relay (`/console cycle <專案> <步數>`; on a relay already armed, that many
+ * more); `once` is ⟳ 做完再接一步, one step after the running work, its sync counted when auto-sync is off.
+ * Returns what happened, for a command's answer.
+ */
+async function toggleCycle($: any, options: PluginOptions, p: Project, want?: boolean, how: { steps?: number; once?: boolean } = {}): Promise<string> {
   const name = await shortOf($, p.name)
   if (await demoEnabled($)) { $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。'); return '示範資料不接力' }
   const runs = await loadCycles($)
@@ -1609,6 +1611,14 @@ async function toggleCycle($: any, options: PluginOptions, p: Project, want?: bo
     await cycleNotice($, `⟳ ${name} 接力已停止（第 ${run.hops} 跳；進行中的工作不中斷）`, 'amber', true, 'cycle-stop')
     return `${name}：接力已停止`
   }
+  const steps = how.steps === undefined ? undefined : cycleMaxHops(how.steps)
+  if (run && steps !== undefined) {
+    // A relay already going: this many more hops from where it is, then it stops.
+    const max = run.hops + steps
+    await saveCycle($, p.statusPath, current => current && mine(current, me) ? { ...current, max } : current)
+    await cycleNotice($, `⟳ ${name} 接力改成再 ${steps} 跳就停（已送 ${run.hops} 跳）`, 'teal', false)
+    return `${name}：接力改成再 ${steps} 跳就停（⟳ ${run.hops}/${max}）`
+  }
   if (run) return `${name}：已在接力（${cycleChip(run)}）`
   const s = await read($, snapshot)
   const state = s ? rows(s).find(r => r.full === p.name)?.state : undefined
@@ -1616,17 +1626,30 @@ async function toggleCycle($: any, options: PluginOptions, p: Project, want?: bo
   const brake = quotaBrake(s?.limits, quotaStop, await $.clock.now(), s?.limitsAt)
   const refused = isManual(p) ? '手動交接的專案不接力' : !p.hasCard ? '找不到狀態卡' : state === 'ACTION' ? '先處理等你決定／回覆的事' : brake ?? ''
   if (refused) { $.ui.toast(`${name}：${refused}`); return `${name}：${refused}` }
-  const max = cycleMaxHops((options as any).cycleMaxHops)
+  const syncHops = autoSyncMode((options as any).autoSync) === 'off'
+  const max = how.once ? (syncHops ? 2 : 1) : steps ?? cycleMaxHops((options as any).cycleMaxHops)
   const now = await $.clock.now()
-  await saveCycle($, p.statusPath, () => newCycleRun(now, max, me))
+  // Under cycleMaxRunning it may have to wait for a turn: say so now, not at the next refresh.
+  const limit = cycleMaxRunning((options as any).cycleMaxRunning)
+  const names = s?.projects.map(item => item.name) ?? []
+  const nameOf = (path: string) => { const item = s?.projects.find(q => q.statusPath === path); return item ? shortName(item.name, names) : path }
+  const fresh = newCycleRun(now, max, me)
+  const spot = cycleQueue({ ...runs, [p.statusPath]: fresh }, runningPaths(s?.projects ?? [], await read($, pendingActions)), limit)[p.statusPath]
+  const queued = spot ? { place: spot.place, why: queueReason(spot, nameOf) } : undefined
+  await saveCycle($, p.statusPath, () => queued ? { ...fresh, queued } : fresh)
   // The brake reads the 5-hour window from this console's own responses; with none yet it has nothing to stop on.
   const blind = quotaStop !== null && !(s?.limits ?? []).some((l: { kind: string }) => parseLimitKind(l.kind)?.window === 'five_hour')
   const brakeText = quotaStop === null ? '' : blind ? `，額度煞車目前讀不到 Claude 5 小時額度（主控台回應過一次才有），先只靠跳數上限` : `，5 小時額度到 ${quotaStop}% 就停`
   const verify = p.verify.trim()
-  const verifyText = !verify ? '' : verifyTrusted(await loadTrust($), p.statusPath, p.verify) ? `；每跳之間先跑驗證（${verify}），沒過就停`
+  // Verification runs between hops; a relay of one hop has none.
+  const verifyText = !verify || max < 2 ? '' : verifyTrusted(await loadTrust($), p.statusPath, p.verify) ? `；每跳之間先跑驗證（${verify}），沒過就停`
     : '；驗證指令還沒確認過，第 2 跳前會停下，先按一次 ▶ 執行驗證'
-  await cycleNotice($, `⟳ ${name} 開始自動接力（最多 ${max} 跳${brakeText}${verifyText}；停在決策、執行者提問、release 關卡與失敗）`, blind ? 'amber' : 'teal', true)
-  return `${name}：開始自動接力，最多 ${max} 跳`
+  const queueText = queued ? `；同時最多 ${limit} 個，先排隊（第 ${queued.place} 個：${queued.why}）` : ''
+  const opening = how.once
+    ? `⟳ ${name} 做完再接一步：${syncHops ? '工作做完先同步，再接一步就停（同步也算一步，最多 2 跳' : '工作做完並同步後，再接一步就停（最多 1 跳'}`
+    : `⟳ ${name} 開始自動接力（最多 ${max} 跳`
+  await cycleNotice($, `${opening}${brakeText}${verifyText}；停在決策、執行者提問、release 關卡與失敗）${queueText}`, blind ? 'amber' : 'teal', true)
+  return how.once ? `${name}：做完再接一步${queued ? `（排隊中，第 ${queued.place} 個）` : ''}` : `${name}：開始自動接力，最多 ${max} 跳${queued ? `（排隊中，第 ${queued.place} 個：${queued.why}）` : ''}`
 }
 
 /** Whether the hop just triggered went out: a gate as a review request, a continue or a sync as a running job. */
@@ -1662,11 +1685,18 @@ async function autoCycle($: any, options: PluginOptions) {
     if (runs[path]?.waiting !== waiting) await saveCycle($, path, run => run && mine(run, me) ? { ...run, waiting } : run)
   }
   const drop = (path: string) => saveCycle($, path, () => undefined)
+  const names = s.projects.map(item => item.name)
+  const nameOf = (path: string) => { const item = s.projects.find(q => q.statusPath === path); return item ? shortName(item.name, names) : path }
+  // cycleMaxRunning: relays past the limit wait their turn, in the order they were armed (cycle.ts cycleQueue).
+  const limit = cycleMaxRunning((options as any).cycleMaxRunning)
+  const queue = cycleQueue(runs, runningPaths(s.projects, pending), limit)
   for (const path of armed) {
     const run = runs[path]!
     const p = s.projects.find(item => item.statusPath === path)
-    const name = p ? shortName(p.name, s.projects.map(item => item.name)) : path
-    const stale = now - Math.max(run.lastAt, run.startedAt) > CYCLE_MAX_AGE_MS
+    const name = p ? nameOf(path) : path
+    const spot = queue[path]
+    // A relay waiting in line is not stale for that; once out of it, its six hours start again.
+    const stale = !spot && now - (run.queued ? now : Math.max(run.lastAt, run.startedAt, run.queuedUntil ?? 0)) > CYCLE_MAX_AGE_MS
     if (!mine(run, me)) {
       // Another console's cycle: shown, never run here. Its console gone (off, closed or crashed) for six hours, any console clears it.
       const owner = run.owner ?? ''
@@ -1675,6 +1705,26 @@ async function autoCycle($: any, options: PluginOptions) {
       continue
     }
     if (!p) { await drop(path); await cycleNotice($, `⟳ 接力解除：${path} 不在登錄表`, 'amber', true, 'cycle-stop'); continue }
+    if (spot) {
+      const queued = { place: spot.place, why: queueReason(spot, nameOf) }
+      if (JSON.stringify(run.queued) !== JSON.stringify(queued)) {
+        await saveCycle($, path, current => {
+          if (!current || !mine(current, me)) return current
+          const { waiting: _waiting, ...rest } = current
+          return { ...rest, queued }
+        })
+        if (!run.queued) await cycleNotice($, `⟳ ${name} 排隊中（第 ${spot.place} 個：${queued.why}）`, 'teal', false)
+      }
+      continue
+    }
+    if (run.queued) {
+      await saveCycle($, path, current => {
+        if (!current || !mine(current, me)) return current
+        const { queued: _queued, ...rest } = current
+        return { ...rest, queuedUntil: now }
+      })
+      await cycleNotice($, `⟳ ${name} 排到了，接著接力`, 'teal', false)
+    }
     if (stale) {
       await drop(path)
       await cycleNotice($, `⟳ ${name} 接力解除：6 小時沒有新的一跳（第 ${run.hops} 跳）`, 'amber', true, 'cycle-stop')
@@ -2156,7 +2206,7 @@ export const register: Register = (on, options) => {
     await update($, continueConfirmations, () => ({}))
     await update($, fallbackOffers, () => ({}))
     await loadTrust($)
-    await $.command.register({ name: 'console', description: '主控台：/console 開關面板；add 加入這個資料夾的專案；demo 示範；inbox 列出在等你的事；reply <專案> <回覆> 回覆執行者；continue / sync / gate / verify <專案> 執行動作；cycle <專案> [off] 自動接力；pin <專案> [off] 置頂；archive / unarchive <專案> 封存或取回；model / effort / executor 派工設定；refresh 更新；update 更新外掛；off 這個對話關閉' })
+    await $.command.register({ name: 'console', description: '主控台：/console 開關面板；add 加入這個資料夾的專案；demo 示範；inbox 列出在等你的事；reply <專案> <回覆> 回覆執行者；continue / sync / gate / verify <專案> 執行動作；cycle <專案> [步數|off] 自動接力；usage 各專案用量；pin <專案> [off] 置頂；archive / unarchive <專案> 封存或取回；model / effort / executor 派工設定；refresh 更新；update 更新外掛；off 這個對話關閉' })
     transcriptPath = null
     loadedVersion ??= manifestVersion(await Promise.resolve().then(() => $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)).catch(() => null))
     // A reload after an update starts a fresh check, which reads the newly installed manifest.
@@ -2439,8 +2489,12 @@ export const register: Register = (on, options) => {
       const named = rest.replace(/\s*\boff$/i, '').trim()
       const projects = snap && !snap.demo ? snap.projects : []
       const target = commandTarget(projects, named)
-      if (!target) return { text: `${missingTarget(projects, named)}用法：/console cycle <專案名稱>（開始自動接力）、/console cycle <專案名稱> off（停止）` }
-      return { text: await toggleCycle($, options, target.project, !off) }
+      // A number after the name caps this relay: `/console cycle api 2`.
+      const steps = target && /^\d+$/.test(target.text) ? Number(target.text) : undefined
+      const usage = '用法：/console cycle <專案名稱> [步數]（開始自動接力；步數 1–20，不寫就照 cycleMaxHops）、/console cycle <專案名稱> off（停止）'
+      if (!target) return { text: `${missingTarget(projects, named)}${usage}` }
+      if ((target.text && steps === undefined) || (off && steps !== undefined)) return { text: usage }
+      return { text: await toggleCycle($, options, target.project, !off, { steps }) }
     }
     // ⊟ 封存, ↺ 取回 and ▴ 置頂 from the keyboard: the same as the menu's buttons.
     const shelfArg = arg.match(/^(archive|unarchive|pin)(?:\s+([\s\S]*))?$/)
@@ -2561,7 +2615,8 @@ export const register: Register = (on, options) => {
     action_attach: '接手背景執行者的對話：要批准權限、想看它在做什麼或直接跟它說話時用。在 Windows Terminal 裡會開一個新分頁執行 claude attach；其他終端機會複製「claude attach <代號>」讓你貼上。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
     action_gate: '把關卡與專案資料送給主控台審核，使用 Claude 額度；不會執行上線（release）。',
-    action_cycle: '自動接力：每次更新替你按下一個現有按鈕（繼續、同步、審核關卡），一路做下去；狀態卡有驗證指令時，第 2 跳起每次繼續前先跑一次，沒過就停。停在需要你拍板的決策、執行者停下來提問、release 關卡、工作失敗、驗證沒過、上一跳沒改到狀態卡、達到跳數上限（cycleMaxHops，預設 6）、5 小時額度用到門檻（cycleQuotaStop，預設 70%），或額度數字超過 45 分鐘沒更新。再按一次停止，進行中的工作不中斷。',
+    action_cycle: '自動接力：每次更新替你按下一個現有按鈕（繼續、同步、審核關卡），一路做下去；狀態卡有驗證指令時，第 2 跳起每次繼續前先跑一次，沒過就停。停在需要你拍板的決策、執行者停下來提問、release 關卡、工作失敗、驗證沒過、上一跳沒改到狀態卡、達到跳數上限（cycleMaxHops，預設 6）、5 小時額度用到門檻（cycleQuotaStop，預設 70%），或額度數字超過 45 分鐘沒更新。這次只想接幾步，用 /console cycle <專案> <步數>。設了 cycleMaxRunning 時，同時在跑的工作和接力中的專案超過上限，後開的接力會排隊，等前面的接力結束。再按一次停止，進行中的工作不中斷。',
+    action_cycle_once: `這個工作做完後，替你再接一步就停：${autoSyncMode((options as any).autoSync) === 'off' ? '自動同步關著，先同步（算一步）再按一次下一步，最多 2 跳' : '自動同步寫回狀態卡後，再按一次下一步（繼續或審核關卡），最多 1 跳'}。煞車和自動接力一樣；想多接幾步用 /console cycle <專案> <步數>。`,
     action_open: '用編輯器開啟專案 STATUS.md，不使用模型額度。',
     action_pin: '置頂：同一個狀態裡排在最前面（名稱前面有 ▴）；沒有需要你處理的事時，「下一步」卡和 Tab 建議也先挑它繼續。每個主控台都看得到；再按一次取消。也可以用 /console pin <專案>。',
     action_archive: '封存：把這個專案移到登錄表的「已封存」段落，主控台不再更新它（不讀狀態卡、git、PR），面板最下面只留一行。工作還在跑時不能封存；這個主控台在它身上的自動接力會一起停掉。按「↺ 取回」或 /console unarchive <專案> 放回來。',
@@ -3032,6 +3087,11 @@ export const register: Register = (on, options) => {
                 onPress={() => void toggleCycle($, options, p)} />
             </Box>
           )}
+          {!demo && !cycles[p.statusPath] && running.length > 0 && !isManual(p) && p.hasCard && state !== 'ACTION' && (
+            <Box key={'help-' + prefix + 'once'} hover={{ scope: 'help-action_cycle_once' }}>
+              <Button key={prefix + 'once'} plain label="⟳ 做完再接一步" onPress={() => void toggleCycle($, options, p, true, { once: true })} />
+            </Box>
+          )}
           {!demo && running.length > 0 && <Box key={'help-' + prefix + 'stop'} hover={{ scope: 'help-action_stop' }}>
             <Button key={prefix + 'stop'} plain label={armed === stopSignature(p) ? '再按一次停止' : '■ 停止工作'} onPress={() => void stopJobs($, options, p)} />
           </Box>}
@@ -3039,6 +3099,7 @@ export const register: Register = (on, options) => {
             <Button key={prefix + 'attach'} plain label="↗ 接手對話" onPress={(press: any) => void attachJob($, p, press?.surface)} />
           </Box>}
           {blockedReason && <Text key={prefix + 'blocked'} color={C.dim}>派工鎖定：{blockedReason}</Text>}
+          {!demo && cycles[p.statusPath]?.queued && <Text key={prefix + 'queued'} color={C.dim} wrap="wrap">{`${chipOf(cycles[p.statusPath]!)}：${cycles[p.statusPath]!.queued!.why}（同時最多 ${cycleMaxRunning((options as any).cycleMaxRunning) ?? '—'} 個，cycleMaxRunning）`}</Text>}
           {offer && <Box key={'help-' + prefix + 'fallback'} hover={{ scope: 'help-fallback' }}>
             <Button key={prefix + 'fallback'} plain dimColor={!!livePending(p)} label={`⇢ 改用 Claude 派工（${actionLabel(offer.kind, p).replace(/^⇢\s*/, '')}）`} onPress={async () => {
               if (!livePending(p)) await triggerAction($, options, p.statusPath, offer.kind, { useClaude: true })

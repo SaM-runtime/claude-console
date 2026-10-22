@@ -111,6 +111,10 @@ export type CycleRun = {
   waiting?: string
   /** The console session that armed it; `$.store` is shared by every console, and only this one sends its hops. */
   owner?: string
+  /** Waiting for a turn under `cycleMaxRunning`: its place in line and why, in words. */
+  queued?: { place: number; why: string }
+  /** When it last left the line: its six hours without a hop count from there. */
+  queuedUntil?: number
 }
 /** `gate` is the CARD 關卡 the review was submitted for; a CARD that moved past it ends the row's wait. */
 export type ReviewRequest = { text: string; projectName: string; at: number; turnId?: string; gate?: string }

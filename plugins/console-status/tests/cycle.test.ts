@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { AUTO_SYNC_GRACE_MS } from '../hooks/sync'
-import { CYCLE_DEFAULT_HOPS, CYCLE_DEFAULT_QUOTA_STOP, QUOTA_STALE_MS, cardRev, cycleMaxHops, cyclePlan, cycleQuotaStop, newCycleRun, quotaBrake } from '../hooks/cycle'
+import { CYCLE_DEFAULT_HOPS, CYCLE_DEFAULT_QUOTA_STOP, QUOTA_STALE_MS, cardRev, cycleChip, cycleMaxHops, cycleMaxRunning, cyclePlan, cycleQueue, cycleQuotaStop, newCycleRun, queueReason, quotaBrake, runningPaths, storedCycles } from '../hooks/cycle'
 import type { CycleRun } from '../hooks/cycle'
 import { claudeLimits } from '../hooks/logic'
 
@@ -154,4 +154,69 @@ test('a 5-hour window past its reset is read as unused, so an old percent neithe
   expect(quotaBrake(claudeLimits(raw, now), 70, now)).toBeNull()
   expect(quotaBrake(claudeLimits([{ ...raw[0], resetsAt: '2030-01-05T14:00:00Z' }], now), 70, now)).toMatch(/額度煞車/)
   expect(claudeLimits(null, now)).toEqual([])
+})
+
+test('cycleMaxRunning: blank or junk is no limit; a number is clamped to 1–10', () => {
+  expect(cycleMaxRunning(undefined)).toBeNull()
+  expect(cycleMaxRunning('')).toBeNull()
+  expect(cycleMaxRunning(' off ')).toBeNull()
+  expect(cycleMaxRunning('2')).toBe(2)
+  expect(cycleMaxRunning(' 3 ')).toBe(3)
+  expect(cycleMaxRunning('0')).toBe(1)
+  expect(cycleMaxRunning('40')).toBe(10)
+  expect(cycleMaxRunning(2.6)).toBe(3)
+})
+
+test('the relay queue: running work holds its place first, then relays in the order they were armed', () => {
+  const at = (minutes: number) => run({ startedAt: NOW - minutes * 60_000 })
+  // A armed first, B second, C third; nothing runs: with 1 place A goes, B and C wait in that order.
+  const runs = { A: at(30), B: at(20), C: at(10) }
+  expect(cycleQueue(runs, new Set(), null)).toEqual({})
+  expect(cycleQueue(runs, new Set(), 1)).toEqual({ B: { place: 1, relays: ['A'], others: 0 }, C: { place: 2, relays: ['A'], others: 0 } })
+  expect(cycleQueue(runs, new Set(), 2)).toEqual({ C: { place: 1, relays: ['A', 'B'], others: 0 } })
+  expect(cycleQueue(runs, new Set(), 3)).toEqual({})
+  // Work no relay sent takes a place: A waits too, first in line.
+  expect(cycleQueue(runs, new Set(['X']), 1)).toEqual({
+    A: { place: 1, relays: [], others: 1 }, B: { place: 2, relays: [], others: 1 }, C: { place: 3, relays: [], others: 1 },
+  })
+  // A relay whose project runs holds the place of that work, even one armed later.
+  expect(cycleQueue(runs, new Set(['C']), 1)).toEqual({ A: { place: 1, relays: ['C'], others: 0 }, B: { place: 2, relays: ['C'], others: 0 } })
+  expect(cycleQueue(runs, new Set(['B', 'X']), 2)).toEqual({ A: { place: 1, relays: ['B'], others: 1 }, C: { place: 2, relays: ['B'], others: 1 } })
+  // Past the limit already: no relay starts, and the running ones keep going.
+  expect(cycleQueue({ A: at(30) }, new Set(['X', 'Y']), 1)).toEqual({ A: { place: 1, relays: [], others: 2 } })
+  // Armed in the same instant: by path, so every console reads the same order.
+  expect(Object.keys(cycleQueue({ B: at(5), A: at(5) }, new Set(), 1))).toEqual(['B'])
+})
+
+test('why a relay waits, in words', () => {
+  const name = (path: string) => ({ A: 'api', B: 'web' } as Record<string, string>)[path] ?? path
+  expect(queueReason({ place: 1, relays: ['A'], others: 0 }, name)).toBe('api 在接力')
+  expect(queueReason({ place: 2, relays: ['A', 'B'], others: 0 }, name)).toBe('api、web 在接力')
+  expect(queueReason({ place: 1, relays: [], others: 2 }, name)).toBe('已有 2 個工作在跑')
+  expect(queueReason({ place: 1, relays: ['A'], others: 1 }, name)).toBe('api 在接力、另有 1 個工作在跑')
+})
+
+test('running work: a running job, or a continue, sync or reply just sent', () => {
+  const projects = [
+    project({ statusPath: 'P1', jobs: [{ ...job(), kind: 'running', status: 'running' }] }),
+    project({ statusPath: 'P2', jobs: [job()] }),
+    project({ statusPath: 'P3' }),
+  ]
+  const pending = { P2: { kind: 'gate' as const, at: NOW }, P3: { kind: 'continue' as const, at: NOW }, P4: { kind: 'verify' as const, at: NOW } }
+  expect([...runningPaths(projects, pending)].sort()).toEqual(['P1', 'P3'])
+  expect([...runningPaths(projects, { P2: { kind: 'reply', at: NOW }, P4: { kind: 'sync', at: NOW } })].sort()).toEqual(['P1', 'P2', 'P4'])
+})
+
+test('a waiting relay keeps its place and reason in the store, and its chip says it waits', () => {
+  const stored = storedCycles({
+    A: { ...run(), queued: { place: 2, why: 'api 在接力' }, queuedUntil: NOW },
+    B: { ...run(), queued: { place: 'x' }, queuedUntil: 'soon' },
+  })
+  expect(stored.A!.queued).toEqual({ place: 2, why: 'api 在接力' })
+  expect(stored.A!.queuedUntil).toBe(NOW)
+  expect(stored.B!.queued).toBeUndefined()
+  expect(stored.B!.queuedUntil).toBeUndefined()
+  expect(cycleChip(stored.A!)).toBe('⟳ 排隊中・第 2 個')
+  expect(cycleChip(stored.A!, true)).toBe('⟳ 另一主控台接力中')
+  expect(cycleChip(run({ waiting: '等同步' }))).toBe('⟳ 等同步')
 })
