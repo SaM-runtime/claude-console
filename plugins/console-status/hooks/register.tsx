@@ -16,7 +16,7 @@ import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
 import { isWindowsOs, openFallbackArgs, preflightArgs, quotaArgs, tailLinesArgs } from './platform'
-import { stateFormatIssues, stateFormatWarning } from './jobs'
+import { readJobs, stateFormatIssues, stateFormatWarning } from './jobs'
 import { pipeline, projectForCwd, projectModeSection, progressContext, progressSignature, verdict } from './pipeline'
 import { addFolder, archivedRows, excludeWith, localMinute, newStatusFile, projectNameFor, registryArchive, registryUnarchive, registryWith } from './projects'
 import { AWAY_LOG_MAX, awayCounts, awayFor, awayHighlights, awayText, awayView, cameBack } from './away'
@@ -44,10 +44,12 @@ import { trackRowChanges } from './presentation'
 import { layoutBand } from './band'
 import { ALIVE_MS, claim, claimBlocker, heartbeat, leave, parseLease, syncsHere, type Lease } from './lease'
 import { advanceSync, cardStamp, autoSyncPlan, autoSyncMode, bandSync, isSyncEnded, syncChip, syncStatus, syncStepsText } from './sync'
-import type { SyncProgress, ExecutorDigest, CycleRun } from '../types'
+import type { SyncProgress, ExecutorDigest, CycleRun, UsageRow } from '../types'
 import { CYCLE_MAX_AGE_MS, cardRev, cycleChip, cycleMaxHops, cycleMaxRunning, cyclePlan, cycleQueue, cycleQuotaStop, hopDetail, newCycleRun, queueReason, quotaBrake, runningPaths, storedCycles } from './cycle'
 import { DIGEST_NONE, DIGEST_TIMEOUT, PROMPT_DIGEST_MS, READ_LIMIT, codexDigestLines, digestContext, digestSource, loadDigest } from './digest'
 import type { DigestCache, DigestIo, DigestResult } from './digest'
+import { loadUsage, usageLine, usageReport, usageWindows } from './usage'
+import type { UsageCache, UsageReportRow } from './usage'
 
 const dispatchRevision = atom({ plugin: 'console-status', key: 'dispatchRevision' } as const, 0)
 
@@ -129,6 +131,13 @@ const executorDigests = atom({ plugin: 'console-status', key: 'executorDigests' 
 const digestCache: DigestCache = new Map()
 const transcriptPaths = new Map<string, string>()
 const digestLoads = new Set<string>()
+/** statusPath → the 用量 row of an open project card, and what /console usage read. */
+const projectUsage = atom({ plugin: 'console-status', key: 'projectUsage' } as const, {})
+/** Transcripts read for 用量: how far each was read, and the responses found there. */
+const usageCache: UsageCache = new Map()
+const usageLoads = new Set<string>()
+/** An open card's 用量 is read again at most this often. */
+const USAGE_FRESH_MS = 60_000
 /** statusPath → the last digest read for it, which a prompt carries when a fresh read takes too long. */
 const lastDigests = new Map<string, string[]>()
 /** Why an asking Claude job stopped (an API error in words, or null for a real question), per job and finish time. */
@@ -376,6 +385,20 @@ async function paths($: any, options: PluginOptions) {
   return { home, config: resolveConfig(options, home, local, temp) }
 }
 
+/** Claude Code's own folder: CLAUDE_CONFIG_DIR, else ~/.claude. */
+async function claudeDirOf($: any, home: string): Promise<string> {
+  return ((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || `${home}/.claude`).replace(/\\/g, '/')
+}
+
+/** Files and processes for reading a project's transcripts: PowerShell when the project or this machine is on Windows. */
+async function transcriptIo($: any, root: string): Promise<DigestIo> {
+  return {
+    windows: /^[a-z]:\//i.test(root) || isWindowsOs(await $.env.get('OS').catch(() => '')),
+    read: path => $.fs.read(path), exists: path => $.fs.exists(path), stat: path => $.fs.stat(path),
+    list: path => $.fs.list(path), run: (argv, init) => $.process.run(argv, init),
+  }
+}
+
 /** One project's executor digest: from the cache while its transcript is unchanged; never throws. */
 async function projectDigest($: any, options: PluginOptions, p: Project): Promise<DigestResult> {
   try {
@@ -397,15 +420,8 @@ async function projectDigest($: any, options: PluginOptions, p: Project): Promis
       return { kind: 'ready', lines }
     }
     const { home, config } = await paths($, options)
-    const claudeDir = ((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || `${home}/.claude`).replace(/\\/g, '/')
     const root = projectRoot(p.statusPath)
-    const windows = /^[a-z]:\//i.test(root) || isWindowsOs(await $.env.get('OS').catch(() => ''))
-    const io: DigestIo = {
-      windows,
-      read: path => $.fs.read(path), exists: path => $.fs.exists(path), stat: path => $.fs.stat(path),
-      list: path => $.fs.list(path), run: (argv, init) => $.process.run(argv, init),
-    }
-    const result = await loadDigest(io, { root, claudeDir, sessionsPath: config.claudeSessionsPath }, digestCache, transcriptPaths, await $.clock.now())
+    const result = await loadDigest(await transcriptIo($, root), { root, claudeDir: await claudeDirOf($, home), sessionsPath: config.claudeSessionsPath }, digestCache, transcriptPaths, await $.clock.now())
     if (result.kind === 'ready') lastDigests.set(p.statusPath, result.lines)
     return result
   } catch (error) {
@@ -450,8 +466,42 @@ async function openCards($: any): Promise<Project[]> {
   return s.projects.filter(p => names.has(p.name))
 }
 
-/** Reads the digest of each open card (and no other), showing 讀取中… the first time. */
+/**
+ * What the work the console dispatched for `p` used this week and in this 5-hour window, from its sessions' transcripts
+ * and the Codex jobs the companion lists; never throws.
+ */
+async function projectUsageOf($: any, options: PluginOptions, p: Project, limits: Snapshot['limits']): Promise<UsageRow> {
+  try {
+    const { home, config } = await paths($, options)
+    const root = projectRoot(p.statusPath)
+    const sessions = await $.fs.read(config.claudeSessionsPath).then((text: string) => JSON.parse(text.replace(/^\uFEFF/, ''))).catch(() => null)
+    const codex = await readJobs({ list: path => $.fs.list(path), read: path => $.fs.read(path) }, config.companionStateRoots, root).catch(() => [])
+    const now = await $.clock.now()
+    const usage = await loadUsage(await transcriptIo($, root), { root, claudeDir: await claudeDirOf($, home), sessions, codex }, usageCache, transcriptPaths, usageWindows(limits, now), now)
+    return { phase: 'ready', usage }
+  } catch (error) {
+    return { phase: 'error', error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/** Reads the 用量 of each open card (and no other): 計算中… the first time, then again at most once a minute. */
+async function syncUsage($: any, options: PluginOptions) {
+  const s = await read($, snapshot)
+  for (const p of await openCards($).catch(() => [] as Project[])) {
+    const shown = (await read($, projectUsage))[p.statusPath]
+    if (usageLoads.has(p.statusPath) || (shown?.phase === 'ready' && await $.clock.now() - shown.usage.at < USAGE_FRESH_MS)) continue
+    usageLoads.add(p.statusPath)
+    try {
+      if (!shown) await update($, projectUsage, values => ({ ...values, [p.statusPath]: { phase: 'loading' as const } }))
+      const row = await projectUsageOf($, options, p, s?.limits)
+      await update($, projectUsage, values => ({ ...values, [p.statusPath]: row }))
+    } catch { /* the card keeps what it showed */ } finally { usageLoads.delete(p.statusPath) }
+  }
+}
+
+/** Reads the digest of each open card (and no other), showing 讀取中… the first time; and the card's 用量 beside it. */
 async function syncDigests($: any, options: PluginOptions) {
+  void syncUsage($, options)
   for (const p of await openCards($).catch(() => [] as Project[])) {
     if (digestLoads.has(p.statusPath)) continue
     digestLoads.add(p.statusPath)
@@ -2474,6 +2524,18 @@ export const register: Register = (on, options) => {
         return { text: `目前：${settings.executor} · ${settings.model || '預設'} · ${settings.effort || '預設'}\n執行者：claude, codex\n模型：${models.length ? models.map(m => m.model).join(', ') : '模型清單讀不到；用 /console model <名稱>'}\n強度：${effortOptions(settings.executor, models, settings.model).join(', ')}\n以 /console model "" 或 /console effort "" 恢復執行者預設。\n${syncSettingsText(settings).split('\n')[0]}（/console sync-model 查看設定方式）` }
       } catch (error) { return { text: `設定未儲存：${error instanceof Error ? error.message : String(error)}` } }
     }
+    if (arg === 'usage') {
+      if (await demoEnabled($)) return { text: '示範資料：沒有用量可算；/console refresh 回到實際資料。' }
+      const snap = await read($, snapshot)
+      if (!snap) return { text: '讀取各專案狀態中…' }
+      const report: UsageReportRow[] = []
+      for (const p of snap.projects) {
+        const row = await projectUsageOf($, options, p, snap.limits)
+        await update($, projectUsage, values => ({ ...values, [p.statusPath]: row }))
+        report.push(row.phase === 'ready' ? { name: p.name, usage: row.usage } : { name: p.name, usage: null, ...(row.phase === 'error' ? { error: row.error } : {}) })
+      }
+      return { text: usageReport(report) }
+    }
     if (arg === 'inbox') {
       const snap = await read($, snapshot)
       if (!snap) return { text: '讀取各專案狀態中…' }
@@ -2631,6 +2693,7 @@ export const register: Register = (on, options) => {
     ctx: '上下文：這個主控台對話的上下文用了多少。用掉一半以上建議換新主控台。',
     // Rate-limit rows (`limit_<kind>`) are added as the host reports them, so a per-model window explains itself by name.
     version: '版本：目前安裝的 console-status 與 GitHub 上的最新版，每 30 分鐘與每次載入時檢查。「⬆ 更新」會安裝新版（外掛從本機資料夾載入時，改在那個資料夾執行 git pull），完成後自動重新載入外掛；也可輸入 /console update。',
+    usage: '用量：主控台派出去的工作用了多少 tokens，金額照 API 牌價估，訂閱方案不會另外收這筆錢。本週從每週額度重置算起（還不知道重置時間時算近 7 天）；5 小時內是目前 5 小時額度視窗裡的部分。從對話紀錄檔讀，不花額度；Codex 沒有 token 紀錄，只數次數。主控台自己的對話不算在內，看用量表的「花費」。/console usage 列出全部專案。',
     codex_quota: 'Codex：Codex 帳號額度的剩餘量，取自最近一次 Codex 工作紀錄（每 5 分鐘讀一次）；很久沒用 Codex 時數字可能是舊的。',
   }
   const C = {
@@ -2829,6 +2892,7 @@ export const register: Register = (on, options) => {
     const refreshing = await read($, isRefreshing)
     const pending = await read($, pendingActions)
     const digests = demo ? {} : await read($, executorDigests)
+    const usageRows = demo ? {} : await read($, projectUsage)
     const confirmations = await read($, continueConfirmations)
     const verified = await read($, verificationResults)
     const openOutput = await read($, outputOpen)
@@ -3525,6 +3589,18 @@ export const register: Register = (on, options) => {
             <Box flexGrow={1} flexShrink={1}><Text color={i === 0 && d?.phase === 'error' ? C.red : i === 0 ? C.text : C.dim} wrap="wrap">{value}</Text></Box>
           </Box>
         })}
+        {(() => {
+          // What the console's dispatched work for this project used: tokens and an API-price estimate, Codex only counted.
+          // Each `・` part wraps whole, so a narrow card breaks the line between figures, not inside one.
+          const u = usageRows[p.statusPath]
+          const value = !u || u.phase === 'loading' ? '計算中…' : u.phase === 'error' ? `無法讀取（${u.error}）` : usageLine(u.usage)
+          const parts = value.split('・')
+          return <Box key={prefix + 'usage'} gap={2} hover={{ scope: 'help-usage' }}>
+            <Box width={6} flexShrink={0}><Text color={C.dim}>用量</Text></Box>
+            <Box flexGrow={1} flexShrink={1} flexWrap="wrap">{parts.map((part, i) => <Text key={prefix + 'usage-' + i} color={u?.phase === 'error' ? C.amber : C.dim} wrap="wrap">
+              {i < parts.length - 1 ? part + '・' : part}</Text>)}</Box>
+          </Box>
+        })()}
       </Box>
     }
     const verificationView = (p: Project, prefix: string) => {

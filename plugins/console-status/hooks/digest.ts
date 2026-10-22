@@ -3,6 +3,7 @@
  * for the project card and for the context a prompt about that project carries.
  * Pure parts first; `loadDigest` is the one that touches files, through the `DigestIo` it is given.
  */
+import { rootKey } from './executors'
 import { PS_UTF8 } from './platform'
 import { jobKindText, phaseText } from './wording'
 
@@ -30,7 +31,6 @@ export type DigestIo = {
 /** Transcript path → the parse of its tail, kept while its mtime and size stay the same. */
 export type DigestCache = Map<string, { key: string; parsed: ParsedTail }>
 
-const rootKey = (path: string) => path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim()
 
 /** The newest job the plugin recorded for a project root, and the root's own session as a fallback. */
@@ -148,7 +148,7 @@ async function readJson(io: DigestIo, path: string): Promise<any> {
 }
 
 /** Where a session's transcript is: `<claudeDir>/projects/<any>/<sessionId>.jsonl`, remembered per session. */
-async function findTranscript(io: DigestIo, claudeDir: string, sessionId: string, paths: Map<string, string>): Promise<string | null> {
+export async function findTranscript(io: DigestIo, claudeDir: string, sessionId: string, paths: Map<string, string>): Promise<string | null> {
   const known = paths.get(sessionId)
   if (known && await io.exists(known).catch(() => false)) return known
   const dirs = await io.list(`${claudeDir}/projects`).catch(() => [])
