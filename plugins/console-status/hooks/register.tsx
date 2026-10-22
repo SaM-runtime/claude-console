@@ -3,7 +3,7 @@
 // Band above the prompt + `/console` pane; toasts on changes. Shows on phones via Remote Control.
 import { atom, read, update } from 'claude-code'
 import type { Register, PluginOptions } from 'claude-code'
-import { resolveConfig, resolveFallbackOptions, legacyDispatchPath, activationMode, suggestNextMode, confirmContinueMode } from './config'
+import { resolveConfig, resolveFallbackOptions, legacyDispatchPath, activationMode, suggestNextMode, confirmContinueMode, staleDaysOption } from './config'
 import type { ConsoleConfig } from './config'
 import { codexHealth, isActiveJob } from './logic'
 import { codexNote } from './wording'
@@ -17,7 +17,8 @@ import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
 import { isWindowsOs, openFallbackArgs, preflightArgs, quotaArgs } from './platform'
 import { stateFormatIssues, stateFormatWarning } from './jobs'
-import { pipeline, projectForCwd, projectModeSection, progressContext, progressSignature } from './pipeline'
+import { pipeline, projectForCwd, projectModeSection, progressContext, progressSignature, verdict } from './pipeline'
+import { addFolder, excludeWith, localMinute, newStatusFile, projectNameFor, registryWith } from './projects'
 import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
 import { FETCH_STALE_MS, agoText, commitLine, fileGroups, fileKind, gitBadge, gitFilesArgs, gitParts, gitLogArgs, gitNumstatArgs, gitProbeMode, gitShowArgs, gitSignature, gitStatusArgs, linesText, parseGitFiles, parseGitLog, parseGitShow, parseGitStatus, parseNumstat, parseNumstatFiles, parsePrList, parsePrView, prLine, prViewArgs } from './git'
@@ -33,7 +34,7 @@ import { commandPreview, dangerOf, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction } from '../types'
-import { jobWarnings, waitingNames, parseGate, parseCodexQuota, claudeLimits, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, gateText, battery, blockedLines, resetText, nextProject, buildProject, cardTime, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, parseLimitKind, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
+import { jobWarnings, waitingNames, parseGate, parseCodexQuota, claudeLimits, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, gateText, battery, blockedLines, resetText, nextProject, buildProject, cardTime, counts, demoSnapshot, diffToasts, displayWidth, events, inbox, nextInbox, staleFor, limitHelp, limitName, parseLimitKind, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody, METER } from './battery'
@@ -1371,6 +1372,71 @@ async function attachJob($: any, p: Project, surface?: string): Promise<string> 
   return text
 }
 
+/** A failed verification counts as waiting on you: the local result for the CARD's command, else the CARD's own verdict. */
+const verifyFailed = (results: Record<string, VerificationResult>) => (p: Project) => verdict(p, results[p.statusPath]) === 'fail'
+
+/** /console inbox: what waits on you in the order `n` walks it, then sessions waiting at a prompt, then projects left alone. */
+function inboxText(s: Snapshot, results: Record<string, VerificationResult>, days: number | null): string {
+  const items = inbox(s, verifyFailed(results))
+  const listed = new Set(items.map(item => item.project))
+  const sessions = s.blocked.map(b => `・${b.name}${b.project ? `（${b.project}）` : ''}：${b.why}`)
+  const left = s.projects
+    .flatMap(p => { const d = listed.has(p.name) ? null : staleFor(p, s.at, days); return d === null ? [] : [{ p, d }] })
+    .sort((a, b) => b.d - a.d)
+    .map(({ p, d }) => `・${p.name}：${d} 天沒動${p.next.trim() && !/^無/.test(p.next.trim()) ? `，下一步：${p.next.trim().slice(0, 40)}` : ''}`)
+  if (!items.length && !sessions.length && !left.length) return '沒有在等你的事。'
+  return [
+    items.length ? `等你處理（${items.length} 件）：` : '沒有專案在等你。',
+    ...items.map(item => `・${item.project}：${item.text}`),
+    ...(sessions.length ? ['其他對話在等你：', ...sessions] : []),
+    ...(left.length ? ['久未動：', ...left] : []),
+    ...(items.length ? ['在面板按 n，依序跳到每一件並打開它的動作選單。'] : []),
+  ].join('\n')
+}
+
+/**
+ * /console add: registers a folder (this session's own by default) as a project: a row in the registry (made if
+ * missing), a STATUS file from the workflow's template unless it has one, and `.console/` kept out of git.
+ */
+async function addProject($: any, options: PluginOptions, words: string): Promise<string> {
+  const folder = addFolder(words, sessionCwd)
+  if (!folder) return '用法：/console add（登錄這個對話所在的資料夾）或 /console add <資料夾>'
+  if (!(await Promise.resolve().then(() => $.fs.exists(folder)).catch(() => false))) return `找不到資料夾：${folder}`
+  const { home, config } = await paths($, options)
+  const registry = await Promise.resolve().then(() => $.fs.read(config.registryPath)).catch(() => null) as string | null
+  const listed = registry === null ? [] : parseRegistry(registry, home)
+  const same = (path: string) => path.replace(/\/+$/, '').toLowerCase() === folder.toLowerCase()
+  const known = listed.find(row => same(projectRoot(row.statusPath)))
+  if (known) return `已經登錄過：${known.name}（${known.statusPath}）`
+  const name = projectNameFor(folder, listed.map(row => row.name))
+  const statusPath = `${folder}/.console/STATUS.md`
+  const done: string[] = []
+  try {
+    if (await Promise.resolve().then(() => $.fs.exists(statusPath)).catch(() => false)) done.push('沿用已有的 .console/STATUS.md')
+    else {
+      await $.fs.write(statusPath, newStatusFile(name, localMinute(await $.clock.now())))
+      done.push('建立 .console/STATUS.md')
+    }
+    // A git repository keeps the console's file out of its commits; a folder `.git` file (a worktree) is left alone.
+    if (await Promise.resolve().then(() => $.fs.exists(`${folder}/.git/info`)).catch(() => false)) {
+      const exclude = await Promise.resolve().then(() => $.fs.read(`${folder}/.git/info/exclude`)).catch(() => null) as string | null
+      const next = excludeWith(exclude)
+      if (next !== null) { await $.fs.write(`${folder}/.git/info/exclude`, next); done.push('.console/ 加進 .git/info/exclude（不會被 commit）') }
+    }
+    await $.fs.write(config.registryPath, registryWith(registry, name, statusPath))
+    done.push(registry === null ? `建立登錄表 ${config.registryPath}` : '寫進登錄表')
+  } catch (error) {
+    return `沒有加完：${error instanceof Error ? error.message : String(error)}（已完成：${done.join('、') || '無'}）`
+  }
+  if (consoleActive) await refresh($, options, true)
+  const elsewhere = !sessionCwd || !same(sessionCwd.replace(/\\/g, '/'))
+  return [
+    `已加入專案「${name}」：${done.join('、')}。`,
+    '在狀態卡的「下一步」寫上第一件要做的事，就能按 ⇢ 繼續下一步派工；名稱可以在登錄表改。',
+    ...(elsewhere ? ['第一次派工前，要先在那個資料夾開過一次 claude 並選「信任」，否則 Claude Code 會擋下背景工作。'] : []),
+  ].join('\n')
+}
+
 async function toggleCycle($: any, options: PluginOptions, p: Project, want?: boolean): Promise<string> {
   const name = p.name.replace(/\s.*$/, '')
   if (await demoEnabled($)) { $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。'); return '示範資料不接力' }
@@ -1545,7 +1611,7 @@ let lastSuggestion: string | null = null
 async function suggestNext($: any, options: PluginOptions) {
   if (suggestNextMode((options as any).suggestNext) === 'off' || !consoleActive || await demoEnabled($)) return
   const s = await read($, snapshot)
-  const text = s ? suggestedPrompt(s, await read($, pendingActions)) : null
+  const text = s ? suggestedPrompt(s, await read($, pendingActions), staleDaysOption((options as any).staleDays)) : null
   if (!text) { lastSuggestion = null; return }
   if (text === lastSuggestion) return
   const shown = await Promise.resolve().then(() => $.prompt.suggest({ text })).catch(() => null)
@@ -2100,6 +2166,14 @@ export const register: Register = (on, options) => {
       await stopConsole($, options)
       return { text: '這個對話已關閉主控台：不再自動更新、不顯示橫帶、不附加專案內容；指令護欄照常運作。輸入 /console 再開啟。' }
     }
+    // Adding a project writes files only: a session in that project's folder stays light.
+    const addArg = arg.match(/^add(?:\s+([\s\S]*))?$/)
+    if (addArg) {
+      if (await demoEnabled($)) return { text: '示範資料：不執行專案操作；/console refresh 回到實際資料。' }
+      const text = await addProject($, options, addArg[1] ?? '')
+      if (text.startsWith('已加入')) $.ui.toast(text.split('\n')[0]!)
+      return { text }
+    }
     if (arg !== 'version' && arg !== 'update' && !consoleActive) {
       // The first /console in a light session: `refresh` and `demo` load their own data, the pane
       // fills as the first refresh lands, and the rest read the snapshot, so they wait for it.
@@ -2185,6 +2259,11 @@ export const register: Register = (on, options) => {
         const { settings, models } = await readDispatch($, config)
         return { text: `目前：${settings.executor} · ${settings.model || '預設'} · ${settings.effort || '預設'}\n執行者：claude, codex\n模型：${models.length ? models.map(m => m.model).join(', ') : '模型清單讀不到；用 /console model <名稱>'}\n強度：${effortOptions(settings.executor, models, settings.model).join(', ')}\n以 /console model "" 或 /console effort "" 恢復執行者預設。\n${syncSettingsText(settings).split('\n')[0]}（/console sync-model 查看設定方式）` }
       } catch (error) { return { text: `設定未儲存：${error instanceof Error ? error.message : String(error)}` } }
+    }
+    if (arg === 'inbox') {
+      const snap = await read($, snapshot)
+      if (!snap) return { text: '讀取各專案狀態中…' }
+      return { text: inboxText(snap, await read($, verificationResults), staleDaysOption((options as any).staleDays)) }
     }
     // ⟳ 自動接力 from the keyboard: the same as the menu's button.
     const cycleArg = arg.match(/^cycle(?:\s+([\s\S]*))?$/)
@@ -2297,7 +2376,7 @@ export const register: Register = (on, options) => {
     action_attach: '接手背景執行者的對話：要批准權限、想看它在做什麼或直接跟它說話時用。在 Windows Terminal 裡會開一個新分頁執行 claude attach；其他終端機會複製「claude attach <代號>」讓你貼上。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
     action_gate: '把關卡與專案資料送給主控台審核，使用 Claude 額度；不會執行上線（release）。',
-    action_cycle: '自動接力：每次更新替你按下一個現有按鈕（繼續、同步、審核關卡），一路做下去；停在需要你拍板的決策、執行者停下來提問、release 關卡、工作失敗、上一跳沒改到狀態卡、達到跳數上限（cycleMaxHops，預設 6），或 5 小時額度用到門檻（cycleQuotaStop，預設 70%）。再按一次停止，進行中的工作不中斷。',
+    action_cycle: '自動接力：每次更新替你按下一個現有按鈕（繼續、同步、審核關卡），一路做下去；狀態卡有驗證指令時，第 2 跳起每次繼續前先跑一次，沒過就停。停在需要你拍板的決策、執行者停下來提問、release 關卡、工作失敗、驗證沒過、上一跳沒改到狀態卡、達到跳數上限（cycleMaxHops，預設 6）、5 小時額度用到門檻（cycleQuotaStop，預設 70%），或額度數字超過 45 分鐘沒更新。再按一次停止，進行中的工作不中斷。',
     action_open: '用編輯器開啟專案 STATUS.md，不使用模型額度。',
     RUNNING: '執行中：該專案有 Claude 或 Codex 工作尚未結束；切換執行者仍不得重複派工。',
     SYNC: '待同步：執行者的工作已結束，但狀態卡在它開始後沒有更新過。設定 autoSync 開啟時，主控台會自動派一次同步。',
@@ -2424,6 +2503,17 @@ export const register: Register = (on, options) => {
       if (k === 'm' || k === '.') {
         const id = list[Math.max(0, await read($, cursor))]?.full
         if (id) await update($, menuFor, v => (v === id ? null : id))
+      }
+      // The next thing waiting on you, after the one open now: its row selected and its action menu open.
+      if (k === 'n' && s) {
+        const items = inbox(s, verifyFailed(await read($, verificationResults)))
+        const target = nextInbox(items, await read($, menuFor))
+        if (!target) { $.ui.toast('沒有在等你的事'); return {} }
+        await update($, cursor, () => list.findIndex(r => r.full === target.project))
+        await update($, selected, () => target.project)
+        await update($, menuFor, () => target.project)
+        void syncDigests($, options)
+        return {}
       }
       const menuName = await read($, menuFor)
       const menuProject = menuName === null ? null : s?.projects.find(p => p.name === menuName)
@@ -2574,6 +2664,10 @@ export const register: Register = (on, options) => {
     const list = rows(s)
     const now = await $.clock.now()
     const showGit = s.projects.some(p => p.git)
+    // A project left alone past staleDays with something still to do: its 更新 turns amber, and it is continued first.
+    const staleDays = staleDaysOption((options as any).staleDays)
+    const leftFor = (p: Project) => staleFor(p, s.at, staleDays)
+    const leftRow = (full: string) => { const p = s.projects.find(item => item.name === full); return !!p && leftFor(p) !== null }
     const W = { state: 10, project: projectColumnWidth(list.map(row => row.project)), age: 4, flow: width >= 64 ? 6 : 0, git: showGit && width >= 80 ? 7 : 0 }
     const badges = new Map(s.projects.map(p => [p.name, gitBadge(p.git, p.pr)]))
     const GIT_TONE: Record<string, string> = { red: C.red, amber: C.amber, blue: C.blue, teal: C.teal, green: C.green, dim: C.dim }
@@ -2599,7 +2693,7 @@ export const register: Register = (on, options) => {
         ...(W.flow ? [{ t: '', w: W.flow, parts: pipes.get(r.full) ? pipelineParts(pipes.get(r.full)!, PIPE) : [] }] : []),
         ...(W.git ? [{ t: badges.get(r.full)?.text ?? '', c: GIT_TONE[badges.get(r.full)?.tone ?? 'dim'], w: W.git }] : []),
         ...(chipW ? [{ t: (() => { const run = cycleOf(r.full); return run ? chipOf(run) : '' })(), c: C.teal, w: chipW }] : []),
-        { t: r.age, c: C.dim, w: W.age, right: true },
+        { t: r.age, c: leftRow(r.full) ? C.amber : C.dim, w: W.age, right: true },
       ],
     }))
 
@@ -2621,7 +2715,7 @@ export const register: Register = (on, options) => {
               <Box flexGrow={1} flexShrink={1}><Text color={C.text} wrap={detail ? 'wrap' : 'truncate-end'}>{r.item}</Text></Box>
               {W.flow > 0 && <Box width={W.flow} flexShrink={0}><Text>{(pipes.get(r.full) ? pipelineParts(pipes.get(r.full)!, PIPE) : []).map((part, index) => <Text key={'fp-' + index} color={part.c}>{part.t}</Text>)}</Text></Box>}
               {W.git > 0 && <Box width={W.git} flexShrink={0} overflow="hidden"><Text color={GIT_TONE[badges.get(r.full)?.tone ?? 'dim']} wrap="truncate-end">{badges.get(r.full)?.text ?? ''}</Text></Box>}
-              <Box width={W.age} justifyContent="flex-end"><Text color={C.dim}>{r.age}</Text></Box>
+              <Box width={W.age} justifyContent="flex-end"><Text color={leftRow(r.full) ? C.amber : C.dim}>{r.age}</Text></Box>
             </Box>
           ))}
         </Box>
@@ -2684,7 +2778,8 @@ export const register: Register = (on, options) => {
     }
     const urgentTarget = nextProject(s)
     // Nothing waits on the person: the card offers the project the prompt's Tab suggestion would continue.
-    const ready = n === null && !urgentTarget ? continuable(s, pending) : undefined
+    const ready = n === null && !urgentTarget ? continuable(s, pending, staleDays) : undefined
+    const waitingCount = inbox(s, verifyFailed(verified)).length
     const target = urgentTarget ?? ready?.name ?? null
     const targetProject = s.projects.find(p => p.name === target)
     const targetState = list.find(r => r.full === target)?.state
@@ -3263,7 +3358,10 @@ export const register: Register = (on, options) => {
           <Box width={1} flexShrink={0} backgroundColor={n ? (targetState ? FG[targetState] : C.amber) : ready ? C.blue : C.green} />
           <Box flexDirection="column" flexGrow={1} flexShrink={1} paddingX={1}>
             <Box justifyContent="space-between" gap={1}>
-              <Text bold color={n ? (targetState ? FG[targetState] : C.amber) : ready ? C.blue : C.green}>{n ? '▸ 下一步' : ready ? '⇢ 沒有在等你，可以繼續' : '✓ 就緒'}{targetProject && cycles[targetProject.statusPath] ? <Text color={C.teal}>{`　${chipOf(cycles[targetProject.statusPath]!)}`}</Text> : null}</Text>
+              <Box flexShrink={1}>
+                <Text bold color={n ? (targetState ? FG[targetState] : C.amber) : ready ? C.blue : C.green}>{n ? '▸ 下一步' : ready ? '⇢ 沒有在等你，可以繼續' : '✓ 就緒'}{targetProject && cycles[targetProject.statusPath] ? <Text color={C.teal}>{`　${chipOf(cycles[targetProject.statusPath]!)}`}</Text> : null}</Text>
+                {waitingCount > 1 && <Text key="next-count" color={C.dim} wrap="truncate-end">{`　共 ${waitingCount} 件・n 下一件`}</Text>}
+              </Box>
               {targetProject && primaryAction && (
                 <Box key="next-cta" flexShrink={0} paddingX={1} backgroundColor={targetState && BG[targetState] ? BG[targetState] : C.sel}
                   hover={{ backgroundColor: targetState === 'GATE' ? '#463755' : targetState === 'ACTION' ? '#4D412B' : '#2B3D5E' }}>
@@ -3272,7 +3370,7 @@ export const register: Register = (on, options) => {
               )}
             </Box>
             {/* Who, then what: the project name carries the weight, the step reads as body text. */}
-            <Text color={C.text} wrap="wrap">{n === null ? ready ? [<Text key="rw" bold color={C.strong}>{ready.name}</Text>, <Text key="rs" color={C.faint}>{'　'}</Text>, <Text key="rx">{ready.next.trim()}</Text>]
+            <Text color={C.text} wrap="wrap">{n === null ? ready ? [<Text key="rw" bold color={C.strong}>{ready.name}</Text>, ...(leftFor(ready) !== null ? [<Text key="rl" color={C.amber}>{`　${leftFor(ready)} 天沒動`}</Text>] : []), <Text key="rs" color={C.faint}>{'　'}</Text>, <Text key="rx">{ready.next.trim()}</Text>]
               : <Text color={C.dim}>目前沒有需要處理的項目</Text>
               : n.includes('・') ? [<Text key="nw" bold color={C.strong}>{n.slice(0, n.indexOf('・'))}</Text>, <Text key="ns" color={C.faint}>{'　'}</Text>, <Text key="nx">{n.slice(n.indexOf('・') + 1)}</Text>] : n}</Text>
           </Box>
@@ -3301,7 +3399,8 @@ export const register: Register = (on, options) => {
                   <Text bold color={C.strong} wrap="truncate-end">{menuProject.name}</Text>
                 </Box>
                 <Box gap={2} flexShrink={0}>
-                  {(() => { const at = updatedLabel(menuProject); return at ? <Text color={C.dim}>{at}</Text> : null })()}
+                  {(() => { const at = updatedLabel(menuProject); return at ? <Text color={leftFor(menuProject) !== null ? C.amber : C.dim}>{at}</Text> : null })()}
+                  {leftFor(menuProject) !== null && <Text key="m-left" color={C.amber}>久未動</Text>}
                   <Button key="m-close" plain dimColor label="✕ 關閉" onPress={() => void update($, menuFor, () => null)} />
                 </Box>
               </Box>
@@ -3319,6 +3418,7 @@ export const register: Register = (on, options) => {
                 if (menuProject.pr) keys.push('p 開啟 PR')
                 if (menuProject.git) keys.push('f Git 檔案', 'b 分支圖')
                 if (cycles[menuProject.statusPath] ? !foreign(cycles[menuProject.statusPath]!) : !isManual(menuProject) && menuProject.hasCard && st !== 'ACTION') keys.push(cycles[menuProject.statusPath] ? 'a 停止接力' : 'a 自動接力')
+                if (waitingCount > 0) keys.push('n 下一件等你的事')
                 return <Text key="m-keys" color={C.faint} wrap="wrap">{`快捷鍵　${[...keys, 'Esc 關閉'].join('・')}`}</Text>
               })()}
             </Box>
@@ -3369,7 +3469,10 @@ export const register: Register = (on, options) => {
                       <Text bold color={FG[row.state]} backgroundColor={BG[row.state]}>{chipText(row.state)}</Text>
                       <Text bold color={C.strong} wrap="truncate-end">{p.name}</Text>
                     </Box>
-                    <Text color={C.dim}>{p.hasCard ? updatedLabel(p) ?? '' : '無狀態卡'}</Text>
+                    <Box gap={1} flexShrink={0}>
+                      <Text color={p.hasCard && leftFor(p) !== null ? C.amber : C.dim}>{p.hasCard ? updatedLabel(p) ?? '' : '無狀態卡'}</Text>
+                      {p.hasCard && leftFor(p) !== null && <Text key={'d-left-' + p.name} color={C.amber}>久未動</Text>}
+                    </Box>
                   </Box>
                   {pipes.get(p.name) && <Box marginTop={1}>{pipelineLine(pipes.get(p.name)!, PIPE, ui, 'd-pipeline-' + p.name, { noteless: true })}</Box>}
                   {projectInfo(p, 'd-info-' + p.name + '-', { state: true })}

@@ -28,6 +28,11 @@ for (const readme of readmes) {
   if (/\.task\//.test(text)) problems.push(`${readme} refers to .task/, which is git-ignored and absent for other contributors`)
 }
 
+// /console add writes the STATUS template from a copy inside the plugin: it must stay the workflow's template.
+const embedded = [...read('plugins/console-status/hooks/template.ts').matchAll(/^  ("(?:[^"\\]|\\.)*"),$/gm)].map(m => JSON.parse(m[1])).join('\n') + '\n'
+if (embedded !== read('workflow/STATUS-template.md').replace(/\r\n/g, '\n'))
+  problems.push('plugins/console-status/hooks/template.ts differs from workflow/STATUS-template.md; copy the template into it')
+
 if (problems.length) {
   for (const problem of problems) console.error(`✕ ${problem}`)
   process.exit(1)

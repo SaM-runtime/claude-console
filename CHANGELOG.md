@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.30.0
+
+- **`n`: the next thing waiting on you.** With many projects, what waits on you was spread over decisions, gates, syncs, failed CI and failed verifications in different rows. `n` in the pane now selects the next one, most urgent first, and opens its action menu with the right button on offer; pressing it again moves on, and past the last it starts over. The next-step card counts them (`共 3 件・n 下一件`), and `/console inbox` lists them as text, with sessions waiting at a prompt and projects left alone, for a phone or Remote Control.
+- **`/console add` registers a project in one command.** Run it in a project's folder (or `/console add <folder>` from the console): it adds the folder to the registry (making the registry if there is none, with an `Executor` column left blank), writes `.console/STATUS.md` from the workflow's template unless the folder has one, and adds `.console/` to `.git/info/exclude` so the STATUS file stays out of commits. A session in that folder stays light; a console refreshes and shows the project at once. Run from elsewhere, it reminds you that Claude Code must have trusted the folder before the first dispatch.
+- **Projects left alone are not forgotten.** A project with something still to do (a decision, a gate, a sync or a next step) whose CARD has not changed for `staleDays` (default 3) gets its age in amber, `久未動` on its card and menu, and is the one the next-step card and the Tab suggestion offer to continue first (`5 天沒動`), the longest left first. A project with nothing left never reads stale. `staleDays: off` turns it off.
+- The `⟳ 自動接力` hover help mentions the verification between hops and the stale-quota stop from 0.29.0.
+
 ## 0.29.0
 
 - **⟳ 自動接力 checks the work between hops.** For a project whose CARD has `驗證`, a cycle now runs that command before every continue after its first hop (in the project root, no model, as `▶ 執行驗證` does) and sends the next step only on a pass newer than the last hop. A failure stops the cycle with `驗證沒過（結束碼 1）`, so a broken step is not built on for six more hops. A command not yet confirmed in this console is never run on its own: the cycle stops before its second hop with `驗證指令還沒確認過：先按一次 ▶ 執行驗證…`, and the start line says which of the two it will do. A project without `驗證` cycles as before.

@@ -1,7 +1,7 @@
 import type { Project, Snapshot, ActionKind, ContinueConfirmation, VerificationResult, PendingAction, ReviewRequest } from '../types'
 import { terminalLines } from './terminal'
 import type { State } from './logic'
-import { hasAsk, parseGate, rows, saysNone } from './logic'
+import { hasAsk, parseGate, rows, saysNone, staleFor } from './logic'
 
 export const ACTION_LABEL: Record<ActionKind, string> = {
   verify: '▶ 執行驗證', sync: '⇢ 同步 STATUS', continue: '⇢ 繼續下一步', reply: '↩ 回覆執行者',
@@ -271,7 +271,7 @@ export function launchId(stdout: string): string | null {
  * (a decision, a reply to an executor that asked, a review gate, a sync), else continuing the first idle project
  * with a next step. Each is a prompt or a `/console` command that does exactly that; null when nothing waits.
  */
-export function suggestedPrompt(s: Snapshot, pending: Record<string, unknown> = {}): string | null {
+export function suggestedPrompt(s: Snapshot, pending: Record<string, unknown> = {}, staleDays: number | null = null): string | null {
   if (s.demo || s.error) return null
   const list = rows(s)
   const ready = (name: string) => {
@@ -289,22 +289,23 @@ export function suggestedPrompt(s: Snapshot, pending: Record<string, unknown> = 
     if (kinds.includes('sync')) return `/console sync ${p.name}`
     return null
   }
-  const p = continuable(s, pending)
+  const p = continuable(s, pending, staleDays)
   return p ? `/console continue ${p.name}` : null
 }
 
 /**
- * With nothing waiting on the person, the idle project the console would continue: the first one, in the
- * table's order, with a next step to continue and no press of its own in flight.
+ * With nothing waiting on the person, the idle project the console would continue: one with a next step to
+ * continue and no press of its own in flight. One left alone past `staleDays` comes first, the longest left
+ * first, since the busy projects are not the ones forgotten; otherwise the first in the table's order.
  */
-export function continuable(s: Snapshot, pending: Record<string, unknown> = {}): Project | undefined {
+export function continuable(s: Snapshot, pending: Record<string, unknown> = {}, staleDays: number | null = null): Project | undefined {
   if (s.demo || s.error) return undefined
-  for (const r of rows(s)) {
-    if (r.state !== 'IDLE') continue
-    const p = s.projects.find(x => x.name === r.full)
-    if (p && !pending[p.statusPath] && actionKinds(p, 'IDLE').includes('continue')) return p
-  }
-  return undefined
+  const ready = rows(s).flatMap(r => {
+    const p = r.state === 'IDLE' ? s.projects.find(x => x.name === r.full) : undefined
+    return p && !pending[p.statusPath] && actionKinds(p, 'IDLE').includes('continue') ? [p] : []
+  })
+  const left = ready.map(p => ({ p, days: staleFor(p, s.at, staleDays) })).filter(x => x.days !== null).sort((a, b) => b.days! - a.days!)
+  return left[0]?.p ?? ready[0]
 }
 
 /**

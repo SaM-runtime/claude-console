@@ -37,7 +37,7 @@ export function cardVerdict(note: string): 'pass' | 'fail' | null {
 }
 
 /** Latest verdict: the console's own run when it ran this command, else what the CARD records. */
-function verdict(p: Project, local?: VerificationResult): 'pass' | 'fail' | null {
+export function verdict(p: Project, local?: VerificationResult): 'pass' | 'fail' | null {
   if (local && local.command === p.verify) return local.ok ? 'pass' : 'fail'
   return cardVerdict(p.verifyNote ?? '')
 }

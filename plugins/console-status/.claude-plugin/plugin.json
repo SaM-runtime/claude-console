@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -146,6 +146,12 @@
       "title": "Confirm a continue",
       "description": "on: ⇢ 繼續下一步 and ↻ 重試 dispatch only on a second press within six seconds. off: one press dispatches.",
       "default": "on"
+    },
+    "staleDays": {
+      "type": "string",
+      "title": "Days before a project reads stale",
+      "description": "A project with something still to do and no CARD update for this many days (1-60) gets an amber age and 久未動, and is the one offered to continue first. off: never.",
+      "default": "3"
     },
     "suggestNext": {
       "type": "string",
