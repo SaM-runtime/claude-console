@@ -3,7 +3,7 @@
 // Band above the prompt + `/console` pane; toasts on changes. Shows on phones via Remote Control.
 import { atom, read, update } from 'claude-code'
 import type { Register, PluginOptions } from 'claude-code'
-import { resolveConfig, resolveFallbackOptions, legacyDispatchPath, activationMode, suggestNextMode, confirmContinueMode, staleDaysOption } from './config'
+import { resolveConfig, resolveFallbackOptions, legacyDispatchPath, activationMode, suggestNextMode, confirmContinueMode, staleDaysOption, awayMinutesOption } from './config'
 import type { ConsoleConfig } from './config'
 import { codexHealth, isActiveJob } from './logic'
 import { codexNote } from './wording'
@@ -18,7 +18,8 @@ import { decideCodexDispatch } from './fallback'
 import { isWindowsOs, openFallbackArgs, preflightArgs, quotaArgs } from './platform'
 import { stateFormatIssues, stateFormatWarning } from './jobs'
 import { pipeline, projectForCwd, projectModeSection, progressContext, progressSignature, verdict } from './pipeline'
-import { addFolder, excludeWith, localMinute, newStatusFile, projectNameFor, registryWith } from './projects'
+import { addFolder, archivedRows, excludeWith, localMinute, newStatusFile, projectNameFor, registryArchive, registryUnarchive, registryWith } from './projects'
+import { AWAY_LOG_MAX, awayCounts, awayFor, awayHighlights, awayText, awayView, cameBack } from './away'
 import type { Pipeline } from './pipeline'
 import { pipelineLine, pipelineParts, pipelineText } from './pipeline-view'
 import { FETCH_STALE_MS, agoText, commitLine, fileGroups, fileKind, gitBadge, gitFilesArgs, gitParts, gitLogArgs, gitNumstatArgs, gitProbeMode, gitShowArgs, gitSignature, gitStatusArgs, linesText, parseGitFiles, parseGitLog, parseGitShow, parseGitStatus, parseNumstat, parseNumstatFiles, parsePrList, parsePrView, prLine, prViewArgs } from './git'
@@ -33,8 +34,8 @@ import type { CacheTtl } from './cache'
 import { commandPreview, dangerOf, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
-import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction } from '../types'
-import { jobWarnings, waitingNames, parseGate, parseCodexQuota, claudeLimits, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, gateText, battery, blockedLines, resetText, nextProject, buildProject, cardTime, counts, demoSnapshot, diffToasts, displayWidth, events, inbox, nextInbox, staleFor, limitHelp, limitName, parseLimitKind, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
+import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction, AwayDigest, FeedEvent, FeedKind } from '../types'
+import { jobWarnings, waitingNames, parseGate, parseCodexQuota, claudeLimits, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, gateText, battery, blockedLines, resetText, nextProject, buildProject, cardTime, counts, demoSnapshot, diffToasts, displayWidth, events, inbox, nextInbox, staleFor, limitHelp, limitName, parseLimitKind, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, saysNone, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody, METER } from './battery'
@@ -71,6 +72,12 @@ const isPlain = atom({ plugin: 'console-status', key: 'isPlain' } as const, fals
 const selected = atom({ plugin: 'console-status', key: 'selected' } as const, null)
 const cursor = atom({ plugin: 'console-status', key: 'cursor' } as const, -1)
 const feedAtom = atom({ plugin: 'console-status', key: 'feed' } as const, [])
+/** When the person last used this console, the feed lines since, and the digest frozen at their return (hooks/away.ts). */
+const activeAt = atom({ plugin: 'console-status', key: 'activeAt' } as const, 0)
+const awayLog = atom({ plugin: 'console-status', key: 'awayLog' } as const, [])
+const awayDigest = atom({ plugin: 'console-status', key: 'awayDigest' } as const, null)
+/** The archived projects' list is open under the table. */
+const archiveOpen = atom({ plugin: 'console-status', key: 'archiveOpen' } as const, false)
 const isRefreshing = atom({ plugin: 'console-status', key: 'isRefreshing' } as const, false)
 const hovered = atom({ plugin: 'console-status', key: 'hovered' } as const, null)
 const menuFor = atom({ plugin: 'console-status', key: 'menuFor' } as const, null)
@@ -111,6 +118,8 @@ const syncProgress = atom({ plugin: 'console-status', key: 'syncProgress' } as c
 /** statusPath → its ⟳ 自動接力; kept in `$.store` under CYCLES_KEY so a reload keeps it, mirrored here for drawing. */
 const cycleRuns = atom({ plugin: 'console-status', key: 'cycleRuns' } as const, {})
 const CYCLES_KEY = 'cycles'
+/** statusPath → when a person pinned it (▴ 置頂); in `$.store`, which every console shares, so they all sort alike. */
+const PINS_KEY = 'pinned'
 /** statusPath → the 執行者 section of an open project card. */
 const executorDigests = atom({ plugin: 'console-status', key: 'executorDigests' } as const, {})
 /** Parsed transcript tails, kept per path while mtime and size stay; and where each session's transcript was found. */
@@ -607,6 +616,9 @@ async function refresh($: any, options: PluginOptions, force = false) {
     const registry = await io.fs.read(config.registryPath).catch(() => null) as string | null
     if (registry === null) error = `找不到登錄表 ${config.registryPath}：在專案資料夾輸入 /console add 就會建立並加入第一個專案，或 /console demo 先看示範`
     const registryRows = parseRegistry(registry ?? '', home).map(row => ({ row, root: projectRoot(row.statusPath) }))
+    // ⊟ 封存: the 已封存 section is only listed, never probed. ▴ 置頂 is read from the store every console shares.
+    const archived = registry === null ? [] : archivedRows(registry, home).map(row => ({ name: row.name, statusPath: row.statusPath }))
+    const pins = await guarded(() => loadPins($))
     const effective = registryRows.map(({ row, root }) => effectiveDispatch(settings, root, row.executor))
     const codexInUse = settings.executor === 'codex' || effective.some(item => item.executor === 'codex')
     if (force || now - lastSlow > SLOW_MS) {
@@ -713,6 +725,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
         ...buildProject(row, card, jobs, now, typeof stat?.mtimeMs === 'number' ? stat.mtimeMs : undefined), executor: eff.executor, executorSource: eff.source,
         ...(row.executor ? { registryExecutor: row.executor } : {}),
         ...(git ? { git } : {}), ...(pr ? { pr } : {}),
+        ...(pins[row.statusPath] ? { pinned: true } : {}),
       }
       await Promise.all(project.jobs.filter(j => j.kind === 'running').map(async j => {
         const job = jobs.find(item => item.id === j.id && item.executor === j.executor)
@@ -738,6 +751,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
       ...(codexInUse && (companion || formatWarning) ? { companion: { path: companion?.path ?? '', source: companion?.source ?? 'none', ...(companionWarning ? { warning: companionWarning } : {}) } } : {}),
       contextPercent: usage?.context?.percent ?? null, error,
       ...(typeof usage?.cost?.usd === 'number' ? { costUsd: usage.cost.usd } : {}),
+      ...(archived.length ? { archived } : {}),
       codexQuota: parseCodexQuota(codexQuotaText, now),
       limits: claudeLimits(usage?.rateLimits, now),
       ...(limitsAt ? { limitsAt } : {}),
@@ -750,7 +764,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
       const sameExecutor = !prev?.demo && prev?.executor === cur.executor ? prev : null
       const newWarnings = warnings.filter(text => !previousFeed.some(event => event.text === text))
       const fresh = [...newWarnings.map(text => ({ at: now, text, tone: 'red' as const })), ...events(sameExecutor, cur)]
-      if (fresh.length) await guarded(() => update($, feedAtom, list => current() ? [...fresh, ...list].slice(0, 20) : list))
+      if (fresh.length) await guarded(() => addFeed($, fresh, current))
       await guarded(() => update($, snapshot, latest => {
         if (!current()) return latest
         if (startingGeneration === launchGeneration || !latest) return trackRowChanges(latest, cur, now)
@@ -802,25 +816,53 @@ async function openPane($: any) {
   await update($, isPaneOpen, () => true)
 }
 
+/** Lines for the feed (newest first, 20 kept) and for the while-away digest's log; `keep` false drops them. */
+async function addFeed($: any, lines: FeedEvent[], keep: () => boolean = () => true) {
+  await update($, feedAtom, list => keep() ? [...lines, ...list].slice(0, 20) : list)
+  await update($, awayLog, list => keep() ? [...lines, ...list].slice(0, AWAY_LOG_MAX) : list)
+}
+
+/** `awayMinutes` in milliseconds; null when off. */
+const awayMs = (options: PluginOptions) => { const minutes = awayMinutesOption((options as any).awayMinutes); return minutes === null ? null : minutes * 60_000 }
+
+/**
+ * The person used this console now: a prompt, a /console command, a key or a press in the pane. A return after
+ * `awayMinutes` freezes the while-away digest; the log starts over from here.
+ */
+async function touch($: any, options: PluginOptions) {
+  const now = await $.clock.now()
+  const state = cameBack({ activeAt: await read($, activeAt), log: await read($, awayLog), digest: await read($, awayDigest) }, now, awayMs(options))
+  await update($, activeAt, () => state.activeAt)
+  // A line written meanwhile (after `now`) stays for the next return.
+  if ((await read($, awayLog)).length) await update($, awayLog, list => list.filter(event => event.at > now))
+  if (state.digest !== await read($, awayDigest)) await update($, awayDigest, () => state.digest)
+}
+
+/** The while-away digest to show now, if any; never on demo data. */
+async function awayNow($: any, options: PluginOptions): Promise<AwayDigest | null> {
+  if (await demoEnabled($)) return null
+  return awayView({ activeAt: await read($, activeAt), log: await read($, awayLog), digest: await read($, awayDigest) }, await $.clock.now(), awayMs(options))
+}
+
 async function actionNotice($: any, text: string, ok: boolean) {
   const generation = dataGeneration
   if (await demoEnabled($)) return
   const at = await $.clock.now()
   await publishDisplay(async () => {
     if (generation !== dataGeneration || await demoEnabled($)) return
-    await update($, feedAtom, list => [{ at, text, tone: ok ? 'green' : 'red' } as const, ...list].slice(0, 20))
+    await addFeed($, [{ at, text, tone: ok ? 'green' : 'red', ...(ok ? {} : { kind: 'failed' as const }) }])
     if (generation === dataGeneration && !demoActive) $.ui.toast(text, { timeoutMs: 8000 })
   })
 }
 
 /** A ⟳ line in the feed, with a toast when `toast`; a hop is only a feed line, a stop is both. */
-async function cycleNotice($: any, text: string, tone: 'teal' | 'amber' | 'green' | 'red', toast: boolean) {
+async function cycleNotice($: any, text: string, tone: 'teal' | 'amber' | 'green' | 'red', toast: boolean, kind?: FeedKind) {
   const generation = dataGeneration
   if (await demoEnabled($)) return
   const at = await $.clock.now()
   await publishDisplay(async () => {
     if (generation !== dataGeneration || await demoEnabled($)) return
-    await update($, feedAtom, list => [{ at, text, tone } as const, ...list].slice(0, 20))
+    await addFeed($, [{ at, text, tone, ...(kind ? { kind } : {}) }])
     if (toast && generation === dataGeneration && !demoActive) $.ui.toast(text, { timeoutMs: 8000 })
   })
 }
@@ -1306,6 +1348,87 @@ async function saveCycle($: any, path: string, change: (run: CycleRun | undefine
   await update($, cycleRuns, () => all)
 }
 
+async function loadPins($: any): Promise<Record<string, number>> {
+  const value: unknown = await Promise.resolve().then(() => $.store.get(PINS_KEY)).catch(() => null)
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, number] => typeof entry[1] === 'number')) : {}
+}
+
+/**
+ * ▴ 置頂 on a project, or off again (`want` false): it sorts first within its state and is the project the
+ * next-step card and the Tab suggestion continue first. Kept for every console; the table changes at once.
+ */
+async function togglePin($: any, p: Project, want?: boolean): Promise<string> {
+  const name = p.name
+  if (await demoEnabled($)) { $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。'); return '示範資料不置頂' }
+  const pins = await loadPins($)
+  const on = want ?? !pins[p.statusPath]
+  const next = { ...pins }
+  if (on) next[p.statusPath] = pins[p.statusPath] ?? await $.clock.now()
+  else delete next[p.statusPath]
+  try { await $.store.set(PINS_KEY, next) } catch (error) {
+    const text = `${name}：沒有存下來（${error instanceof Error ? error.message : String(error)}）`
+    $.ui.toast(text)
+    return text
+  }
+  await update($, snapshot, current => current && { ...current, projects: current.projects.map(item => {
+    if (item.statusPath !== p.statusPath) return item
+    const { pinned: _, ...rest } = item
+    return on ? { ...rest, pinned: true } : rest
+  }) })
+  const text = on ? `${name}：已置頂，同一個狀態裡排在最前面，也先建議繼續它` : `${name}：已取消置頂`
+  $.ui.toast(text)
+  return text
+}
+
+/**
+ * ⊟ 封存: the project's row moves to the registry's `## 已封存` section, so the console no longer refreshes it
+ * (no git, gh or job reads); ↺ 取回 moves it back. Not while its work runs; this console's ⟳ on it stops.
+ */
+async function archiveProject($: any, options: PluginOptions, p: Project): Promise<string> {
+  // The whole name: it is what /console unarchive takes.
+  const name = p.name
+  const refuse = (text: string) => { $.ui.toast(text); return text }
+  if (await demoEnabled($)) return refuse('示範資料：不執行專案操作；/console refresh 回到實際資料。')
+  if (p.jobs.some(job => job.kind === 'running')) return refuse(`${name}：工作還在跑，等它結束（或先 ■ 停止工作）再封存`)
+  const run = (await loadCycles($))[p.statusPath]
+  if (run && !mine(run, await mySession($))) return refuse(`${name}：另一個主控台在接力，請先在那邊停止`)
+  const { config } = await paths($, options)
+  const registry = await Promise.resolve().then(() => $.fs.read(config.registryPath)).catch(() => null) as string | null
+  const next = registry === null ? null : registryArchive(registry, p.name)
+  if (next === null) return refuse(`${name}：登錄表的專案清單裡找不到它，沒有封存`)
+  try { await $.fs.write(config.registryPath, next) } catch (error) {
+    return refuse(`${name}：沒有封存（${error instanceof Error ? error.message : String(error)}）`)
+  }
+  if (run) await saveCycle($, p.statusPath, () => undefined)
+  await update($, menuFor, value => value === p.name ? null : value)
+  await update($, selected, value => value === p.name ? null : value)
+  const text = `${name}：已封存，不再更新（移到登錄表的「已封存」）；要找回來按面板最下面的 ↺ 取回，或 /console unarchive ${name}`
+  await actionNotice($, text, true)
+  await refresh($, options, true)
+  return text
+}
+
+/** ↺ 取回: an archived project (named, or the start of its name) back in the registry's list, refreshed again. */
+async function unarchiveProject($: any, options: PluginOptions, words: string): Promise<string> {
+  if (await demoEnabled($)) return '示範資料：不執行專案操作；/console refresh 回到實際資料。'
+  const { home, config } = await paths($, options)
+  const registry = await Promise.resolve().then(() => $.fs.read(config.registryPath)).catch(() => null) as string | null
+  const shelved = registry === null ? [] : archivedRows(registry, home)
+  if (!shelved.length) return '沒有已封存的專案。'
+  const target = commandTarget(shelved, words)?.project
+  if (!target) return `${words.trim() ? `找不到已封存的「${words.trim()}」。` : ''}已封存：${shelved.map(row => row.name).join('、')}；用 /console unarchive <專案名稱> 取回。`
+  const next = registryUnarchive(registry!, target.name)
+  if (next === null) return `${target.name}：沒有取回（登錄表的已封存段落找不到它）`
+  try { await $.fs.write(config.registryPath, next) } catch (error) {
+    return `${target.name}：沒有取回（${error instanceof Error ? error.message : String(error)}）`
+  }
+  const text = `${target.name}：已取回，回到專案清單`
+  await actionNotice($, text, true)
+  if (consoleActive) await refresh($, options, true)
+  return text
+}
+
 /**
  * ⟳ on a project: arm its cycle (the first hop goes out at the next refresh), or stop it. Work already running
  * is not touched. Returns what happened, for a command's answer.
@@ -1341,7 +1464,7 @@ async function stopJobs($: any, options: PluginOptions, p: Project): Promise<str
   const run = runs[p.statusPath]
   if (run && mine(run, await mySession($))) {
     await saveCycle($, p.statusPath, () => undefined)
-    await cycleNotice($, `⟳ ${name} 接力已停止（你停止了工作）`, 'amber', false)
+    await cycleNotice($, `⟳ ${name} 接力已停止（你停止了工作）`, 'amber', false, 'cycle-stop')
   }
   const text = failed.length ? `${name}：停止失敗：${failed.join('、')}` : `${name}：已停止工作；結果留著，可以同步或繼續`
   await actionNotice($, text, !failed.length)
@@ -1375,17 +1498,22 @@ async function attachJob($: any, p: Project, surface?: string): Promise<string> 
 /** A failed verification counts as waiting on you: the local result for the CARD's command, else the CARD's own verdict. */
 const verifyFailed = (results: Record<string, VerificationResult>) => (p: Project) => verdict(p, results[p.statusPath]) === 'fail'
 
-/** /console inbox: what waits on you in the order `n` walks it, then sessions waiting at a prompt, then projects left alone. */
-function inboxText(s: Snapshot, results: Record<string, VerificationResult>, days: number | null): string {
+/**
+ * /console inbox: what happened while you were away (when the console shows that), then what waits on you in the
+ * order `n` walks it, then sessions waiting at a prompt, then projects left alone.
+ */
+function inboxText(s: Snapshot, results: Record<string, VerificationResult>, days: number | null, away: AwayDigest | null = null, now = s.at): string {
   const items = inbox(s, verifyFailed(results))
   const listed = new Set(items.map(item => item.project))
   const sessions = s.blocked.map(b => `・${b.name}${b.project ? `（${b.project}）` : ''}：${b.why}`)
   const left = s.projects
     .flatMap(p => { const d = listed.has(p.name) ? null : staleFor(p, s.at, days); return d === null ? [] : [{ p, d }] })
     .sort((a, b) => b.d - a.d)
-    .map(({ p, d }) => `・${p.name}：${d} 天沒動${p.next.trim() && !/^無/.test(p.next.trim()) ? `，下一步：${p.next.trim().slice(0, 40)}` : ''}`)
-  if (!items.length && !sessions.length && !left.length) return '沒有在等你的事。'
+    .map(({ p, d }) => `・${p.name}：${d} 天沒動${p.next.trim() && !saysNone(p.next) ? `，下一步：${p.next.trim().slice(0, 40)}` : ''}`)
+  const back = away ? awayText(away, at => agoText(at, now)) : []
+  if (!items.length && !sessions.length && !left.length) return [...back, '沒有在等你的事。'].join('\n')
   return [
+    ...back,
     items.length ? `等你處理（${items.length} 件）：` : '沒有專案在等你。',
     ...items.map(item => `・${item.project}：${item.text}`),
     ...(sessions.length ? ['其他對話在等你：', ...sessions] : []),
@@ -1408,7 +1536,12 @@ async function addProject($: any, options: PluginOptions, words: string): Promis
   const same = (path: string) => path.replace(/\/+$/, '').toLowerCase() === folder.toLowerCase()
   const known = listed.find(row => same(projectRoot(row.statusPath)))
   if (known) return `已經登錄過：${known.name}（${known.statusPath}）`
-  const name = projectNameFor(folder, listed.map(row => row.name))
+  // An archived project's folder comes back rather than being registered twice.
+  const archived = registry === null ? [] : archivedRows(registry, home)
+  const shelved = archived.find(row => same(projectRoot(row.statusPath)))
+  if (shelved) return `這個資料夾之前封存過。${await unarchiveProject($, options, shelved.name)}`
+  // An archived name stays taken, so bringing that project back cannot clash with this one.
+  const name = projectNameFor(folder, [...listed, ...archived].map(row => row.name))
   const statusPath = `${folder}/.console/STATUS.md`
   const done: string[] = []
   try {
@@ -1453,7 +1586,7 @@ async function toggleCycle($: any, options: PluginOptions, p: Project, want?: bo
   if (!(want ?? !armed)) {
     if (!run) return `${name}：沒有在接力`
     await saveCycle($, p.statusPath, () => undefined)
-    await cycleNotice($, `⟳ ${name} 接力已停止（第 ${run.hops} 跳；進行中的工作不中斷）`, 'amber', true)
+    await cycleNotice($, `⟳ ${name} 接力已停止（第 ${run.hops} 跳；進行中的工作不中斷）`, 'amber', true, 'cycle-stop')
     return `${name}：接力已停止`
   }
   if (run) return `${name}：已在接力（${cycleChip(run)}）`
@@ -1518,13 +1651,13 @@ async function autoCycle($: any, options: PluginOptions) {
       // Another console's cycle: shown, never run here. Its console gone (off, closed or crashed) for six hours, any console clears it.
       const owner = run.owner ?? ''
       const gone = !owner || !sessions.includes(owner) || now - (lease.consoles[owner] ?? -Infinity) >= ALIVE_MS
-      if (gone && stale) { await drop(path); await cycleNotice($, `⟳ ${name} 接力解除：接力的主控台已離開超過 6 小時（第 ${run.hops} 跳）`, 'amber', true) }
+      if (gone && stale) { await drop(path); await cycleNotice($, `⟳ ${name} 接力解除：接力的主控台已離開超過 6 小時（第 ${run.hops} 跳）`, 'amber', true, 'cycle-stop') }
       continue
     }
-    if (!p) { await drop(path); await cycleNotice($, `⟳ 接力解除：${path} 不在登錄表`, 'amber', true); continue }
+    if (!p) { await drop(path); await cycleNotice($, `⟳ 接力解除：${path} 不在登錄表`, 'amber', true, 'cycle-stop'); continue }
     if (stale) {
       await drop(path)
-      await cycleNotice($, `⟳ ${name} 接力解除：6 小時沒有新的一跳（第 ${run.hops} 跳）`, 'amber', true)
+      await cycleNotice($, `⟳ ${name} 接力解除：6 小時沒有新的一跳（第 ${run.hops} 跳）`, 'amber', true, 'cycle-stop')
       continue
     }
     const held = pending[path]
@@ -1541,7 +1674,7 @@ async function autoCycle($: any, options: PluginOptions) {
     })
     if ('stop' in plan) {
       await drop(path)
-      await cycleNotice($, `⟳ ${name} 接力${plan.done ? '完成' : '停止'}：${plan.stop}（第 ${run.hops} 跳）`, plan.done ? 'green' : 'amber', true)
+      await cycleNotice($, `⟳ ${name} 接力${plan.done ? '完成' : '停止'}：${plan.stop}（第 ${run.hops} 跳）`, plan.done ? 'green' : 'amber', true, 'cycle-stop')
       continue
     }
     if ('wait' in plan) { await setWaiting(path, plan.wait); continue }
@@ -1588,7 +1721,7 @@ async function sendHop($: any, options: PluginOptions, hop: Hop) {
   await triggerAction($, options, hop.path, hop.kind, { auto: true, confirmed: true })
   if (!await hopTook($, hop.path, hop.kind)) {
     await saveCycle($, hop.path, () => undefined)
-    await cycleNotice($, `⟳ ${hop.name} 接力停止：${hop.label} 沒有送出，見上一則動態（第 ${run.hops} 跳）`, 'red', true)
+    await cycleNotice($, `⟳ ${hop.name} 接力停止：${hop.label} 沒有送出，見上一則動態（第 ${run.hops} 跳）`, 'red', true, 'cycle-stop')
     return
   }
   const hops = run.hops + 1
@@ -1691,7 +1824,7 @@ async function commandGuard($: any, options: PluginOptions, e: any): Promise<{ d
     allowed = answer === '執行一次'
   }
   const at = await $.clock.now()
-  await update($, feedAtom, list => [{ at, text: `指令護欄${allowed ? '放行' : '攔下'}：${reason}`, tone: allowed ? 'amber' : 'red' } as const, ...list].slice(0, 20))
+  await addFeed($, [{ at, text: `指令護欄${allowed ? '放行' : '攔下'}：${reason}`, tone: allowed ? 'amber' : 'red' }])
   if (allowed) return null
   $.ui.toast(`指令護欄攔下：${reason}`, { timeoutMs: 6000 })
   return { deny: `console-status 指令護欄攔下這個指令（${reason}）${mode === 'deny' ? '：commandGuard 設為 deny' : '：使用者沒有同意'}。這個指令在做什麼：${explain}不要換個寫法重試同樣的效果；改用可復原的做法，或請使用者自己執行。` }
@@ -1941,6 +2074,13 @@ async function rememberSession($: any, keep: boolean) {
 async function startConsole($: any, options: PluginOptions, remember: boolean, refreshNow = true) {
   if (consoleActive) return
   consoleActive = true
+  // The while-away digest counts from here: nothing before this console ran was watched.
+  const startedAt = await Promise.resolve().then(() => $.clock.now()).catch(() => null)
+  if (typeof startedAt === 'number') {
+    await update($, activeAt, () => startedAt)
+    await update($, awayLog, () => [])
+    await update($, awayDigest, () => null)
+  }
   refreshTimer?.cancel()
   refreshTimer = $.clock.every(TICK_MS, () => void refresh($, options))
   cacheTimer?.cancel()
@@ -1998,7 +2138,7 @@ export const register: Register = (on, options) => {
     await update($, continueConfirmations, () => ({}))
     await update($, fallbackOffers, () => ({}))
     await loadTrust($)
-    await $.command.register({ name: 'console', description: '主控台：/console 開關面板；add 加入這個資料夾的專案；demo 示範；inbox 列出在等你的事；reply <專案> <回覆> 回覆執行者；continue / sync / gate / verify <專案> 執行動作；cycle <專案> [off] 自動接力；model / effort / executor 派工設定；refresh 更新；update 更新外掛；off 這個對話關閉' })
+    await $.command.register({ name: 'console', description: '主控台：/console 開關面板；add 加入這個資料夾的專案；demo 示範；inbox 列出在等你的事；reply <專案> <回覆> 回覆執行者；continue / sync / gate / verify <專案> 執行動作；cycle <專案> [off] 自動接力；pin <專案> [off] 置頂；archive / unarchive <專案> 封存或取回；model / effort / executor 派工設定；refresh 更新；update 更新外掛；off 這個對話關閉' })
     transcriptPath = null
     loadedVersion ??= manifestVersion(await Promise.resolve().then(() => $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)).catch(() => null))
     // A reload after an update starts a fresh check, which reads the newly installed manifest.
@@ -2024,6 +2164,8 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     if (e.origin?.kind === 'plugin' || !consoleActive) return next(e)
+    // The person is at the console: a return after awayMinutes freezes the while-away digest. Never holds the prompt.
+    await touch($, options).catch(() => {})
     if (cacheMode(options) === 'on') {
       // A prompt on a cold cache re-writes the whole context: say so, never hold the prompt.
       const clock = await read($, cacheClock).catch(() => null)
@@ -2115,7 +2257,7 @@ export const register: Register = (on, options) => {
       const prev = await read($, cacheClock)
       await update($, cacheClock, () => compactedClock(prev, at, result.tokensBefore, result.tokensAfter))
       if (consoleActive && typeof result.tokensBefore === 'number' && typeof result.tokensAfter === 'number') {
-        await update($, feedAtom, list => [{ at, text: `對話已壓縮：${tokensText(result.tokensBefore!)} → ${tokensText(result.tokensAfter!)} tokens`, tone: 'teal' } as const, ...list].slice(0, 20))
+        await addFeed($, [{ at, text: `對話已壓縮：${tokensText(result.tokensBefore!)} → ${tokensText(result.tokensAfter!)} tokens`, tone: 'teal' }])
       }
     }).catch(() => {})
     return result
@@ -2161,6 +2303,8 @@ export const register: Register = (on, options) => {
   on('command.run', async ($, e, next) => {
     if (e.command !== 'console') return next(e)
     const arg = e.args.trim()
+    // A /console command is the person at the console: a return after awayMinutes freezes the while-away digest.
+    await touch($, options).catch(() => {})
     if (arg === 'off') {
       if (!consoleActive) return { text: '這個對話沒有開啟主控台（指令護欄照常運作）。' }
       await stopConsole($, options)
@@ -2263,7 +2407,7 @@ export const register: Register = (on, options) => {
     if (arg === 'inbox') {
       const snap = await read($, snapshot)
       if (!snap) return { text: '讀取各專案狀態中…' }
-      return { text: inboxText(snap, await read($, verificationResults), staleDaysOption((options as any).staleDays)) }
+      return { text: inboxText(snap, await read($, verificationResults), staleDaysOption((options as any).staleDays), await awayNow($, options), await $.clock.now()) }
     }
     // ⟳ 自動接力 from the keyboard: the same as the menu's button.
     const cycleArg = arg.match(/^cycle(?:\s+([\s\S]*))?$/)
@@ -2276,6 +2420,25 @@ export const register: Register = (on, options) => {
       const target = commandTarget(snap && !snap.demo ? snap.projects : [], named)
       if (!target) return { text: `${named ? `找不到專案「${named}」。` : ''}用法：/console cycle <專案名稱>（開始自動接力）、/console cycle <專案名稱> off（停止）` }
       return { text: await toggleCycle($, options, target.project, !off) }
+    }
+    // ⊟ 封存, ↺ 取回 and ▴ 置頂 from the keyboard: the same as the menu's buttons.
+    const shelfArg = arg.match(/^(archive|unarchive|pin)(?:\s+([\s\S]*))?$/)
+    if (shelfArg) {
+      if (await demoEnabled($)) return { text: '示範資料：不執行專案操作；/console refresh 回到實際資料。' }
+      const verb = shelfArg[1] as 'archive' | 'unarchive' | 'pin'
+      const rest = (shelfArg[2] ?? '').trim()
+      if (verb === 'unarchive') return { text: await unarchiveProject($, options, rest) }
+      const snap = await read($, snapshot)
+      const projects = snap && !snap.demo ? snap.projects : []
+      const off = verb === 'pin' && /(?:^|\s)off$/i.test(rest)
+      const named = off ? rest.replace(/\s*\boff$/i, '').trim() : rest
+      if (verb === 'pin' && !named) {
+        const pinned = projects.filter(p => p.pinned).map(p => p.name)
+        return { text: `${pinned.length ? `置頂：${pinned.join('、')}` : '沒有置頂的專案。'}\n用法：/console pin <專案名稱>（置頂）、/console pin <專案名稱> off（取消）` }
+      }
+      const target = commandTarget(projects, named)
+      if (!target) return { text: `${named ? `找不到專案「${named}」。` : ''}用法：/console ${verb} <專案名稱>${verb === 'pin' ? '（加上 off 取消置頂）' : ''}` }
+      return { text: verb === 'archive' ? await archiveProject($, options, target.project) : await togglePin($, target.project, !off) }
     }
     const act = arg.match(new RegExp(`^(${COMMAND_ACTIONS.join('|')})(?:\\s+([\\s\\S]*))?$`))
     if (act) {
@@ -2378,6 +2541,10 @@ export const register: Register = (on, options) => {
     action_gate: '把關卡與專案資料送給主控台審核，使用 Claude 額度；不會執行上線（release）。',
     action_cycle: '自動接力：每次更新替你按下一個現有按鈕（繼續、同步、審核關卡），一路做下去；狀態卡有驗證指令時，第 2 跳起每次繼續前先跑一次，沒過就停。停在需要你拍板的決策、執行者停下來提問、release 關卡、工作失敗、驗證沒過、上一跳沒改到狀態卡、達到跳數上限（cycleMaxHops，預設 6）、5 小時額度用到門檻（cycleQuotaStop，預設 70%），或額度數字超過 45 分鐘沒更新。再按一次停止，進行中的工作不中斷。',
     action_open: '用編輯器開啟專案 STATUS.md，不使用模型額度。',
+    action_pin: '置頂：同一個狀態裡排在最前面（名稱前面有 ▴）；沒有需要你處理的事時，「下一步」卡和 Tab 建議也先挑它繼續。每個主控台都看得到；再按一次取消。也可以用 /console pin <專案>。',
+    action_archive: '封存：把這個專案移到登錄表的「已封存」段落，主控台不再更新它（不讀狀態卡、git、PR），面板最下面只留一行。工作還在跑時不能封存；這個主控台在它身上的自動接力會一起停掉。按「↺ 取回」或 /console unarchive <專案> 放回來。',
+    archived: '已封存的專案：在登錄表的「已封存」段落，主控台不更新。按「▸ 取回」列出來，再按「↺ 取回」放回專案清單；也可以直接在登錄表把那一列搬回「STATUS 卡位置」。',
+    away: '你離開期間的摘要：超過 awayMinutes（預設 30 分鐘）沒有在這個主控台送提示、輸入 /console 指令或在面板按鍵，就把這段時間的動態整理在這裡：完成、失敗、新的待決、CI。按「✓ 知道了」收起；回來後再過同樣久也會自己收起。',
     RUNNING: '執行中：該專案有 Claude 或 Codex 工作尚未結束；切換執行者仍不得重複派工。',
     SYNC: '待同步：執行者的工作已結束，但狀態卡在它開始後沒有更新過。設定 autoSync 開啟時，主控台會自動派一次同步。',
     sync_progress: '同步進度：派工（送給執行者）→ 執行（執行者寫回中）→ 寫回 STATUS（狀態卡的「更新」有變才算完成）。● 完成　◉ 進行中　○ 未到　✕ 停在這一步。',
@@ -2448,13 +2615,15 @@ export const register: Register = (on, options) => {
       const chip = cv ? cacheChip(cv, columns < 40) : null
       const syncing = demo ? null : bandSync(await read($, syncProgress))
       const syncTag = syncing ? syncChip(syncing, await $.clock.now(), columns < 40) : null
-      const band = layoutBand(s, { columns, demo, paneOpen, ...(chip ? { cache: chip.text } : {}), ...(syncTag ? { sync: syncTag.text } : {}) })
+      // The open pane shows the while-away card itself.
+      const away = paneOpen ? null : await awayNow($, options)
+      const band = layoutBand(s, { columns, demo, paneOpen, ...(chip ? { cache: chip.text } : {}), ...(syncTag ? { sync: syncTag.text } : {}), ...(away ? { away: away.events.length } : {}) })
       if (generation !== dataGeneration) mine = <Box height={1} width={columns} overflow="hidden"><Text color={C.dim} wrap="truncate-end">{demoActive ? ' 示範資料 ' : '讀取中…'}</Text></Box>
       else mine = (
         <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
           <Box gap={1} flexShrink={0} height={1}>
             {band.items.map(item => <Box key={'band-' + item.id} width={item.width} flexShrink={0} height={1} overflow="hidden">
-              <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'next' ? C.amber : item.id === 'context' || item.id === 'ci' ? C.red : item.id === 'cache' ? (chip?.tone === 'red' ? C.red : chip?.tone === 'amber' ? C.amber : C.green) : item.id === 'sync' ? TONE[syncTag?.tone ?? 'blue'] : FG[item.id as State] ?? C.text}
+              <Text wrap="truncate-end" color={item.zero ? C.faint : item.id === 'demo' ? C.dim : item.id === 'away' ? C.blue : item.id === 'next' ? C.amber : item.id === 'context' || item.id === 'ci' ? C.red : item.id === 'cache' ? (chip?.tone === 'red' ? C.red : chip?.tone === 'amber' ? C.amber : C.green) : item.id === 'sync' ? TONE[syncTag?.tone ?? 'blue'] : FG[item.id as State] ?? C.text}
                 bold={item.id === 'cache' && chip?.tone === 'amber'}
                 backgroundColor={item.id === 'demo' ? C.bar : item.id === 'cache' && chip?.tone === 'amber' ? C.amberBg : undefined}>
                 {item.id === 'next' && item.text.startsWith('▸ 下一步') ? [<Text key="nl" bold>▸ 下一步</Text>, <Text key="nt" color={C.text}>{item.text.slice(5)}</Text>]
@@ -2479,6 +2648,8 @@ export const register: Register = (on, options) => {
   on('ui.message', async ($, e, nextHook) => {
     if (e.requestId !== PANE || e.element !== 'rows' || !e.data || typeof e.data !== 'object') return nextHook(e)
     const data = e.data as { press?: unknown; menu?: unknown; key?: unknown; hover?: unknown }
+    // A press, a right-click or a key is the person at the console; a pointer passing over is not.
+    if (!('hover' in data)) await touch($, options).catch(() => {})
     const s = await read($, snapshot)
     const list = s ? rows(s) : []
     if (typeof data.press === 'string') {
@@ -2588,6 +2759,8 @@ export const register: Register = (on, options) => {
     await read($, actionPulse) // redraws running action labels once a second
     const offers = demo ? {} : await read($, fallbackOffers)
     const syncs = demo ? {} : await read($, syncProgress)
+    const away = await awayNow($, options)
+    const shelfOpen = await read($, archiveOpen)
     const version = await read($, updateInfo)
     const renderedAt = Object.keys(pending).length || Object.values(syncs).some(track => !isSyncEnded(track.stage)) ? await $.clock.now() : s.at
     const revision = await read($, dispatchRevision)
@@ -2668,7 +2841,9 @@ export const register: Register = (on, options) => {
     const staleDays = staleDaysOption((options as any).staleDays)
     const leftFor = (p: Project) => staleFor(p, s.at, staleDays)
     const leftRow = (full: string) => { const p = s.projects.find(item => item.name === full); return !!p && leftFor(p) !== null }
-    const W = { state: 10, project: projectColumnWidth(list.map(row => row.project)), age: 4, flow: width >= 64 ? 6 : 0, git: showGit && width >= 80 ? 7 : 0 }
+    // ▴ marks a pinned project before its name.
+    const shown = (r: { project: string; pinned?: boolean }) => (r.pinned ? '▴ ' : '') + r.project
+    const W = { state: 10, project: projectColumnWidth(list.map(shown)), age: 4, flow: width >= 64 ? 6 : 0, git: showGit && width >= 80 ? 7 : 0 }
     const badges = new Map(s.projects.map(p => [p.name, gitBadge(p.git, p.pr)]))
     const GIT_TONE: Record<string, string> = { red: C.red, amber: C.amber, blue: C.blue, teal: C.teal, green: C.green, dim: C.dim }
     const pipes = new Map(s.projects.map(p => [p.name, pipeline(p, verified[p.statusPath])]))
@@ -2688,7 +2863,7 @@ export const register: Register = (on, options) => {
       changedAt: s.projects.find(project => project.name === r.full)?.changedAt,
       cells: [
         { t: chipText(r.state), c: FG[r.state], bg: BG[r.state], b: r.state !== 'IDLE', w: W.state },
-        { t: r.project, c: r.state === 'IDLE' ? C.dim : C.strong, w: W.project },
+        { t: shown(r), c: r.state === 'IDLE' ? C.dim : C.strong, w: W.project },
         { t: r.item, c: r.state === 'IDLE' ? C.dim : C.text },
         ...(W.flow ? [{ t: '', w: W.flow, parts: pipes.get(r.full) ? pipelineParts(pipes.get(r.full)!, PIPE) : [] }] : []),
         ...(W.git ? [{ t: badges.get(r.full)?.text ?? '', c: GIT_TONE[badges.get(r.full)?.tone ?? 'dim'], w: W.git }] : []),
@@ -2709,7 +2884,7 @@ export const register: Register = (on, options) => {
             <Box key={'row-' + r.project} gap={1} backgroundColor={sel === r.full ? C.sel : undefined}>
               <Box width={W.state}><Text bold color={FG[r.state]} backgroundColor={BG[r.state]}>{chipText(r.state)}</Text></Box>
               <Box width={W.project}>
-                <Button key={'sel-' + r.project} plain label={r.project}
+                <Button key={'sel-' + r.project} plain label={shown(r)}
                   onPress={() => void update($, selected, v => (v === r.full ? null : r.full))} />
               </Box>
               <Box flexGrow={1} flexShrink={1}><Text color={C.text} wrap={detail ? 'wrap' : 'truncate-end'}>{r.item}</Text></Box>
@@ -2804,6 +2979,7 @@ export const register: Register = (on, options) => {
       return <Box key={'help-' + key} hover={{ scope: 'help-action_' + kind }} gap={running && rich ? 1 : 0}>
         {running && rich && <ui.Client key={'spin-' + key} module="./spinner.tsx" width={1} height={1} props={{ color: C.dim }} />}
         <Button key={key} plain dimColor={!!active || !!blocked} label={label} onPress={async () => {
+          await touch($, options).catch(() => {})
           if (!active && !blocked) await triggerAction($, options, p.statusPath, kind)
         }} />
       </Box>
@@ -2866,6 +3042,26 @@ export const register: Register = (on, options) => {
           {offer && <Text color={C.amber} wrap="truncate-end">Codex 未派工：{offer.reason}</Text>}
           </Box>
         </Box>
+        {/* Where the project sits in the list: pinned first, or archived out of it. Not from inside the project itself. */}
+        {!demo && prefix !== 'pm-' && (
+          <Box gap={2}>
+            <Box width={6} flexShrink={0}><Text color={C.dim}>清單</Text></Box>
+            <Box columnGap={2} flexWrap="wrap" flexGrow={1} flexShrink={1}>
+              <Box key={'help-' + prefix + 'pin'} hover={{ scope: 'help-action_pin' }}>
+                <Button key={prefix + 'pin'} plain label={p.pinned ? '▵ 取消置頂' : '▴ 置頂'} onPress={async () => {
+                  await touch($, options).catch(() => {})
+                  await togglePin($, p)
+                }} />
+              </Box>
+              <Box key={'help-' + prefix + 'archive'} hover={{ scope: 'help-action_archive' }}>
+                <Button key={prefix + 'archive'} plain dimColor={running.length > 0} label="⊟ 封存" onPress={async () => {
+                  await touch($, options).catch(() => {})
+                  await archiveProject($, options, p)
+                }} />
+              </Box>
+            </Box>
+          </Box>
+        )}
       </Box>
     }
     // Each decision is a numbered block; every option is its own pressable row, the picked one lit.
@@ -3353,6 +3549,34 @@ export const register: Register = (on, options) => {
           </Box>
         )}
 
+        {/* Back after a while: what happened meanwhile, above what to do now, until dismissed. */}
+        {away && (() => {
+          const shownLines = awayHighlights(away.events)
+          const more = away.events.length - shownLines.length
+          return (
+            <Box key="away" flexDirection="row" backgroundColor={C.bar}>
+              <Box width={1} flexShrink={0} backgroundColor={C.blue} />
+              <Box flexDirection="column" flexGrow={1} flexShrink={1} paddingX={1}>
+                <Box justifyContent="space-between" gap={1}>
+                  <Box flexShrink={1} hover={{ scope: 'help-away' }}><Text bold color={C.blue} wrap="truncate-end">{`◷ 你離開的 ${awayFor(away.to - away.from)}裡`}</Text></Box>
+                  <Box flexShrink={0}><Button key="away-dismiss" plain dimColor label="✓ 知道了" onPress={async () => {
+                    await touch($, options).catch(() => {})
+                    await update($, awayDigest, () => null)
+                  }} /></Box>
+                </Box>
+                <Text color={C.text} wrap="wrap">{awayCounts(away.events)}</Text>
+                {shownLines.map((event, i) => (
+                  <Box key={'away-' + i} justifyContent="space-between" gap={1}>
+                    <Box flexShrink={1}><Text color={TONE[event.tone] ?? C.text} wrap="truncate-end">{`· ${event.text}`}</Text></Box>
+                    <Box flexShrink={0}><Text color={C.dim}>{agoText(event.at, now)}</Text></Box>
+                  </Box>
+                ))}
+                {more > 0 && <Text key="away-more" color={C.dim}>{`…另 ${more} 則`}</Text>}
+              </Box>
+            </Box>
+          )
+        })()}
+
         {/* The one card that says what to do now: an accent edge in the colour of whoever it waits on, its action as a filled chip. */}
         <Box key="next" flexDirection="row" backgroundColor={C.bar}>
           <Box width={1} flexShrink={0} backgroundColor={n ? (targetState ? FG[targetState] : C.amber) : ready ? C.blue : C.green} />
@@ -3446,6 +3670,27 @@ export const register: Register = (on, options) => {
               </Box>
             ) : null
           })()}
+          {/* Archived projects: one quiet line, opened to bring one back. */}
+          {!demo && (s.archived?.length ?? 0) > 0 && (
+            <Box key="archived" flexDirection="column">
+              <Box justifyContent="space-between" gap={1} hover={{ scope: 'help-archived' }}>
+                <Box flexShrink={1}><Text color={C.faint} wrap="truncate-end">{`⊟ 已封存 ${s.archived!.length}：${s.archived!.map(a => a.name).join('・')}`}</Text></Box>
+                <Box flexShrink={0}><Button key="archived-toggle" plain dimColor label={shelfOpen ? '▴ 收起' : '▸ 取回'} onPress={async () => {
+                  await touch($, options).catch(() => {})
+                  await update($, archiveOpen, v => !v)
+                }} /></Box>
+              </Box>
+              {shelfOpen && s.archived!.map(a => (
+                <Box key={'archived-' + a.statusPath} gap={2} paddingLeft={2}>
+                  <Box flexShrink={1}><Text color={C.dim} wrap="truncate-end">{a.name}</Text></Box>
+                  <Box flexShrink={0}><Button key={'unarchive-' + a.statusPath} plain label="↺ 取回" onPress={async () => {
+                    await touch($, options).catch(() => {})
+                    await unarchiveProject($, options, a.name)
+                  }} /></Box>
+                </Box>
+              ))}
+            </Box>
+          )}
         </Box>
 
         {detail && (

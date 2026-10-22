@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.30.1",
+  "version": "0.31.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -152,6 +152,12 @@
       "title": "Days before a project reads stale",
       "description": "A project with something still to do and no CARD update for this many days (1-60) gets an amber age and 久未動, and is the one offered to continue first. off: never.",
       "default": "3"
+    },
+    "awayMinutes": {
+      "type": "string",
+      "title": "Minutes away before a digest",
+      "description": "After this many minutes (5-1440) without using the console (a prompt, a /console command, a key or press in the pane), the next-step card sums up what happened meanwhile (jobs done or failed, new decisions, CI) until you dismiss it; the band counts it while the pane is closed. off: never.",
+      "default": "30"
     },
     "suggestNext": {
       "type": "string",

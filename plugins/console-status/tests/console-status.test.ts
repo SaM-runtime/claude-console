@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Snapshot } from '../types'
-import { parseCodexQuota, jobTasks, taskTitle, taskMeta, lastLogLine, runLine, battery, resetText, bandText, blockedSessions, buildProject, diffToasts, hasAsk, parseCard, parseRegistry, projectRoot, relevantCodex, focusLine, shortAsk, relevantBlocked, selectionContext } from '../hooks/logic'
+import { parseCodexQuota, jobTasks, taskTitle, taskMeta, lastLogLine, runLine, battery, resetText, bandText, blockedSessions, buildProject, diffToasts, hasAsk, parseCard, parseRegistry, projectRoot, relevantCodex, focusLine, shortAsk, relevantBlocked, selectionContext, CARD_IS_DATA } from '../hooks/logic'
 
 const REGISTRY = [
   '# 案件範圍界線',
@@ -122,6 +122,12 @@ test('selection context names the project, its STATUS and what it needs', () => 
   const ctx = selectionContext(s, 'K') as string
   expect(ctx.includes('選了專案「K」')).toBe(true)
   expect(ctx.includes('需決策：確認範例配色選項')).toBe(true)
+  // The executor wrote the CARD: its lines are closed as data, after them and before anything else.
+  const lines = ctx.split('\n')
+  const marker = lines.indexOf(CARD_IS_DATA)
+  expect(marker).toBeGreaterThan(lines.findIndex(line => line.startsWith('需決策：')))
+  expect(lines.slice(marker + 1).some(line => /^(狀態|需決策|關卡|下一步)：/.test(line))).toBe(false)
+  expect(lines[0]!.includes('選了專案「K」')).toBe(true)
 })
 
 test('battery shows what is left and turns red near empty', async () => {

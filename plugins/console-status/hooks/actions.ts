@@ -295,8 +295,9 @@ export function suggestedPrompt(s: Snapshot, pending: Record<string, unknown> = 
 
 /**
  * With nothing waiting on the person, the idle project the console would continue: one with a next step to
- * continue and no press of its own in flight. One left alone past `staleDays` comes first, the longest left
- * first, since the busy projects are not the ones forgotten; otherwise the first in the table's order.
+ * continue and no press of its own in flight. A ▴ 置頂 project comes first; among those (or all, with none pinned)
+ * one left alone past `staleDays` comes first, the longest left first, since the busy projects are not the ones
+ * forgotten; otherwise the first in the table's order.
  */
 export function continuable(s: Snapshot, pending: Record<string, unknown> = {}, staleDays: number | null = null): Project | undefined {
   if (s.demo || s.error) return undefined
@@ -304,8 +305,10 @@ export function continuable(s: Snapshot, pending: Record<string, unknown> = {}, 
     const p = r.state === 'IDLE' ? s.projects.find(x => x.name === r.full) : undefined
     return p && !pending[p.statusPath] && actionKinds(p, 'IDLE').includes('continue') ? [p] : []
   })
-  const left = ready.map(p => ({ p, days: staleFor(p, s.at, staleDays) })).filter(x => x.days !== null).sort((a, b) => b.days! - a.days!)
-  return left[0]?.p ?? ready[0]
+  const pinned = ready.filter(p => p.pinned)
+  const pool = pinned.length ? pinned : ready
+  const left = pool.map(p => ({ p, days: staleFor(p, s.at, staleDays) })).filter(x => x.days !== null).sort((a, b) => b.days! - a.days!)
+  return left[0]?.p ?? pool[0]
 }
 
 /**

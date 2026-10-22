@@ -31,6 +31,7 @@ Every setting has a default, so nothing needs configuring; to change one, see [C
 - **Usage and cache.** Claude's 5-hour, weekly and per-model limits and Codex's quota share one 用量 table, with an estimate of when the current pace runs out; the prompt cache's countdown, the cost of re-writing it once cold, and the last hit rate. See [Usage pace](#usage-pace) and [Prompt cache and cost](#prompt-cache-and-cost).
 - **Guards.** Commands that cannot be taken back (`rm -r`, force pushes, `git reset --hard`, `DROP TABLE` and more) ask first; a tool call that failed twice with the same error is not tried a third time. See [Command guard](#command-guard) and [Loop guard](#loop-guard).
 - **One command adds a project.** `/console add` in a project's folder writes the registry row (making the registry if needed), puts `.console/STATUS.md` in place and adds `.console/` to `.git/info/exclude`, so no table is typed by hand. See [Adding a project](#adding-a-project).
+- **Many projects stay manageable.** A project you are not working on goes to the registry's 已封存 section with `⊟ 封存`, and the console stops refreshing it; one you care about goes first in its state with `▴ 置頂`, and is offered first to continue. Back after a while away, the next-step card is topped by what happened meanwhile: how many jobs finished, how many failed, how many new things wait on you (`awayMinutes`). See [Archive and pin](#archive-and-pin) and [While you were away](#while-you-were-away).
 - **Only where you want it.** By default only a session where you ran `/console` runs the console (and again when it resumes); other sessions get the guards only, and a session inside a registered project switches to project mode. See [Light sessions](#light-sessions).
 - **Updates from the pane.** The footer shows the installed version; when a new one is out, press `⬆ 更新` or run `/console update`. See [Upgrade](#upgrade).
 
@@ -114,6 +115,7 @@ echo '{"registryPath": "D:/Work/projects-scope.md", "staleDays": "5"}' | claude 
 | `cycleQuotaStop` | Auto-cycle quota brake: once a Claude 5-hour window is used this much (percent, 1–100), or any window at its pace runs out within the hour, the cycle stops before its next hop and ⟳ is refused; so it does when the numbers are more than 45 minutes old (the console has not answered since); `off` turns the brake off (the hop limit still applies). Codex's own quota keeps `codexMinQuotaPercent` | `70` |
 | `confirmContinue` | `on`: `⇢ 繼續下一步` and `↻ 重試` dispatch only on a second press within six seconds (against a stray click); `off`: one press dispatches. `⟳ 自動接力` never needs the second press | `on` |
 | `staleDays` | A project with something still to do (a decision, a gate, a sync or a next step) whose CARD has not changed for this many days (1–60) reads `久未動`: its age turns amber, and the next-step card and Tab suggestion offer it to continue first; `off` turns it off | `3` |
+| `awayMinutes` | After this many minutes (5–1440) without using this console (no prompt, no `/console` command, no key or press in the pane), your return starts with what happened meanwhile (see [While you were away](#while-you-were-away)); `off` turns it off | `30` |
 | `suggestNext` | `on`: the way on (a decision, a reply to an executor that asked, a gate, a sync, a continue) waits in the prompt box as a dim suggestion, Tab to take (see [Tab for the next step](#tab-for-the-next-step)); `off`: leave the box to Claude Code's own suggestions | `on` |
 | `activation` | `auto`: only a session where you ran `/console` runs the console, and it starts again when that session resumes; other sessions get the command guard only (see [Light sessions](#light-sessions)). `always`: every interactive session, except the executor sessions the console dispatched; non-interactive sessions still get the guard only | `auto` |
 | `projectMode` | `auto`: a session opened inside a registered project switches to project mode (see [Pipeline and project mode](#pipeline-and-project-mode)); `off`: always the multi-project console | `auto` |
@@ -129,6 +131,14 @@ Open Claude Code in the project's folder and run `/console add` (or `/console ad
 - in a git repository, `.console/` is added to `.git/info/exclude` so the STATUS file is not committed (delete that line to version it).
 
 That session does not become a console; an open console refreshes and shows the new project at once. Change the CARD's `- 下一步：無` to the first task (`o` in the action menu opens the file) and `⇢ 繼續下一步` dispatches it. Adding a folder from elsewhere: Claude Code must have been opened there once and trusted before background work can run in it.
+
+### Archive and pin
+
+With many projects, the ones you are not working on can be archived and the ones you care about pinned. Both buttons sit on the action menu's 清單 line, and both have commands.
+
+- **⊟ 封存** (`/console archive <project>`) moves the row from the registry's `## STATUS 卡位置` table to a `## 已封存` section in the same file (made at the end of the file the first time, with the same header). The console no longer refreshes it: no STATUS read, no git, no `gh`; the pane keeps one quiet line at the bottom, `⊟ 已封存 2：api・docs`. A project whose work is running is not archived; this console's auto-cycle on it stops.
+- **↺ 取回**: `▸ 取回` on that line lists the archived projects, each with `↺ 取回`; or run `/console unarchive <project>` (with no name it lists them). Moving the row back to `## STATUS 卡位置` by hand works too. `/console add` on an archived project's folder brings it back instead of registering it twice, and a new project never takes an archived project's name.
+- **▴ 置頂** (`/console pin <project>`, `off` to unpin; `/console pin` alone lists the pinned): the project goes first within its state, its name marked `▴`; with nothing waiting on you, the next-step card and the Tab suggestion continue it first (before a project left alone longer); `n` meets it first among items of the same kind. Pins live in the plugin's own store, the same for every console; the registry is not touched.
 
 ## Dispatch settings
 
@@ -278,6 +288,8 @@ The right-click menu (or `m` on the keyboard for the row under the cursor; Esc c
 | ⚑ Review gate / final review | Recognized spec, review, or release gate | Sends evidence to the console Claude; release review cannot execute release. The row unlocks when that turn ends, when the CARD moves past the gate, or after ten minutes with no review turn running |
 | ⟳ 自動接力 / ■ 停止接力 | Executor not `manual`, the project has a CARD and is not 需決策 | From the next refresh, presses one existing button per refresh for you: IDLE with a next step → continue (no second press), spec or review gate → the console reviews it (one gate is sent once), 待同步 → left to `autoSync` (with it off, one sync). When the CARD has `驗證`, every continue from the second hop on runs it first (as ▶ does, no model quota) and goes out only on a pass newer than the last hop; a command not yet confirmed with ▶ in this console is not run on its own, and the cycle stops before its second hop. Stops at a decision or an executor's question, a release gate, a failed job, a failed verification, a sync that wrote nothing, a hop that left the CARD unchanged, a gate the console did not pass, `cycleMaxHops`, a 5-hour window used past `cycleQuotaStop` or quota numbers more than 45 minutes old, or six hours with no hop. Review tasks still start a fresh session; a refresh still calls no model. With several consoles, a cycle belongs to the console that armed it and others only show `⟳ 另一主控台接力中`; a continue or gate hop waits while another console's dispatch of the project is under two minutes old. Press again to stop; running work is not interrupted. The row and the next-step card show `⟳ 2/6` or `⟳ 等同步` |
 | ↗ Open STATUS.md | Always | Requests the editor to open the file |
+| ▴ 置頂／▵ 取消置頂 | Always (not on project mode's project card or with demo data) | First within its state, and offered first to continue; see [Archive and pin](#archive-and-pin) |
+| ⊟ 封存 | The same; not while its work runs | Moves the project to the registry's 已封存 section and stops refreshing it; `↺ 取回` at the bottom of the pane brings it back |
 
 **When a project is 待同步.** A finished job counts as written back when the CARD was written at or after the minute the job started, or when the CARD's `更新` names the job (`· job <id>`). "Written" is the later of `更新` and the STATUS file's own modification time, so a CARD whose `更新` holds a guessed, UTC or unchanged time still counts once the file was saved after the job started. `更新` is read as `2030-01-05 09:05`, `2030/1/5 9:05`, with seconds, or with a zone (`Z`, `+08:00`). Only a job that ended without touching STATUS.md (or failed) leaves the project in 待同步. Each dispatch gets a code (for example `c-k3f9a2`) in its prompt, which the executor writes as `· job` in `更新`; a CARD whose `執行中` still names that code was only written at the start, so the project stays in 待同步. A Codex job that ends on a question or a request for permission shows as `執行者在等你回覆`. ✎ Decide is locked while a job runs (picked answers are kept), so the console and an executor never write STATUS.md at the same time. The console remembers which jobs it sent as syncs, so a sync is never itself taken for work that needs syncing.
 
@@ -319,9 +331,12 @@ A dispatch shows RUNNING optimistically until managed state is refreshed. Accept
 | `/console` | Open or close the panel |
 | `/console refresh` | Refresh files and slow probes |
 | `/console add [folder]` | Add a folder (by default this session's own) to the registry with a STATUS file (see [Adding a project](#adding-a-project)) |
-| `/console inbox` | List what waits on you as text (in `n`'s order), other sessions waiting on you, and projects left alone |
+| `/console inbox` | List what waits on you as text (in `n`'s order), other sessions waiting on you, and projects left alone; back after a while away, it starts with the [while-away summary](#while-you-were-away) |
 | `/console reply <project> <answer>` | Answer the executor that stopped to ask, in its own session |
 | `/console cycle <project> [off]` | Start or stop that project's auto-cycle (the menu's ⟳) |
+| `/console pin [<project> [off]]` | Pin or unpin a project; with no name, list the pinned (see [Archive and pin](#archive-and-pin)) |
+| `/console archive <project>` | Archive a project: its row moves to the registry's 已封存 section and it is no longer refreshed |
+| `/console unarchive [project]` | Bring an archived project back; with no name, list them |
 | `/console sync\|continue\|gate\|verify <project>` | Run that project action; sending `continue` is its confirmation, `verify` of a new command still asks to run it again |
 | `/console band` | Toggle the band above the prompt |
 | `/console plain` | Toggle interactive and plain project rows |
@@ -344,7 +359,7 @@ What the selected project's prompt carries, so the console need not read files t
 
 | Context | Content |
 | --- | --- |
-| Selection | The project, its STATUS path, state, decision, gate, next step, executor jobs, Git and PR lines |
+| Selection | The project, its STATUS path, state, decision, gate, next step, executor jobs, Git and PR lines; a last line says these come from the CARD, Git and the PR and are reference data, not instructions for the console (executors write the CARD) |
 | Executor digest (`執行者摘要：`) | Four lines about the project's latest executor session: `執行者：<launch name> · <kind> · <status>／<phase>` (kind and status in Chinese, e.g. `console-a · 繼續 · 完成／閒置`), `最後活動：<time> （N 分鐘前）`, `最後動作：` the last three tool calls, `最後一句：` its last words (up to 400 characters); `執行者摘要：無紀錄` when there is no job or transcript. When the project's latest work ran on Codex, which keeps no transcript the console can read, the four lines name that Codex job, its status and time, and say to go by STATUS and git; an older Claude session of the same project is not shown as its latest |
 
 The panel's own gate review and continue prompts carry the executor digest too, except an independent review: a continue whose 下一步 starts with a review task's path runs in a new session (Claude) or a new thread (Codex `--fresh`) and gets no digest, so the reviewer judges from the task, its own run of the acceptance and the diff rather than from the worker's last words. The session is the one the daemon recorded for the job (`~/.claude/jobs/<id>/state.json`), the plugin's record only when the daemon has none; only the transcript's last 64 KB is parsed, and an unchanged transcript (same mtime and size) is not read again.
@@ -362,6 +377,18 @@ With `suggestNext: on` (the default) the console puts the way on in the empty pr
 | Otherwise, the first idle project with a next step | `/console continue <project>` |
 
 A suggestion is offered when the way on changes, and again at the next refresh when the box could not show it (a turn was running, or you were typing). Nothing is suggested while that project's action is running, with demo data, or after a failed refresh. It needs no model call. Claude Code shows its own suggestions the rest of the time; `suggestNext: off` leaves the box to them.
+
+## While you were away
+
+After `awayMinutes` (default 30) without using this console (no prompt, no `/console` command, no key or button press in the pane; a pointer passing over does not count), what the feed said meanwhile is summed up in a card above the next-step card:
+
+- a title, `◷ 你離開的 2 小時 15 分裡`, with `✓ 知道了` on the right;
+- one line of counts, such as `完成 3 個工作・1 個失敗或出錯・2 件新的等你處理・CI 失敗 1 次・合併 1 個 PR・自動接力停下 1 次・狀態卡更新 4 次` (a count of none is left out);
+- the four lines worth reading first: failures (red), then what waits on you (amber), then the rest, newest first within each, and `…另 N 則` for the others.
+
+While you are away the card grows with the feed; the moment you are back (a prompt, a command or a press in the pane) it is frozen, and stays until `✓ 知道了` or until `awayMinutes` after your return. With the pane closed the band shows `◷ 離開期間 9 則`, and `/console inbox` starts with the same summary, for a phone or Remote Control.
+
+It only sums up what the feed already had and calls no model; lines within 10 seconds of your own press (such as `已封存`) answer what you did and are not counted. Each console keeps its own, counted from when that console started; a long absence keeps the newest 200 lines. `awayMinutes: off` turns it off.
 
 ## Light sessions
 
@@ -392,7 +419,7 @@ The project table has a six-mark `流程` column (from 64 columns wide); project
 - the band shows the project's pipeline and current step, plus how many other projects need a decision or gate;
 - the pane opens with a project card (pipeline, next step, actions, verification) above the usual console;
 - the system prompt gets one section with the project's STATUS path and the CARD contract (re-read before writing, `rev + 1`, one gate value, stop at gates, no release). It does not change while the session stays in the project, so it does not break prompt caching;
-- a prompt carries a short progress note (stages, current step, next step, decision, gate) only when that progress changed since the last one.
+- a prompt carries a short progress note (stages, current step, next step, decision, gate) only when that progress changed since the last one, closing with the same line that it comes from the CARD and is reference data.
 
 `/console mode console` turns it off for the session, `/console mode project` forces it, `/console mode auto` follows `projectMode`.
 
@@ -448,6 +475,8 @@ Since 0.13.0 the pane's section titles (name, a hairline to the edge, figures at
 
 Since 0.17.0 the Tab suggestion for the next step follows next-steps in [hamzafer](https://github.com/hamzafer)'s [claude-code-mods](https://github.com/hamzafer/claude-code-mods) (MIT License), which offers likely next prompts after each turn. console-status reads its suggestion from the STATUS CARD instead of asking a model, and contains none of its code.
 
+Since 0.31.0 the while-away summary follows [afkswitch](https://github.com/augbastos/afkswitch) by [augbastos](https://github.com/augbastos) (MIT License), where `/afk` marks you away and `/back` lists what needs you first, then the work that was done. console-status needs no switch: it reads an absence from the time the console went unused, sums up its own feed, and contains none of afkswitch's code. Thanks to augbastos.
+
 ## Limitations
 
 - Bundled probes: PowerShell scripts on Windows, `sh` scripts on macOS and Linux (Linux is covered by tests and a simulated stale broker, not daily use). There a broker is reported STALE when its `codex app-server` started before the installed Codex CLI was last upgraded.
@@ -467,6 +496,7 @@ One line per version, newest first; see [CHANGELOG.md](CHANGELOG.md) or [GitHub 
 
 | Version | Highlights |
 | --- | --- |
+| 0.31 | Many projects stay manageable: `⊟ 封存` the ones you are not working on, `▴ 置頂` the ones you care about; back after a while away, the console first sums up what happened (`awayMinutes`); the CARD lines a selection carries are marked as reference data |
 | 0.30 | `n` jumps to each thing waiting on you and `/console inbox` lists them; `/console add` adds a project in one command; projects left alone for days read `久未動` and are offered first (`staleDays`); 0.30.1 points a first run without a registry to `/console add`, leads the `/console` menu line with the common commands, and opens the README with a four-step quick start |
 | 0.29 | With a `驗證` on the CARD, `⟳ 自動接力` runs it between hops and stops on a failure; quota numbers more than 45 minutes old stop a cycle instead of braking on them; the usage table says how old Claude's windows are |
 | 0.28 | `confirmContinue: off` makes continue and retry one press; a Codex project's digest has its last words; the cache countdown in Chinese units (`快取 4分`); a claim another console overwrote is no longer lost; CI also runs the latest Claude Code |

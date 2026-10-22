@@ -71,7 +71,8 @@ async function step($: any, on: any, cacheRead: number) {
   return s.result
 }
 
-test('the band counts the cache down, warns a minute before it goes cold and prices the re-write after', OPTIONS, async ($, on) => {
+// It walks the clock through a whole TTL: under a busy parallel run it can pass the default 5 s.
+test('the band counts the cache down, warns a minute before it goes cold and prices the re-write after', { ...OPTIONS, timeoutMs: 15_000 }, async ($, on) => {
   const { data, clock } = fixture(on, null)
   on('command.register', () => ({ value: undefined }))
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))

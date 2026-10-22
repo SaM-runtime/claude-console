@@ -52,7 +52,7 @@ test('an executor an error stopped is not "waiting on you": the row, toast and T
   expect(askingError(failed)).toBe('額度用完')
   expect(rows(snap([failed]))[0]).toMatchObject({ state: 'ACTION', item: '執行者出錯：額度用完' })
   expect(actionLabel('reply', failed)).toBe('↻ 重試')
-  expect(jobResult('completed', true, '額度用完')).toEqual({ label: '出錯：額度用完', followup: '', event: '出錯：額度用完', tone: 'red' })
+  expect(jobResult('completed', true, '額度用完')).toEqual({ label: '出錯：額度用完', followup: '', event: '出錯：額度用完', tone: 'red', kind: 'failed' })
   expect(suggestedPrompt(snap([failed]))).toBe(`/console reply Project Alpha ${RETRY_REPLY}`)
   // A real question keeps its words and its reply.
   const question = asking()

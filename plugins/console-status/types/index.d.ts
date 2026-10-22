@@ -30,6 +30,8 @@ export type Project = {
   git?: GitInfo
   /** The pull request of the current branch (`gh pr view`); absent without gh, a PR or `gitProbe: on`. */
   pr?: PrInfo
+  /** ▴ 置頂: first among the projects in the same state, and the one the next-step card offers first. */
+  pinned?: boolean
 }
 
 export type GitCommit = { hash: string; at: number; subject: string }
@@ -82,7 +84,11 @@ export type CacheClock = { at: number; tokens: number; model: string; ttl: '5m' 
 
 export type FallbackOffer = { kind: 'sync' | 'continue'; reason: string; at: number }
 
-export type FeedEvent = { at: number; text: string; tone: 'amber' | 'teal' | 'blue' | 'red' | 'green' }
+/** What a feed line reports, for the while-away digest's counts; lines without one are only listed. */
+export type FeedKind = 'done' | 'asks' | 'failed' | 'decision' | 'gate' | 'waiting' | 'status' | 'ci-fail' | 'ci-pass' | 'merged' | 'cycle-stop'
+export type FeedEvent = { at: number; text: string; tone: 'amber' | 'teal' | 'blue' | 'red' | 'green'; kind?: FeedKind }
+/** What happened while nobody used the console: the feed lines between `from` (last use) and `to` (the return). */
+export type AwayDigest = { from: number; to: number; events: FeedEvent[] }
 
 export type ActionKind = 'verify' | 'sync' | 'continue' | 'reply' | 'decide' | 'gate' | 'open'
 export type ContinueConfirmation = { at: number; signature: string }
@@ -157,6 +163,8 @@ export type Snapshot = {
   limitsAt?: number
   /** Codex quota from its newest session log: windows, credit balance, when it was read. */
   codexQuota?: { at: string; limits: { label: string; percent: number; resetsAt?: string }[]; credits?: string } | null
+  /** Projects in the registry's `## 已封存` section: not refreshed, listed at the bottom of the pane to bring back. */
+  archived?: { name: string; statusPath: string }[]
   /** Some project resolves to codex, so Codex probes, health and quota are shown. */
   codexInUse?: boolean
   /** Which codex-companion.mjs dispatch uses, and a warning when the configured one was stale. */
@@ -209,6 +217,14 @@ declare module 'claude-code' {
       cycleRuns: Record<string, CycleRun>
       /** statusPath → the executor digest shown on an expanded project card. */
       executorDigests: Record<string, ExecutorDigest>
+      /** When the person last used this console (a prompt, a /console command, a key or press in the pane). */
+      activeAt: number
+      /** Feed lines since then, newest first, for the while-away digest. */
+      awayLog: FeedEvent[]
+      /** The digest frozen when the person came back, shown until dismissed. */
+      awayDigest: AwayDigest | null
+      /** The archived projects' list is open under the table. */
+      archiveOpen: boolean
     }
   }
 }

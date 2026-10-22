@@ -284,13 +284,13 @@ export function prLine(pr: PrInfo): string {
 }
 
 /** CI transitions worth a feed line (and a toast for a new failure). Same PR number only. */
-export function prTransitions(name: string, prev: PrInfo | undefined, cur: PrInfo | undefined): { text: string; tone: 'red' | 'green'; toast: boolean }[] {
+export function prTransitions(name: string, prev: PrInfo | undefined, cur: PrInfo | undefined): { text: string; tone: 'red' | 'green'; toast: boolean; kind: 'merged' | 'ci-fail' | 'ci-pass' }[] {
   if (!prev || !cur || prev.number !== cur.number) return []
-  const out: { text: string; tone: 'red' | 'green'; toast: boolean }[] = []
-  if (cur.state === 'MERGED' && prev.state !== 'MERGED') out.push({ text: `${name}　PR #${cur.number} 已合併`, tone: 'green', toast: false })
+  const out: { text: string; tone: 'red' | 'green'; toast: boolean; kind: 'merged' | 'ci-fail' | 'ci-pass' }[] = []
+  if (cur.state === 'MERGED' && prev.state !== 'MERGED') out.push({ text: `${name}　PR #${cur.number} 已合併`, tone: 'green', toast: false, kind: 'merged' })
   else if (cur.state === 'OPEN') {
-    if (cur.checks.fail && !prev.checks.fail) out.push({ text: `${name}　PR #${cur.number} CI 失敗：${cur.checks.failing.slice(0, 2).join('、')}`, tone: 'red', toast: true })
-    else if (!cur.checks.fail && !cur.checks.pending && cur.checks.pass && (prev.checks.fail || prev.checks.pending)) out.push({ text: `${name}　PR #${cur.number} CI 全部通過`, tone: 'green', toast: false })
+    if (cur.checks.fail && !prev.checks.fail) out.push({ text: `${name}　PR #${cur.number} CI 失敗：${cur.checks.failing.slice(0, 2).join('、')}`, tone: 'red', toast: true, kind: 'ci-fail' })
+    else if (!cur.checks.fail && !cur.checks.pending && cur.checks.pass && (prev.checks.fail || prev.checks.pending)) out.push({ text: `${name}　PR #${cur.number} CI 全部通過`, tone: 'green', toast: false, kind: 'ci-pass' })
   }
   return out
 }

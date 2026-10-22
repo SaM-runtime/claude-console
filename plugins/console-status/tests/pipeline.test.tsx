@@ -1,7 +1,7 @@
 import { expect, test, mock } from 'claude-code/testing'
 import { fixturePath } from './fixture-path'
 import { cardVerdict, pipeline, projectForCwd, progressContext, projectModeSection } from '../hooks/pipeline'
-import { buildProject, projectRoot, verifyNote } from '../hooks/logic'
+import { buildProject, projectRoot, PROGRESS_IS_DATA, verifyNote } from '../hooks/logic'
 import type { Project } from '../types'
 
 const base: Project = { name: 'Alpha', statusPath: 'D:/Alpha/.console/STATUS.md', hasCard: true, state: '', ask: '無', next: '', gate: '無', verify: '', verifyNote: '', updated: '', isStale: false, jobs: [] }
@@ -80,6 +80,8 @@ test('the system prompt section depends only on the project identity; progress c
   expect(text).toContain('審核◆')
   expect(text).toContain('CARD 下一步：Write tests')
   expect(text).toContain('關卡：review：x')
+  // An executor wrote those lines: the progress closes them as data.
+  expect(text.split('\n').pop()).toBe(PROGRESS_IS_DATA)
 })
 
 // ── UI: project mode in a session opened inside a registered project ──

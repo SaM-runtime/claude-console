@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { addFolder, excludeWith, localMinute, newStatusFile, projectNameFor, registryWith } from '../hooks/projects'
-import { buildProject, inbox, nextInbox, parseCard, parseRegistry, staleFor } from '../hooks/logic'
+import { addFolder, archivedRows, excludeWith, localMinute, newStatusFile, projectNameFor, registryArchive, registryUnarchive, registryWith } from '../hooks/projects'
+import { buildProject, inbox, nextInbox, parseCard, parseRegistry, rows, staleFor } from '../hooks/logic'
 import { continuable, suggestedPrompt } from '../hooks/actions'
 import { staleDaysOption } from '../hooks/config'
 import { STATUS_TEMPLATE } from '../hooks/template'
@@ -112,4 +112,67 @@ test('a new STATUS file is the workflow template with a CARD the console reads a
   const p = buildProject({ name: 'api', statusPath: 'D:/api/.console/STATUS.md' }, text, [], NOW)
   expect(p.hasCard).toBe(true)
   expect(continuable(snap([p]))).toBeUndefined()
+})
+
+test('⊟ 封存 moves a row to the 已封存 section and ↺ 取回 moves it back; the table and the rest stay as they were', () => {
+  const registry = '# Registry\r\n\r\n## STATUS 卡位置\r\n\r\n| Project | STATUS path | Executor |\r\n| --- | --- | --- |\r\n| Web | `D:/Web/.console/STATUS.md` | codex |\r\n| api | `~/api/.console/STATUS.md` |  |\r\n| Docs | `D:/Docs/.console/STATUS.md` |  |\r\n\r\n`Executor` is optional.\r\n\r\n## Console rules\r\n\r\n- Read only the CARD.\r\n'
+  const archived = registryArchive(registry, 'api')!
+  // The row leaves the list, the paragraph and the next section stay; the section is made at the end, same header.
+  expect(archived).toBe(registry.replace('| api | `~/api/.console/STATUS.md` |  |\r\n', '') +
+    '\r\n## 已封存\r\n\r\n| Project | STATUS path | Executor |\r\n| --- | --- | --- |\r\n| api | `~/api/.console/STATUS.md` |  |\r\n')
+  expect(parseRegistry(archived, 'C:/Users/me').map(row => row.name)).toEqual(['Web', 'Docs'])
+  expect(archivedRows(archived, 'C:/Users/me')).toEqual([{ name: 'api', statusPath: 'C:/Users/me/api/.console/STATUS.md' }])
+  // A second one joins the same section, with its Executor cell.
+  const two = registryArchive(archived, 'Web')!
+  expect(archivedRows(two, '').map(row => [row.name, row.executor])).toEqual([['api', undefined], ['Web', 'codex']])
+  expect(parseRegistry(two, '').map(row => row.name)).toEqual(['Docs'])
+  // Back again: last in the list, and the section goes with its last row.
+  const one = registryUnarchive(two, 'api')!
+  expect(parseRegistry(one, 'C:/Users/me').map(row => row.name)).toEqual(['Docs', 'api'])
+  expect(archivedRows(one, '').map(row => row.name)).toEqual(['Web'])
+  const none = registryUnarchive(one, 'Web')!
+  expect(none.includes('已封存')).toBe(false)
+  expect(parseRegistry(none, '').map(row => [row.name, row.executor])).toEqual([['Docs', undefined], ['api', undefined], ['Web', 'codex']])
+  expect(none.endsWith('- Read only the CARD.\r\n')).toBe(true)
+  // Unknown names change nothing.
+  expect(registryArchive(registry, 'Nope')).toBeNull()
+  expect(registryUnarchive(registry, 'api')).toBeNull()
+  expect(registryArchive('# Notes\n', 'api')).toBeNull()
+})
+
+test('an archived section someone wrote keeps its notes; a project registered again keeps its row', () => {
+  const registry = '## STATUS 卡位置\n| Project | STATUS path |\n| --- | --- |\n| api | `D:/api/.console/STATUS.md` |\n\n## 已封存\n\n舊專案，之後再看。\n'
+  const archived = registryArchive(registry, 'api')!
+  expect(archived).toBe('## STATUS 卡位置\n| Project | STATUS path |\n| --- | --- |\n\n## 已封存\n\n| Project | STATUS path |\n| --- | --- |\n| api | `D:/api/.console/STATUS.md` |\n\n舊專案，之後再看。\n')
+  // The note keeps the section when its last row leaves.
+  const back = registryUnarchive(archived, 'api')!
+  expect(back).toBe('## STATUS 卡位置\n| Project | STATUS path |\n| --- | --- |\n| api | `D:/api/.console/STATUS.md` |\n\n## 已封存\n\n| Project | STATUS path |\n| --- | --- |\n\n舊專案，之後再看。\n')
+  // Added again by hand meanwhile: taking the archived copy back does not list it twice.
+  const twice = registryWith(archived, 'api', 'D:/api/.console/STATUS.md')
+  const merged = registryUnarchive(twice, 'api')!
+  expect(parseRegistry(merged, '').map(row => row.name)).toEqual(['api'])
+  expect(archivedRows(merged, '')).toEqual([])
+})
+
+test('▴ 置頂 puts a project first within its state and first to continue; the state order still comes first', () => {
+  const pin = (p: any) => ({ ...p, pinned: true })
+  const s = snap([
+    project('Alpha', { 下一步: '加功能' }),
+    project('Beta', { 等使用者: '用 A 還是 B？' }),
+    pin(project('Gamma', { 下一步: '補文件' }, NOW - 3_600_000)),
+    pin(project('Delta', { 等使用者: '要上線嗎？' })),
+    project('Old', { 下一步: '修 bug' }, NOW - 9 * DAY),
+  ])
+  expect(rows(s).map(r => [r.full, r.state, !!r.pinned])).toEqual([
+    ['Delta', 'ACTION', true], ['Beta', 'ACTION', false], ['Gamma', 'IDLE', true], ['Alpha', 'IDLE', false], ['Old', 'IDLE', false],
+  ])
+  expect(inbox(s).map(item => item.project)).toEqual(['Delta', 'Beta'])
+  // The kinds without a state of their own (CI, verification) take the pinned first too.
+  expect(inbox(s, p => p.name === 'Alpha' || p.name === 'Gamma').map(item => item.project)).toEqual(['Delta', 'Beta', 'Gamma', 'Alpha'])
+  // With nothing waiting, a pinned project is continued before one left alone longer.
+  const idle = snap(s.projects.filter((p: any) => !p.ask || p.ask === '無'))
+  expect(continuable(idle, {}, 3)!.name).toBe('Gamma')
+  expect(suggestedPrompt(idle, {}, 3)).toBe('/console continue Gamma')
+  // Without pins the oldest comes first, as before.
+  expect(continuable(snap(idle.projects.map(({ pinned, ...p }: any) => p)), {}, 3)!.name).toBe('Old')
 })

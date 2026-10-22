@@ -1,5 +1,7 @@
-// /console add: a folder becomes a registered project. Pure text work; register.tsx reads and writes the files.
+// /console add, archive and unarchive: the registry's text, rewritten. Pure text work; register.tsx reads and writes the files.
 import { STATUS_TEMPLATE } from './template'
+import { parseRegistry } from './logic'
+import type { RegistryRow } from './logic'
 
 /** The folder /console add names: the words after it (quotes dropped), else the session's own; slashes forward, no trailing one. */
 export function addFolder(words: string, cwd: string | null): string | null {
@@ -44,6 +46,95 @@ export function registryWith(text: string | null, name: string, statusPath: stri
   }
   const out = lines.join('\n') + '\n'
   return crlf ? out.replace(/\n/g, '\r\n') : out
+}
+
+/** Where archived projects' rows go: a section of their own in the registry, which the console does not refresh. */
+export const ARCHIVE_SECTION = '已封存'
+
+type Lines = { lines: string[]; crlf: boolean }
+const toLines = (text: string): Lines => ({ crlf: /\r\n/.test(text), lines: text.replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n') })
+const fromLines = ({ lines, crlf }: Lines): string => { const out = lines.join('\n') + '\n'; return crlf ? out.replace(/\n/g, '\r\n') : out }
+
+/** The `## <title>` section: its heading line and the line after its last (the next `## ` heading, or the end). */
+function section(lines: string[], title: string): { heading: number; end: number } | null {
+  const heading = lines.findIndex(line => line.trim() === `## ${title}`)
+  if (heading < 0) return null
+  const after = lines.findIndex((line, i) => i > heading && /^## /.test(line))
+  return { heading, end: after < 0 ? lines.length : after }
+}
+const tableAt = (lines: string[], range: { heading: number; end: number }) =>
+  lines.map((line, i) => ({ line, i })).filter(({ line, i }) => i > range.heading && i < range.end && /^\s*\|/.test(line)).map(({ i }) => i)
+/** A project row's name (its first cell, as the registry reads it); null for a header, a separator or other text. */
+const rowName = (line: string): string | null => line.match(/^\|\s*([^|]+?)\s*\|\s*`([^`]+)`/)?.[1] ?? null
+const rowPath = (line: string): string | null => line.match(/^\|\s*[^|]+?\s*\|\s*`([^`]+)`/)?.[1] ?? null
+
+/** `row` last in the `title` table, under `head` (the header and separator lines) when the section has no table yet. */
+function insertRow(lines: string[], title: string, row: string, head: string[]) {
+  const range = section(lines, title)
+  if (!range) {
+    lines.push('', `## ${title}`, '', ...head, row)
+    return
+  }
+  const table = tableAt(lines, range)
+  if (table.length) lines.splice(table[table.length - 1]! + 1, 0, row)
+  else lines.splice(range.heading + 1, 0, '', ...head, row)
+}
+
+/** The header and separator of the `title` table, for a table made beside it; the plain two columns without one. */
+function headOf(lines: string[], title: string): string[] {
+  const range = section(lines, title)
+  const head = range ? tableAt(lines, range).filter(i => rowName(lines[i]!) === null).slice(0, 2).map(i => lines[i]!) : []
+  return head.length === 2 ? head : TABLE
+}
+
+/**
+ * The registry with the project `name` moved from the `STATUS 卡位置` table to the `## 已封存` section (made at the
+ * end of the file, with the same header, when missing). Null when the table has no such project.
+ */
+export function registryArchive(text: string, name: string): string | null {
+  const file = toLines(text)
+  const main = section(file.lines, 'STATUS 卡位置')
+  const at = main ? tableAt(file.lines, main).find(i => rowName(file.lines[i]!) === name) : undefined
+  if (at === undefined) return null
+  const head = headOf(file.lines, 'STATUS 卡位置')
+  const [row] = file.lines.splice(at, 1)
+  insertRow(file.lines, ARCHIVE_SECTION, row!, head)
+  return fromLines(file)
+}
+
+/**
+ * The registry with the archived project `name` back last in the `STATUS 卡位置` table; a `## 已封存` section left
+ * with no project goes too. Null when the section has no such project.
+ */
+export function registryUnarchive(text: string, name: string): string | null {
+  const file = toLines(text)
+  const archive = section(file.lines, ARCHIVE_SECTION)
+  const at = archive ? tableAt(file.lines, archive).find(i => rowName(file.lines[i]!) === name) : undefined
+  if (archive === null || at === undefined) return null
+  const head = headOf(file.lines, ARCHIVE_SECTION)
+  const [row] = file.lines.splice(at, 1)
+  const left = section(file.lines, ARCHIVE_SECTION)!
+  const body = file.lines.slice(left.heading + 1, left.end)
+  // Nothing but its own table header and blank lines: the section was the console's, and goes with its last row.
+  if (body.every(line => !line.trim() || (/^\s*\|/.test(line) && rowName(line) === null))) {
+    const from = left.heading > 0 && !file.lines[left.heading - 1]!.trim() ? left.heading - 1 : left.heading
+    file.lines.splice(from, left.end - from)
+  }
+  // A project registered again meanwhile keeps its row; the archived copy only goes.
+  const main = section(file.lines, 'STATUS 卡位置')
+  const listed = main ? tableAt(file.lines, main).some(i => rowPath(file.lines[i]!) === rowPath(row!)) : false
+  if (!listed) {
+    if (main) insertRow(file.lines, 'STATUS 卡位置', row!, head)
+    else file.lines.push('', '## STATUS 卡位置', '', ...head, row!)
+  }
+  return fromLines(file)
+}
+
+/** The archived projects: the `## 已封存` section's rows, read as the registry's own. */
+export function archivedRows(text: string, home: string): RegistryRow[] {
+  const { lines } = toLines(text)
+  const range = section(lines, ARCHIVE_SECTION)
+  return range ? parseRegistry(['## STATUS 卡位置', ...lines.slice(range.heading + 1, range.end)].join('\n'), home) : []
 }
 
 /** The STATUS file a new project starts with: the workflow's template, its name in the title, a CARD that says it was just added. */
