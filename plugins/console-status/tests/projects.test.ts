@@ -80,6 +80,18 @@ test('/console add: the folder, a free name, the registry row and the excluded S
   expect(addFolder('"D:/Work/my api"', 'D:/Console')).toBe('D:/Work/my api')
   expect(addFolder('  ', null)).toBeNull()
   expect(addFolder('/', null)).toBe('/')
+  // `~` is the home folder (`~\\` on Windows); a relative folder is the session's, `..` and `.` resolved.
+  expect(addFolder('~/projects/api', '/home/me/work', '/home/me')).toBe('/home/me/projects/api')
+  expect(addFolder('~\\專案', 'D:/Console', 'C:\\Users\\me')).toBe('C:/Users/me/專案')
+  expect(addFolder('"~"', null, '/home/me/')).toBe('/home/me')
+  expect(addFolder('~other/api', '/home/me', '/home/me')).toBe('~other/api')
+  expect(addFolder('~/api', null)).toBe('~/api')
+  expect(addFolder('..\\web', 'D:\\Work\\api', '')).toBe('D:/Work/web')
+  expect(addFolder('./sub/', '/srv/app', '')).toBe('/srv/app/sub')
+  expect(addFolder('../../..', '/srv/app', '')).toBe('/')
+  expect(addFolder('..', 'C:/', '')).toBe(addFolder('C:/', null))
+  expect(addFolder('sub', null)).toBe('sub')
+  expect(addFolder('D:/Work/api', '/home/me', '/home/me')).toBe('D:/Work/api')
 
   expect(projectNameFor('D:/Work/api', ['Web'])).toBe('api')
   expect(projectNameFor('D:/Work/api', ['API', 'api 2'])).toBe('api 3')

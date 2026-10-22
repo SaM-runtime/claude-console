@@ -42,6 +42,48 @@ export function parseRegistry(text: string, home: string): RegistryRow[] {
   return rows
 }
 
+/**
+ * The registry's rows with each project once: a STATUS path listed again is dropped, and a name used again (case
+ * aside) is numbered like /console add does (`api 2`), since the pane, menus and commands find a project by its
+ * name. `notes` say what was changed, for the pane.
+ */
+export function distinctRows(rows: RegistryRow[]): { rows: RegistryRow[]; notes: string[] } {
+  const out: RegistryRow[] = []
+  const notes: string[] = []
+  const byPath = new Map<string, string>()
+  const taken = new Set(rows.map(row => row.name.toLowerCase()))
+  for (const row of rows) {
+    const path = normPath(row.statusPath)
+    const first = byPath.get(path)
+    if (first !== undefined) { notes.push(`登錄表的 ${row.name} 和 ${first} 是同一張狀態卡，只列 ${first}`); continue }
+    let name = row.name
+    if (out.some(other => other.name.toLowerCase() === name.toLowerCase())) {
+      let n = 2
+      while (taken.has(`${row.name} ${n}`.toLowerCase())) n++
+      name = `${row.name} ${n}`
+      taken.add(name.toLowerCase())
+      notes.push(`登錄表有兩個專案叫 ${row.name}，第二個先顯示成「${name}」；改登錄表的名稱就好`)
+    }
+    byPath.set(path, name)
+    out.push(name === row.name ? row : { ...row, name })
+  }
+  return { rows: out, notes }
+}
+
+/**
+ * Projects whose folders share a name: the Codex companion keeps a workspace's jobs under `<folder name>-<hash>`,
+ * so the console cannot tell such projects' Codex jobs apart and shows them on each.
+ */
+export function sharedFolderNotes(rows: RegistryRow[]): string[] {
+  const groups = new Map<string, string[]>()
+  for (const row of rows) {
+    const folder = projectRoot(row.statusPath).replace(/\/+$/, '').split('/').pop() ?? ''
+    if (folder) groups.set(folder.toLowerCase(), [...groups.get(folder.toLowerCase()) ?? [], row.name])
+  }
+  return [...groups].filter(([, names]) => names.length > 1)
+    .map(([, names]) => `${names.join('、')} 的資料夾同名：Codex 工作分不出是哪一個的，會出現在每一個；改掉資料夾名稱就好`)
+}
+
 /** CRLF (or a lone CR) as LF: a STATUS or registry saved on Windows reads like any other. */
 const lf = (text: string) => text.replace(/\r\n?/g, '\n')
 
@@ -315,6 +357,14 @@ export function diffToasts(prev: Snapshot | null, cur: Snapshot): string[] {
   return out
 }
 
+/**
+ * At most `max` toasts for one refresh, the last of them counting the rest: a host drops toasts that leave its
+ * stack before they are drawn, and every change is in the feed anyway.
+ */
+export function capToasts(texts: string[], max = 3): string[] {
+  return texts.length <= max ? texts : [...texts.slice(0, max - 1), `另有 ${texts.length - max + 1} 則更新，見主控台動態`]
+}
+
 /** Example data for `/console demo` and the UI tests; clearly not the person's real projects. */
 export function demoSnapshot(now: number): Snapshot & { demo: true } {
   const localMinute = (time: number) => {
@@ -484,18 +534,21 @@ export function todo(s: Snapshot): Item[] {
   if (s.error) items.push({ text: `修正：${s.error}`, tone: 'bad' })
   if (s.codex.startsWith('STALE')) items.push({ text: '關掉舊版的 Codex 背景程式（面板有指令）', tone: 'bad' })
   for (const b of s.blocked) items.push({ text: `回應對話「${b.name}」（${b.why}）`, tone: 'warn' })
-  for (const p of s.projects) if (hasAsk(p)) items.push({ text: `${p.name.replace(/\s.*$/, '')}：${shortAsk(p.ask)}`, tone: 'warn' })
-  for (const p of s.projects) if (!hasAsk(p) && parseGate(p.gate)) items.push({ text: `${p.name.replace(/\s.*$/, '')}：${shortAsk(gateText(p.gate))}`, tone: 'warn' })
+  const short = shortNames(s)
+  for (const p of s.projects) if (hasAsk(p)) items.push({ text: `${short(p.name)}：${shortAsk(p.ask)}`, tone: 'warn' })
+  for (const p of s.projects) if (!hasAsk(p) && parseGate(p.gate)) items.push({ text: `${short(p.name)}：${shortAsk(gateText(p.gate))}`, tone: 'warn' })
   if (s.contextPercent !== null && s.contextPercent >= ROTATE_PERCENT) items.push({ text: `換新主控台（上下文已用 ${s.contextPercent}%）`, tone: 'info' })
   return items
 }
 
 /** Executor work in flight, and results that landed since the CARD (visible wins). */
 export function running(s: Snapshot): string[] {
-  return s.projects.flatMap(p => p.jobs.filter(j => j.kind === 'running').map(() => `${p.name.replace(/\s.*$/, '')}：執行者執行中`))
+  const short = shortNames(s)
+  return s.projects.flatMap(p => p.jobs.filter(j => j.kind === 'running').map(() => `${short(p.name)}：執行者執行中`))
 }
 export function wins(s: Snapshot): string[] {
-  return s.projects.flatMap(p => p.jobs.filter(j => j.kind === 'newer').map(j => `${p.name.replace(/\s.*$/, '')}：執行者${jobResult(j.status).label}，待寫入狀態卡`))
+  const short = shortNames(s)
+  return s.projects.flatMap(p => p.jobs.filter(j => j.kind === 'newer').map(j => `${short(p.name)}：執行者${jobResult(j.status).label}，待寫入狀態卡`))
 }
 
 /** The one-line band: lead with the next action. */
@@ -511,10 +564,29 @@ export function focusLine(s: Snapshot): string {
 export type Card = { id: string; title: string; text: string; meta: string }
 export type Column = { key: 'ask' | 'run' | 'done' | 'idle'; label: string; cards: Card[] }
 
-const short = (name: string) => name.replace(/\s.*$/, '')
+/**
+ * How lines and toasts write a project: its first word, or as many words as it takes to tell it from the other
+ * projects (`Project Alpha` beside `Project Beta`, `api gateway` beside `api`), up to its whole name.
+ */
+export function shortName(name: string, names: readonly string[]): string {
+  const words = name.trim().split(/\s+/)
+  const others = names.filter(other => other !== name).map(other => other.trim().toLowerCase().split(/\s+/))
+  for (let n = 1; n < words.length; n++) {
+    const head = words.slice(0, n).join(' ')
+    if (!others.some(other => other.slice(0, n).join(' ') === head.toLowerCase())) return head
+  }
+  return name
+}
+
+/** shortName among the snapshot's projects. */
+export function shortNames(s: Snapshot): (name: string) => string {
+  const names = s.projects.map(p => p.name)
+  return name => shortName(name, names)
+}
 
 /** The four board columns of the design: 等你 / 進行中 / 剛完成 / 待命. */
 export function board(s: Snapshot): Column[] {
+  const short = shortNames(s)
   const ask: Card[] = []
   if (s.error) ask.push({ id: 'err', title: '主控台', text: s.error, meta: '讀取錯誤' })
   if (s.codex.startsWith('STALE')) ask.push({ id: 'codex', title: 'Codex', text: '背景程式過舊，先關掉', meta: '派工前' })
@@ -524,9 +596,8 @@ export function board(s: Snapshot): Column[] {
     p.jobs.filter(j => j.kind === 'running').map(j => ({ id: 'r-' + j.id, title: short(p.name), text: '執行者執行中', meta: j.id.slice(5, 13) })))
   const done: Card[] = s.projects.flatMap(p =>
     p.jobs.filter(j => j.kind === 'newer').map(j => ({ id: 'd-' + j.id, title: short(p.name), text: shortAsk(j.summary || `執行者${jobResult(j.status).label}`, 40), meta: '待寫入狀態卡' })))
-  const busy = new Set([...ask, ...run, ...done].map(c => c.title))
   const idle: Card[] = s.projects
-    .filter(p => !busy.has(short(p.name)))
+    .filter(p => !hasAsk(p) && !p.jobs.some(j => j.kind === 'running' || j.kind === 'newer'))
     .map(p => ({ id: 'i-' + p.name, title: short(p.name), text: shortAsk(p.state || '—', 40), meta: hhmm(p.updated) }))
   return [
     { key: 'ask', label: '等你', cards: ask },
@@ -609,6 +680,20 @@ export function rows(s: Snapshot): Row[] {
   })
   const rank = (r: Row) => STATE_ORDER.indexOf(r.state) * 2 + (r.pinned ? 0 : 1)
   return out.sort((a, b) => rank(a) - rank(b))
+}
+
+/**
+ * The row the keyboard is on: the project `at` names, else the first row. The cursor keeps a project, not a
+ * position, so it stays on that project when a refresh reorders the rows.
+ */
+export function cursorRow(list: Row[], at: string | null): Row | undefined {
+  return list.find(r => r.full === at) ?? list[0]
+}
+
+/** The project one row up or down from `at`; from no row, or one gone from the list, the first row. */
+export function moveCursor(list: Row[], at: string | null, step: -1 | 1): string | null {
+  const i = list.findIndex(r => r.full === at)
+  return list[i < 0 ? 0 : Math.max(0, Math.min(list.length - 1, i + step))]?.full ?? null
 }
 
 function rowOf(p: Project, now: number): Row {
@@ -871,7 +956,7 @@ function limitHelpBase(kind: string): string {
 export function events(prev: Snapshot | null, cur: Snapshot): Event[] {
   if (prev === null) return []
   const out: Event[] = []
-  const short = (n: string) => n.replace(/\s.*$/, '')
+  const short = shortNames(cur)
   const prevAsk = new Map(prev.projects.map(p => [p.name, hasAsk(p) ? p.ask : '']))
   const prevGate = new Map(prev.projects.map(p => [p.name, parseGate(p.gate) ? (p.gate ?? '').trim() : '']))
   const prevJobs = new Map(prev.projects.flatMap(p => p.jobs.map(j => [j.id, j.kind] as const)))

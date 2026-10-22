@@ -11,7 +11,7 @@ import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, executorErrorText, listWorkspaceJobs, sharedAgents, transcriptApiError } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, askingError, askingSession, attachTabArgs, attachTarget, RETRY_REPLY, retrySignature, stopArgs, stopSignature, newJobTag, withJobTag, commandTarget, decisionProject, replyPrompt, reviewPrompt, suggestedPrompt, continuable, dispatchErrorText, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, freshSyncPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
+import { actionKinds, actionLabel, askingError, askingSession, attachTabArgs, attachTarget, RETRY_REPLY, retrySignature, stopArgs, stopSignature, newJobTag, withJobTag, commandTarget, missingTarget, decisionProject, replyPrompt, reviewPrompt, suggestedPrompt, continuable, dispatchErrorText, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, freshSyncPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -35,7 +35,7 @@ import { commandPreview, dangerOf, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction, AwayDigest, FeedEvent, FeedKind } from '../types'
-import { jobWarnings, waitingNames, parseGate, parseCodexQuota, claudeLimits, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, gateText, battery, blockedLines, resetText, nextProject, buildProject, cardTime, counts, demoSnapshot, diffToasts, displayWidth, events, inbox, nextInbox, staleFor, limitHelp, limitName, parseLimitKind, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, saysNone, selectionContext, ROTATE_PERCENT } from './logic'
+import { capToasts, cursorRow, distinctRows, moveCursor, sharedFolderNotes, shortName, jobWarnings, waitingNames, parseGate, parseCodexQuota, claudeLimits, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, gateText, battery, blockedLines, resetText, nextProject, buildProject, cardTime, counts, demoSnapshot, diffToasts, displayWidth, events, inbox, nextInbox, staleFor, limitHelp, limitName, parseLimitKind, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, saysNone, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody, METER } from './battery'
@@ -70,7 +70,8 @@ const isBandHidden = atom({ plugin: 'console-status', key: 'isBandHidden' } as c
 const isDetail = atom({ plugin: 'console-status', key: 'isDetail' } as const, false)
 const isPlain = atom({ plugin: 'console-status', key: 'isPlain' } as const, false)
 const selected = atom({ plugin: 'console-status', key: 'selected' } as const, null)
-const cursor = atom({ plugin: 'console-status', key: 'cursor' } as const, -1)
+/** The project the keyboard's row cursor is on: a name, so a refresh that reorders the rows keeps it on that project. */
+const cursor = atom({ plugin: 'console-status', key: 'cursorAt' } as const, null)
 const feedAtom = atom({ plugin: 'console-status', key: 'feed' } as const, [])
 /** When the person last used this console, the feed lines since, and the digest frozen at their return (hooks/away.ts). */
 const activeAt = atom({ plugin: 'console-status', key: 'activeAt' } as const, 0)
@@ -426,6 +427,12 @@ async function digestBlock($: any, options: PluginOptions, p: Project): Promise<
   return result.kind === 'ready' ? digestContext(result.lines) : result.kind === 'none' ? DIGEST_NONE : `執行者摘要：無法讀取（${result.error}）`
 }
 
+/** How lines and toasts write a project: its short name among the projects on the board now (logic.ts shortName). */
+async function shortOf($: any, name: string): Promise<string> {
+  const s = await read($, snapshot)
+  return shortName(name, s?.projects.map(p => p.name) ?? [])
+}
+
 /** The projects whose card is open: the menu's, and the focused one of the detail view. */
 async function openCards($: any): Promise<Project[]> {
   if (await demoEnabled($)) return []
@@ -435,7 +442,7 @@ async function openCards($: any): Promise<Project[]> {
   const menu = await read($, menuFor)
   if (menu) names.add(menu)
   if (await read($, isDetail)) {
-    const focus = (await read($, selected)) ?? rows(s)[Math.max(0, await read($, cursor))]?.full
+    const focus = (await read($, selected)) ?? cursorRow(rows(s), await read($, cursor))?.full
     if (focus) names.add(focus)
   }
   return s.projects.filter(p => names.has(p.name))
@@ -615,7 +622,9 @@ async function refresh($: any, options: PluginOptions, force = false) {
     let error: string | null = null
     const registry = await io.fs.read(config.registryPath).catch(() => null) as string | null
     if (registry === null) error = `找不到登錄表 ${config.registryPath}：在專案資料夾輸入 /console add 就會建立並加入第一個專案，或 /console demo 先看示範`
-    const registryRows = parseRegistry(registry ?? '', home).map(row => ({ row, root: projectRoot(row.statusPath) }))
+    // One row per project: the pane, menus and commands find a project by its name, the cards by their path.
+    const distinct = distinctRows(parseRegistry(registry ?? '', home))
+    const registryRows = distinct.rows.map(row => ({ row, root: projectRoot(row.statusPath) }))
     // ⊟ 封存: the 已封存 section is only listed, never probed. ▴ 置頂 is read from the store every console shares.
     const archived = registry === null ? [] : archivedRows(registry, home).map(row => ({ name: row.name, statusPath: row.statusPath }))
     const pins = await guarded(() => loadPins($))
@@ -744,6 +753,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
     const selfId = await io.session.id().catch(() => null) as string | null
     const projectRoots = registryRows.map(({ row, root }) => ({ root, name: row.name }))
     const limitsAt = await guarded(() => limitsTime($))
+    const notes = [...distinct.notes, ...(codexInUse ? sharedFolderNotes(distinct.rows) : [])]
     const cur: Snapshot = {
       at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, selfId, projectRoots, home),
       waiting: waitingNames(agents, selfId, projectRoots, home), codex: codexInUse ? relevantCodex(codex, bases) : '',
@@ -752,6 +762,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
       contextPercent: usage?.context?.percent ?? null, error,
       ...(typeof usage?.cost?.usd === 'number' ? { costUsd: usage.cost.usd } : {}),
       ...(archived.length ? { archived } : {}),
+      ...(notes.length ? { notes } : {}),
       codexQuota: parseCodexQuota(codexQuotaText, now),
       limits: claudeLimits(usage?.rateLimits, now),
       ...(limitsAt ? { limitsAt } : {}),
@@ -776,7 +787,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
           return missing.length ? { ...project, jobs: [...missing, ...project.jobs], tasks: [...(recent?.tasks ?? []).filter(task => ids.has(task.id)), ...(project.tasks ?? [])] } : project
         }) }, now)
       }))
-      for (const text of [...newWarnings, ...diffToasts(sameExecutor, cur)]) {
+      for (const text of capToasts([...newWarnings, ...diffToasts(sameExecutor, cur)])) {
         if (!current()) return
         $.ui.toast(text, { timeoutMs: 8000 })
       }
@@ -942,7 +953,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       await changeLease($, options, (lease, me, now) => (seen.other = claimBlocker(lease, me, project.statusPath, now)) ? null : claim(heartbeat(lease, me, now), me, project.statusPath, now)).catch(() => null)
       if (seen.other) throw new Error(`另一個主控台（對話 ${seen.other.slice(0, 8)}）剛對這個專案派工；等那個工作出現在面板上再操作。`)
     }
-    const name = p.name.replace(/\s.*$/, '')
+    const name = await shortOf($, p.name)
     const now = await $.clock.now()
     // An executor an API error stopped is retried in its own session: ↻ 重試 sends a fixed reply, after a second press.
     const failure = kind === 'reply' && !request.text?.trim() ? askingError(p) : undefined
@@ -1221,7 +1232,7 @@ async function sweepPending($: any, scope: { only?: string; ownToken?: number; o
     let reason = stalePendingReason(entry, request, project, now, locked, turnRunning)
     if (!reason && scope.offConsole && entry.kind === 'gate' && !(request?.turnId && turnRunning)) reason = '主控台已關閉，審核狀態已清除'
     if (!reason) continue
-    const name = (project?.name ?? request?.projectName ?? path).replace(/\s.*$/, '')
+    const name = shortName(project?.name ?? request?.projectName ?? path, s?.projects.map(item => item.name) ?? [])
     // Only the row is let go: a review turn already bound, or one still queued behind a long turn when the wait
     // ran out, still reports its answer when it ends.
     dropped.push({ path, entry, name, reason, keepRequest: (reason === '關卡已變更' && !!request?.turnId) || reason === '審核狀態已逾時' })
@@ -1252,7 +1263,7 @@ async function advanceSyncs($: any, options: PluginOptions) {
       const project = s.projects.find(p => p.statusPath === path)
       const moved = advanceSync(track, project, s.at)
       if (!moved) continue
-      if (project && !isSyncEnded(track.stage) && isSyncEnded(moved.stage)) ended.push({ name: project.name.replace(/\s.*$/, ''), track: moved })
+      if (project && !isSyncEnded(track.stage) && isSyncEnded(moved.stage)) ended.push({ name: shortName(project.name, s.projects.map(item => item.name)), track: moved })
       next[path] = moved
     }
     return next
@@ -1394,9 +1405,9 @@ async function archiveProject($: any, options: PluginOptions, p: Project): Promi
   if (p.jobs.some(job => job.kind === 'running')) return refuse(`${name}：工作還在跑，等它結束（或先 ■ 停止工作）再封存`)
   const run = (await loadCycles($))[p.statusPath]
   if (run && !mine(run, await mySession($))) return refuse(`${name}：另一個主控台在接力，請先在那邊停止`)
-  const { config } = await paths($, options)
+  const { home, config } = await paths($, options)
   const registry = await Promise.resolve().then(() => $.fs.read(config.registryPath)).catch(() => null) as string | null
-  const next = registry === null ? null : registryArchive(registry, p.name)
+  const next = registry === null ? null : registryArchive(registry, p.name, p.statusPath, home)
   if (next === null) return refuse(`${name}：登錄表的專案清單裡找不到它，沒有封存`)
   try { await $.fs.write(config.registryPath, next) } catch (error) {
     return refuse(`${name}：沒有封存（${error instanceof Error ? error.message : String(error)}）`)
@@ -1404,7 +1415,9 @@ async function archiveProject($: any, options: PluginOptions, p: Project): Promi
   if (run) await saveCycle($, p.statusPath, () => undefined)
   await update($, menuFor, value => value === p.name ? null : value)
   await update($, selected, value => value === p.name ? null : value)
-  const text = `${name}：已封存，不再更新（移到登錄表的「已封存」）；要找回來按面板最下面的 ↺ 取回，或 /console unarchive ${name}`
+  // A name the pane numbered (`api 2`) is archived as the registry writes it, which is what unarchive takes.
+  const shelved = archivedRows(next, home).find(row => row.statusPath === p.statusPath)?.name ?? name
+  const text = `${name}：已封存，不再更新（移到登錄表的「已封存」）；要找回來按面板最下面的 ↺ 取回，或 /console unarchive ${shelved}`
   await actionNotice($, text, true)
   await refresh($, options, true)
   return text
@@ -1439,7 +1452,7 @@ async function unarchiveProject($: any, options: PluginOptions, words: string): 
  * and ends this console's relay on it, so a stuck or wrong-way job no longer locks the project.
  */
 async function stopJobs($: any, options: PluginOptions, p: Project): Promise<string> {
-  const name = p.name.replace(/\s.*$/, '')
+  const name = await shortOf($, p.name)
   if (await demoEnabled($)) { $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。'); return '示範資料不停止' }
   if (!p.jobs.some(job => job.kind === 'running')) { $.ui.toast(`${name}：沒有執行中的工作`); return `${name}：沒有執行中的工作` }
   const now = await $.clock.now()
@@ -1478,7 +1491,7 @@ async function stopJobs($: any, options: PluginOptions, p: Project): Promise<str
  * copies `claude attach <id>` for any terminal. Answering a permission prompt needs the session itself.
  */
 async function attachJob($: any, p: Project, surface?: string): Promise<string> {
-  const name = p.name.replace(/\s.*$/, '')
+  const name = await shortOf($, p.name)
   const id = attachTarget(p)
   if (!id) { $.ui.toast(`${name}：沒有可以接手的 Claude 對話`); return `${name}：沒有可以接手的 Claude 對話` }
   const windows = isWindowsOs(String(await Promise.resolve().then(() => $.env.get('OS')).catch(() => '') ?? ''))
@@ -1528,10 +1541,10 @@ function inboxText(s: Snapshot, results: Record<string, VerificationResult>, day
  * missing), a STATUS file from the workflow's template unless it has one, and `.console/` kept out of git.
  */
 async function addProject($: any, options: PluginOptions, words: string): Promise<string> {
-  const folder = addFolder(words, sessionCwd)
+  const { home, config } = await paths($, options)
+  const folder = addFolder(words, sessionCwd, home)
   if (!folder) return '用法：/console add（登錄這個對話所在的資料夾）或 /console add <資料夾>'
   if (!(await Promise.resolve().then(() => $.fs.exists(folder)).catch(() => false))) return `找不到資料夾：${folder}`
-  const { home, config } = await paths($, options)
   const registry = await Promise.resolve().then(() => $.fs.read(config.registryPath)).catch(() => null) as string | null
   const listed = registry === null ? [] : parseRegistry(registry, home)
   const same = (path: string) => path.replace(/\/+$/, '').toLowerCase() === folder.toLowerCase()
@@ -1564,15 +1577,19 @@ async function addProject($: any, options: PluginOptions, words: string): Promis
   }
   if (consoleActive) await refresh($, options, true)
   const elsewhere = !sessionCwd || !same(sessionCwd.replace(/\\/g, '/'))
+  // The Codex companion keeps jobs by folder name, so two projects in folders of one name share them.
+  const folderName = (path: string) => path.replace(/\/+$/, '').split('/').pop() ?? ''
+  const twin = listed.find(row => folderName(projectRoot(row.statusPath)).toLowerCase() === folderName(folder).toLowerCase())
   return [
     `已加入專案「${name}」：${done.join('、')}。`,
     '在狀態卡的「下一步」寫上第一件要做的事，就能按 ⇢ 繼續下一步派工；名稱可以在登錄表改。',
     ...(elsewhere ? ['第一次派工前，要先在那個資料夾開過一次 claude 並選「信任」，否則 Claude Code 會擋下背景工作。'] : []),
+    ...(twin ? [`注意：${twin.name} 的資料夾也叫 ${folderName(folder)}；用 Codex 派工時，兩邊的 Codex 工作分不開，最好改掉其中一個資料夾的名稱。`] : []),
   ].join('\n')
 }
 
 async function toggleCycle($: any, options: PluginOptions, p: Project, want?: boolean): Promise<string> {
-  const name = p.name.replace(/\s.*$/, '')
+  const name = await shortOf($, p.name)
   if (await demoEnabled($)) { $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。'); return '示範資料不接力' }
   const runs = await loadCycles($)
   const me = await mySession($)
@@ -1646,7 +1663,7 @@ async function autoCycle($: any, options: PluginOptions) {
   for (const path of armed) {
     const run = runs[path]!
     const p = s.projects.find(item => item.statusPath === path)
-    const name = p ? p.name.replace(/\s.*$/, '') : path
+    const name = p ? shortName(p.name, s.projects.map(item => item.name)) : path
     const stale = now - Math.max(run.lastAt, run.startedAt) > CYCLE_MAX_AGE_MS
     if (!mine(run, me)) {
       // Another console's cycle: shown, never run here. Its console gone (off, closed or crashed) for six hours, any console clears it.
@@ -1942,7 +1959,7 @@ async function toggleGraph($: any, p: Project) {
 /** Opens a project's pull request in the browser: `gh pr view --web`, else the OS URL handler. */
 async function openPullRequest($: any, p: Project) {
   if (!p.pr) return
-  const name = p.name.replace(/\s.*$/, '')
+  const name = await shortOf($, p.name)
   const opened = await $.process.run(['gh', 'pr', 'view', String(p.pr.number), '--web'], { cwd: projectRoot(p.statusPath), timeoutMs: 15_000 }).catch(() => null)
   if (!opened || opened.exitCode !== 0) {
     const fallback = p.pr.url ? await $.process.run(openFallbackArgs(p.pr.url, isWindowsOs(await $.env.get('OS'))), { timeoutMs: 15_000 }).catch(() => null) : null
@@ -2347,8 +2364,10 @@ export const register: Register = (on, options) => {
         return { text: [...(lines.length ? lines : ['（尚無專案資料；先 /console refresh）']), '設定：/console project executor|model|effort <值|inherit> <專案名稱>'].join('\n') }
       }
       const name = projectSetting[3]!.trim()
-      const target = projects.find(p => p.name === name) ?? projects.find(p => p.name.toLowerCase().startsWith(name.toLowerCase()))
-      if (!target) return { text: `找不到專案「${name}」。` }
+      // The whole rest names the project: the start of one name, never the first of several it could mean.
+      const named = commandTarget(projects, name)
+      const target = named && !named.text ? named.project : null
+      if (!target) return { text: named ? `找不到專案「${name}」。` : missingTarget(projects, name) }
       const field = projectSetting[1] as keyof ProjectOverride
       const raw = projectSetting[2]!
       const value = raw === '""' || raw.toLowerCase() === 'inherit' ? '' : raw
@@ -2416,8 +2435,9 @@ export const register: Register = (on, options) => {
       const rest = (cycleArg[1] ?? '').trim()
       const off = /\s+off$/i.test(rest) || /^off$/i.test(rest)
       const named = rest.replace(/\s*\boff$/i, '').trim()
-      const target = commandTarget(snap && !snap.demo ? snap.projects : [], named)
-      if (!target) return { text: `${named ? `找不到專案「${named}」。` : ''}用法：/console cycle <專案名稱>（開始自動接力）、/console cycle <專案名稱> off（停止）` }
+      const projects = snap && !snap.demo ? snap.projects : []
+      const target = commandTarget(projects, named)
+      if (!target) return { text: `${missingTarget(projects, named)}用法：/console cycle <專案名稱>（開始自動接力）、/console cycle <專案名稱> off（停止）` }
       return { text: await toggleCycle($, options, target.project, !off) }
     }
     // ⊟ 封存, ↺ 取回 and ▴ 置頂 from the keyboard: the same as the menu's buttons.
@@ -2436,7 +2456,7 @@ export const register: Register = (on, options) => {
         return { text: `${pinned.length ? `置頂：${pinned.join('、')}` : '沒有置頂的專案。'}\n用法：/console pin <專案名稱>（置頂）、/console pin <專案名稱> off（取消）` }
       }
       const target = commandTarget(projects, named)
-      if (!target) return { text: `${named ? `找不到專案「${named}」。` : ''}用法：/console ${verb} <專案名稱>${verb === 'pin' ? '（加上 off 取消置頂）' : ''}` }
+      if (!target) return { text: `${missingTarget(projects, named)}用法：/console ${verb} <專案名稱>${verb === 'pin' ? '（加上 off 取消置頂）' : ''}` }
       return { text: verb === 'archive' ? await archiveProject($, options, target.project) : await togglePin($, target.project, !off) }
     }
     const act = arg.match(new RegExp(`^(${COMMAND_ACTIONS.join('|')})(?:\\s+([\\s\\S]*))?$`))
@@ -2445,8 +2465,9 @@ export const register: Register = (on, options) => {
       if (await demoEnabled($)) return { text: '示範資料：不執行專案操作；/console refresh 回到實際資料。' }
       const snap = await read($, snapshot)
       const named = (act[2] ?? '').trim()
-      const target = commandTarget(snap && !snap.demo ? snap.projects : [], named)
-      if (!target) return { text: `${named ? `找不到專案「${named}」。` : ''}用法：/console ${kind} <專案名稱>${kind === 'reply' ? ' <回覆內容>' : ''}` }
+      const projects = snap && !snap.demo ? snap.projects : []
+      const target = commandTarget(projects, named)
+      if (!target) return { text: `${missingTarget(projects, named)}用法：/console ${kind} <專案名稱>${kind === 'reply' ? ' <回覆內容>' : ''}` }
       if (kind === 'reply' && !target.text) return { text: `專案名稱後面接回覆內容：/console reply ${target.project.name} <回覆>` }
       // Sending the command is the confirmation a continue's second press asks for; verify keeps its own check.
       await triggerAction($, options, target.project.statusPath, kind, kind === 'reply' ? { text: target.text } : kind === 'continue' ? { confirmed: true } : {})
@@ -2477,7 +2498,7 @@ export const register: Register = (on, options) => {
         await update($, selected, () => null)
         await update($, hovered, () => null)
         await update($, menuFor, () => null)
-        await update($, cursor, () => -1)
+        await update($, cursor, () => null)
       })
       const { config } = await paths($, options)
       const dispatch = await readDispatch($, config)
@@ -2654,7 +2675,7 @@ export const register: Register = (on, options) => {
     if (typeof data.press === 'string') {
       const id = data.press
       await update($, selected, v => (v === id ? null : id))
-      await update($, cursor, () => list.findIndex(r => r.full === id))
+      await update($, cursor, () => id)
     } else if ('hover' in data) {
       const id = typeof data.hover === 'string' ? data.hover : null
       await update($, hovered, () => id)
@@ -2663,15 +2684,14 @@ export const register: Register = (on, options) => {
       await update($, menuFor, v => (v === id ? null : id))
     } else if (typeof data.key === 'string' && list.length) {
       const k = data.key.toLowerCase()
-      if (k === 'up' || k === 'k') await update($, cursor, v => Math.max(0, (v < 0 ? 0 : v) - 1))
-      if (k === 'down' || k === 'j') await update($, cursor, v => Math.min(list.length - 1, v + 1))
+      if (k === 'up' || k === 'k') await update($, cursor, at => moveCursor(list, at, -1))
+      if (k === 'down' || k === 'j') await update($, cursor, at => moveCursor(list, at, 1))
       if (k === 'return' || k === 'enter' || k === 'space') {
-        const at = await read($, cursor)
-        const id = list[Math.max(0, at)]?.full
+        const id = cursorRow(list, await read($, cursor))?.full
         if (id) await update($, selected, v => (v === id ? null : id))
       }
       if (k === 'm' || k === '.') {
-        const id = list[Math.max(0, await read($, cursor))]?.full
+        const id = cursorRow(list, await read($, cursor))?.full
         if (id) await update($, menuFor, v => (v === id ? null : id))
       }
       // The next thing waiting on you, after the one open now: its row selected and its action menu open.
@@ -2679,7 +2699,7 @@ export const register: Register = (on, options) => {
         const items = inbox(s, verifyFailed(await read($, verificationResults)))
         const target = nextInbox(items, await read($, menuFor))
         if (!target) { $.ui.toast('沒有在等你的事'); return {} }
-        await update($, cursor, () => list.findIndex(r => r.full === target.project))
+        await update($, cursor, () => target.project)
         await update($, selected, () => target.project)
         await update($, menuFor, () => target.project)
         void syncDigests($, options)
@@ -2875,7 +2895,7 @@ export const register: Register = (on, options) => {
     const table = rich
       ? (
         <ui.Client key="rows" module="./rows.tsx" width="100%"
-          props={JSON.parse(JSON.stringify({ rows: specs, now, changed: ['#2C3B4B', '#24303D', '#1C252F'], selected: sel, cursor: cur, selectedBg: C.sel, hoverBg: C.hover, shimmer: SHIMMER }))} />
+          props={JSON.parse(JSON.stringify({ rows: specs, now, changed: ['#2C3B4B', '#24303D', '#1C252F'], selected: sel, cursor: list.findIndex(r => r.full === cur), selectedBg: C.sel, hoverBg: C.hover, shimmer: SHIMMER }))} />
       )
       : (
         <Box flexDirection="column">
@@ -2962,7 +2982,7 @@ export const register: Register = (on, options) => {
         : targetProject && dispatchBlockReason(targetProject) ? null : 'decide')
       : targetState === 'GATE' && parseGate(targetProject?.gate)?.kind !== 'unknown' ? 'gate' : targetState === 'SYNC' && targetProject && !isManual(targetProject) ? 'sync'
       : ready ? 'continue' : null
-    const focus = sel ?? list[Math.max(0, cur)]?.full ?? null
+    const focus = sel ?? cursorRow(list, cur)?.full ?? null
     const menuProject = menu === null ? null : s.projects.find(x => x.name === menu) ?? null
     // A review the CARD has moved past no longer holds its row; the next sweep forgets it.
     const livePending = (p: Project) => staleGate(pending[p.statusPath], p) ? undefined : pending[p.statusPath]
@@ -3239,7 +3259,7 @@ export const register: Register = (on, options) => {
           detail.files.length > LIMIT ? line('more', <Text color={C.faint}>{`…還有 ${detail.files.length - LIMIT} 個檔案`}</Text>) : null,
           line('act', (
             <Box gap={2}>
-              <Button key={key + '-attach'} plain dimColor label={isAttached ? '✓ 已附上，下一則提示會帶著' : '✎ 附給 Claude'} onPress={() => void update($, attachedCommit, value => value?.statusPath === p.statusPath && value.hash === c.hash ? null : { statusPath: p.statusPath, project: p.name.replace(/\s.*$/, ''), hash: c.hash, subject: c.subject })} />
+              <Button key={key + '-attach'} plain dimColor label={isAttached ? '✓ 已附上，下一則提示會帶著' : '✎ 附給 Claude'} onPress={() => void update($, attachedCommit, value => value?.statusPath === p.statusPath && value.hash === c.hash ? null : { statusPath: p.statusPath, project: p.name, hash: c.hash, subject: c.subject })} />
               <Button key={key + '-copy'} plain dimColor label="⧉ 複製 hash" onPress={(press: any) => void $.ui.copy({ text: c.hash, surface: press.surface })} />
               <Button key={key + '-close'} plain dimColor label="✕ 收起" onPress={() => void toggleCommit($, p, c.hash)} />
             </Box>
@@ -3655,7 +3675,7 @@ export const register: Register = (on, options) => {
           {sel !== null
             ? (
               <Box justifyContent="space-between">
-                <Text color={C.blue} wrap="truncate-end">◆ 已選取 {sel.replace(/\s.*$/, '')}<Text color={C.dim}>　下一則提示會附上此專案</Text></Text>
+                <Text color={C.blue} wrap="truncate-end">◆ 已選取 {shortName(sel, s.projects.map(p => p.name))}<Text color={C.dim}>　下一則提示會附上此專案</Text></Text>
                 <Button key="unselect" plain dimColor label="✕ 取消" onPress={() => void update($, selected, () => null)} />
               </Box>
             )
@@ -3669,6 +3689,8 @@ export const register: Register = (on, options) => {
               </Box>
             ) : null
           })()}
+          {/* What the console changed in the registry, or cannot tell apart: said under the projects it is about. */}
+          {!demo && (s.notes ?? []).map((note, i) => <Text key={'note-' + i} color={C.amber} wrap="wrap">{`⚠ ${note}`}</Text>)}
           {/* Archived projects: one quiet line, opened to bring one back. */}
           {!demo && (s.archived?.length ?? 0) > 0 && (
             <Box key="archived" flexDirection="column">
@@ -3694,7 +3716,7 @@ export const register: Register = (on, options) => {
 
         {detail && (
           <Box flexDirection="column">
-            {list.map((row, idx) => {
+            {list.map(row => {
               const p = s.projects.find(x => x.name === row.full)
               if (!p) return null
               if (row.full !== focus) {
@@ -3702,7 +3724,7 @@ export const register: Register = (on, options) => {
                 return (
                   <Box key={'d-' + p.name} gap={1}>
                     <Box width={W.state}><Text color={FG[row.state]}>{chipText(row.state)}</Text></Box>
-                    <Button key={'df-' + p.name} plain dimColor label={'▸ ' + row.project} onPress={() => void update($, cursor, () => idx).then(() => syncDigests($, options))} />
+                    <Button key={'df-' + p.name} plain dimColor label={'▸ ' + row.project} onPress={() => void update($, cursor, () => row.full).then(() => syncDigests($, options))} />
                   </Box>
                 )
               }
