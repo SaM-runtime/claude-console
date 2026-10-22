@@ -252,12 +252,16 @@ export function verificationArgs(command: string, windows: boolean): string[] {
 }
 
 /** The API returns separate streams; append stderr, then keep only the final three nonblank lines. */
-export function outputTail(stdout: string, stderr = ''): string[] {
-  return terminalLines(`${stdout}\n${stderr}`).map(s => s.trimEnd()).filter(s => s.trim()).slice(-3).map(s => s.slice(0, 500))
+export function outputTail(stdout: string, stderr = '', keep = 3): string[] {
+  return terminalLines(`${stdout}\n${stderr}`).map(s => s.trimEnd()).filter(s => s.trim()).slice(-keep).map(s => s.slice(0, 500))
 }
 
+/** A verification keeps this many output lines; the pane shows the last few and opens the rest on request. */
+export const VERIFY_KEEP = 30
+export const VERIFY_SHOWN = 3
+
 export function verificationResult(command: string, at: number, result: { exitCode: number; stdout: string; stderr: string; isStdoutTruncated?: boolean; isStderrTruncated?: boolean }): VerificationResult {
-  return { command, at, ok: result.exitCode === 0, exitCode: result.exitCode, lines: outputTail(result.stdout, result.stderr), truncated: !!(result.isStdoutTruncated || result.isStderrTruncated) }
+  return { command, at, ok: result.exitCode === 0, exitCode: result.exitCode, lines: outputTail(result.stdout, result.stderr, VERIFY_KEEP), truncated: !!(result.isStdoutTruncated || result.isStderrTruncated) }
 }
 
 export function launchId(stdout: string): string | null {

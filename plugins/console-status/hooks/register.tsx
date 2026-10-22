@@ -11,7 +11,7 @@ import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, executorErrorText, listWorkspaceJobs, sharedAgents, transcriptApiError } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, askingError, askingSession, attachTabArgs, attachTarget, RETRY_REPLY, retrySignature, stopArgs, stopSignature, newJobTag, withJobTag, commandTarget, missingTarget, decisionProject, replyPrompt, reviewPrompt, suggestedPrompt, continuable, dispatchErrorText, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, freshSyncPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
+import { actionKinds, actionLabel, askingError, askingSession, attachTabArgs, attachTarget, RETRY_REPLY, retrySignature, stopArgs, stopSignature, newJobTag, withJobTag, commandTarget, missingTarget, decisionProject, replyPrompt, reviewPrompt, suggestedPrompt, continuable, dispatchErrorText, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, freshSyncPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, VERIFY_KEEP, VERIFY_SHOWN, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -79,6 +79,8 @@ const awayLog = atom({ plugin: 'console-status', key: 'awayLog' } as const, [])
 const awayDigest = atom({ plugin: 'console-status', key: 'awayDigest' } as const, null)
 /** The archived projects' list is open under the table. */
 const archiveOpen = atom({ plugin: 'console-status', key: 'archiveOpen' } as const, false)
+/** The project (status path) whose whole verification output is open; otherwise the last few lines show. */
+const outputOpen = atom({ plugin: 'console-status', key: 'outputOpen' } as const, null)
 const isRefreshing = atom({ plugin: 'console-status', key: 'isRefreshing' } as const, false)
 const hovered = atom({ plugin: 'console-status', key: 'hovered' } as const, null)
 const menuFor = atom({ plugin: 'console-status', key: 'menuFor' } as const, null)
@@ -999,7 +1001,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
         const run = await $.process.run(verificationArgs(p.verify, windows), { cwd: root, timeoutMs: 300_000 })
         result = verificationResult(p.verify, await $.clock.now(), run)
       } catch (error) {
-        result = { command: p.verify, at: await $.clock.now(), ok: false, exitCode: null, lines: outputTail(String(error)), truncated: false }
+        result = { command: p.verify, at: await $.clock.now(), ok: false, exitCode: null, lines: outputTail(String(error), '', VERIFY_KEEP), truncated: false }
       }
       await update($, verificationResults, values => ({ ...values, [statusPath]: result }))
       await actionNotice($, `${name}：${result.ok ? '✓ 驗證通過' : '✕ 驗證失敗'}${result.exitCode === null ? '（逾時或無法執行）' : `（結束碼 ${result.exitCode}）`}`, result.ok)
@@ -2774,6 +2776,7 @@ export const register: Register = (on, options) => {
     const digests = demo ? {} : await read($, executorDigests)
     const confirmations = await read($, continueConfirmations)
     const verified = await read($, verificationResults)
+    const openOutput = await read($, outputOpen)
     const trusted = await read($, trustedVerify)
     await read($, actionPulse) // redraws running action labels once a second
     const offers = demo ? {} : await read($, fallbackOffers)
@@ -3463,16 +3466,21 @@ export const register: Register = (on, options) => {
         })}
       </Box>
     }
-    const verificationView = (p: Project) => {
+    const verificationView = (p: Project, prefix: string) => {
       const result = verified[p.statusPath]
       const command = p.verify.trim() ? <Text color={verifyTrusted(trusted, p.statusPath, p.verify) ? C.dim : C.amber} wrap="wrap">
         驗證指令{verifyTrusted(trusted, p.statusPath, p.verify) ? '' : (trusted[p.statusPath] === undefined ? '（未確認）' : '（已變更，未確認）')}：{p.verify}</Text> : null
       if (!result) return command && <Box flexDirection="column" marginTop={1}>{command}</Box>
+      const whole = openOutput === p.statusPath
       return <Box flexDirection="column" marginTop={1}>
         {command}
         <Text color={result.ok ? C.green : C.red}>{result.ok ? '✓' : '✕'} 最後驗證 {new Date(result.at).toLocaleString()}（{result.exitCode === null ? '未正常結束' : `exit ${result.exitCode}`}）</Text>
         {result.truncated && <Text color={C.amber}>輸出已被執行器截斷，以下是擷取內容</Text>}
-        {(result.lines.length ? result.lines : ['（無輸出）']).map((line, index) => <Text key={'output-' + index} color={C.dim} wrap="truncate-end">{line}</Text>)}
+        {(result.lines.length ? (whole ? result.lines : result.lines.slice(-VERIFY_SHOWN)) : ['（無輸出）']).map((line, index) => <Text key={prefix + 'output-' + index} color={C.dim} wrap="truncate-end">{line}</Text>)}
+        {result.lines.length > VERIFY_SHOWN && <Box><Button key={prefix + 'output-toggle'} plain dimColor label={whole ? '▴ 收起輸出' : `▸ 完整輸出（${result.lines.length} 行）`} onPress={async () => {
+          await touch($, options).catch(() => {})
+          await update($, outputOpen, v => v === p.statusPath ? null : p.statusPath)
+        }} /></Box>}
       </Box>
     }
     // Every section opens the same way: its name, a hairline to the edge, then its own figures on the right.
@@ -3564,7 +3572,7 @@ export const register: Register = (on, options) => {
               </Box>
             )}
             {projectActions(here.project, 'pm-')}
-            {verificationView(here.project)}
+            {verificationView(here.project, 'pm-')}
           </Box>
         )}
 
@@ -3651,7 +3659,7 @@ export const register: Register = (on, options) => {
               {projectInfo(menuProject, 'm-info-')}
               {digestView(menuProject, 'm-')}
               <Box marginTop={1}>{projectActions(menuProject, 'm-')}</Box>
-              {verificationView(menuProject)}
+              {verificationView(menuProject, 'm-')}
               {rich && (() => {
                 const st = list.find(r => r.full === menuProject.name)?.state ?? 'NOCARD'
                 const keys = actionKinds(menuProject, st).filter(kind => HOTKEY_OF[kind]).map(kind => `${HOTKEY_OF[kind]} ${actionLabel(kind, menuProject).replace(/^\S+\s*/, '')}`)
@@ -3744,7 +3752,7 @@ export const register: Register = (on, options) => {
                   {projectInfo(p, 'd-info-' + p.name + '-', { state: true })}
                   {digestView(p, 'detail-' + p.name + '-')}
                   <Box marginTop={1}>{projectActions(p, 'detail-' + p.name + '-')}</Box>
-                  {verificationView(p)}
+                  {verificationView(p, 'detail-' + p.name + '-')}
                   {(p.tasks ?? []).length > 0 && (
                     <Box flexDirection="column" marginTop={1}>
                       <Text color={C.dim}>執行者任務</Text>
