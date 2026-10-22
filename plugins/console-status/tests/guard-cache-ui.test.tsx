@@ -96,20 +96,20 @@ test('the band counts the cache down, warns a minute before it goes cold and pri
   await $.turn.complete({ turnId: 't', answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' } as any)
   expect(data.state.cacheClock).toEqual({ at: clock.now(), tokens: 200_000, model: 'claude-opus-5-5', ttl: '5m', source: 'default', hit: 150_000 / 197_000 })
   await clock.advance(15_000)
-  expect(await band.find({ type: 'Text', text: '快取 4m' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: '快取 4分' })).toBeDefined()
   await clock.advance(4 * 60_000)
-  expect(data.toasts.some(t => /^主控台快取 (?:1m|\d+s) 後過期：之後送出的提示會重寫約 200k tokens（約 \$1\.00）$/.test(t))).toBe(true)
+  expect(data.toasts.some(t => /^主控台快取 (?:1分|\d+秒) 後過期：之後送出的提示會重寫約 200k tokens（約 \$1\.00）$/.test(t))).toBe(true)
   // The last minute counts in seconds, highlighted.
-  expect(await band.find({ type: 'Text', text: '快取 45s', bold: true })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: '快取 45秒', bold: true })).toBeDefined()
   await clock.advance(5_000)
-  expect(await band.find({ type: 'Text', text: '快取 40s' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: '快取 40秒' })).toBeDefined()
   await clock.advance(2 * 60_000 - 5_000)
   expect(await band.find({ type: 'Text', text: '快取已冷 $1.00' })).toBeDefined()
   await $.prompt.submit({ text: 'next question' } as any).catch(() => {})
-  expect(data.toasts.some(t => /^主控台快取已過期 1m：這則提示會重寫約 200k tokens/.test(t))).toBe(true)
+  expect(data.toasts.some(t => /^主控台快取已過期 1分：這則提示會重寫約 200k tokens/.test(t))).toBe(true)
   await band.unmount()
   const pane = await $.ui.mount(PANE)
-  expect(await pane.find({ type: 'Text', text: /^已冷 1m　200k tokens・下則重寫約 \$1\.00・上次命中 76%$/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /^已冷 1分　200k tokens・下則重寫約 \$1\.00・上次命中 76%$/ })).toBeDefined()
   await pane.unmount()
 })
 
@@ -129,7 +129,7 @@ test('a reload starts the clock from the transcript and shows the TTL the API ac
   const pane = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
     props: { title: 'Console', isFocused: true, bodyColumns: 90, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any)
   // The request started at 11:58 on a one-hour TTL: 58 minutes left at 12:00.
-  expect(await pane.find({ type: 'Text', text: /^58m 後過期（1h・實際）/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /^58分 後過期（1 小時・實際）/ })).toBeDefined()
   await pane.unmount()
 })
 
@@ -207,6 +207,6 @@ test('a compaction while idle swaps the cold-cache price for the summary\'s, wit
   expect(data.toasts.some(t => t.startsWith('主控台快取'))).toBe(false)
   const pane = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile',
     props: { title: 'Console', isFocused: true, bodyColumns: 90, placement: 'dock', scroll: { offset: 0, total: 0, visible: 0 } } } as any)
-  expect(await pane.find({ type: 'Text', text: /^已壓縮 20m前　200k → 30k tokens・下則重寫約 \$0\.15$/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /^已壓縮 20分前　200k → 30k tokens・下則重寫約 \$0\.15$/ })).toBeDefined()
   await pane.unmount()
 })

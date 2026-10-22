@@ -919,6 +919,7 @@ export function jobTasks(jobs: Job[]): ExecutorTask[] {
     effort: j.request?.effort ?? '',
     startedAt: j.startedAt ?? j.createdAt,
     completedAt: j.completedAt,
+    ...(j.logFile ? { logFile: j.logFile } : {}),
   }))
   const live = tasks.filter(x => LIVE.has(x.status))
   const done = tasks.filter(x => !LIVE.has(x.status))

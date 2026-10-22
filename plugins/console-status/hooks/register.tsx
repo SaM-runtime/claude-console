@@ -3,7 +3,7 @@
 // Band above the prompt + `/console` pane; toasts on changes. Shows on phones via Remote Control.
 import { atom, read, update } from 'claude-code'
 import type { Register, PluginOptions } from 'claude-code'
-import { resolveConfig, resolveFallbackOptions, legacyDispatchPath, activationMode, suggestNextMode } from './config'
+import { resolveConfig, resolveFallbackOptions, legacyDispatchPath, activationMode, suggestNextMode, confirmContinueMode } from './config'
 import type { ConsoleConfig } from './config'
 import { codexHealth, isActiveJob } from './logic'
 import { codexNote } from './wording'
@@ -185,10 +185,19 @@ async function changeLease($: any, options: PluginOptions, change: (lease: Lease
   if (typeof me !== 'string' || !me) return null
   const { config } = await paths($, options)
   const now = await $.clock.now()
-  const lease = parseLease(await Promise.resolve().then(() => $.fs.read(leasePath(config))).catch(() => null))
-  const next = change(lease, me, now)
-  if (next) await Promise.resolve().then(() => $.fs.write(leasePath(config), JSON.stringify(next) + '\n')).catch(() => {})
-  return next ?? lease
+  const readLease = () => Promise.resolve().then(() => $.fs.read(leasePath(config))).catch(() => null) as Promise<string | null>
+  let lease = parseLease(await readLease())
+  // Every console writes this file each minute: read it back, and when another console wrote in between,
+  // apply the change again on top of its copy, so neither's "dispatched this project just now" is lost.
+  for (let attempt = 0; ; attempt++) {
+    const next = change(lease, me, now)
+    if (!next) return lease
+    const text = JSON.stringify(next) + '\n'
+    await Promise.resolve().then(() => $.fs.write(leasePath(config), text)).catch(() => {})
+    const back = await readLease()
+    if (back === null || back === text || attempt >= 2) return next
+    lease = parseLease(back)
+  }
 }
 const renewLease = ($: any, options: PluginOptions) => changeLease($, options, (lease, me, now) => heartbeat(lease, me, now))
 const releaseLease = ($: any, options: PluginOptions) => changeLease($, options, (lease, me) => leave(lease, me))
@@ -352,7 +361,16 @@ async function projectDigest($: any, options: PluginOptions, p: Project): Promis
     const source = digestSource(p.executor, p.tasks)
     if (source.kind === 'codex') {
       if (!source.task) return { kind: 'none' }
-      const lines = codexDigestLines(source.task, await $.clock.now())
+      // Its log ends with Codex's final output: the last line is its last words, read as a running job's line is.
+      const { config } = source.task.logFile ? await paths($, options) : { config: null }
+      const deps: ExecutorDeps = {
+        run: (argv, init) => $.process.run(argv, init),
+        files: { read: path => $.fs.read(path), list: path => $.fs.list(path), write: (path, text) => $.fs.write(path, text), stat: path => $.fs.stat(path) },
+        now: () => $.clock.now(),
+      }
+      const words = config && source.task.logFile
+        ? await createExecutor('codex', deps, withCompanion(config)).lastLine({ id: source.task.id, logFile: source.task.logFile }).catch(() => '') : ''
+      const lines = codexDigestLines(source.task, await $.clock.now(), words)
       lastDigests.set(p.statusPath, lines)
       return { kind: 'ready', lines }
     }
@@ -874,12 +892,13 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     const now = await $.clock.now()
     // An executor an API error stopped is retried in its own session: ↻ 重試 sends a fixed reply, after a second press.
     const failure = kind === 'reply' && !request.text?.trim() ? askingError(p) : undefined
+    const secondPress = confirmContinueMode((options as any).confirmContinue) === 'on'
     if (failure) {
-      if (!request.confirmed && !await confirmed($, statusPath, retrySignature(p), now, CONTINUE_CONFIRM_MS,
+      if (!request.confirmed && secondPress && !await confirmed($, statusPath, retrySignature(p), now, CONTINUE_CONFIRM_MS,
         `${name}：上次${failure}；${CONTINUE_CONFIRM_MS / 1000} 秒內再按一次重試`)) return
       request = { ...request, text: RETRY_REPLY }
     }
-    if (kind === 'continue' && !request.useClaude && !request.confirmed) {
+    if (kind === 'continue' && !request.useClaude && !request.confirmed && secondPress) {
       if (!await confirmed($, statusPath, workSignature(p), now, CONTINUE_CONFIRM_MS,
         `${name}：${CONTINUE_CONFIRM_MS / 1000} 秒內再按一次派工：${p.next}`)) return
     }
@@ -2239,8 +2258,8 @@ export const register: Register = (on, options) => {
     git: 'Git：✕衝突 合併衝突　CI✕ PR 的檢查失敗　●n 未提交／未追蹤檔案　↑n 未推送　↓n 落後上游　CI… 檢查進行中　✓ 乾淨。git 狀態每次更新都讀（不會鎖住 repo），PR 與 CI 用 gh 每 5 分鐘讀一次，CI 進行中時每分鐘一次。設定 gitProbe 可改成只讀 git（git）或關閉（off）。',
     cache: '主控台的提示快取：上一則回應後 5 分鐘（或 1 小時）內送出，會直接讀快取；過期後，下一則提示要把整段上下文重新寫進快取，費用約為一般輸入價格的 1.25 倍（1 小時快取為 2 倍）。快取時長由 cacheTtl 設定，auto＝讀對話紀錄裡實際回報的時長。「上次命中」是上一則請求有多少比例的輸入來自快取，偏低代表快取失效或剛重建。',
     pipeline: '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線。● 完成　◉ 執行中　◆ 等待（主控台、使用者或同步）　✕ 驗證失敗　○ 未到。由狀態卡、執行者工作與最近一次驗證推算。',
-    action_continue: '6 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
-    action_reply: '執行者做完一輪停下來問你：在輸入框寫下回覆，按 Enter 後主控台用你的話接續它原本的對話（用該執行者的額度），不用切過去。需要批准的權限提示，用「↗ 接手對話」處理。執行者是因為出錯（登入失效、額度用完、服務出錯）停下的話，這個按鈕會變成「↻ 重試」：排除原因後 6 秒內按兩次，接回同一個對話從中斷的地方繼續。',
+    action_continue: `${confirmContinueMode((options as any).confirmContinue) === 'on' ? '6 秒內再按一次' : '按一下（confirmContinue: off）'}，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。`,
+    action_reply: '執行者做完一輪停下來問你：在輸入框寫下回覆，按 Enter 後主控台用你的話接續它原本的對話（用該執行者的額度），不用切過去。需要批准的權限提示，用「↗ 接手對話」處理。執行者是因為出錯（登入失效、額度用完、服務出錯）停下的話，這個按鈕會變成「↻ 重試」：排除原因後再按（和繼續一樣要 6 秒內按兩次，confirmContinue: off 時按一下），接回同一個對話從中斷的地方繼續。',
     action_stop: '停止這個專案執行中的工作（claude stop，或 Codex 串接腳本的取消），6 秒內按兩次確認；也會停掉這個主控台在這個專案的自動接力。已經寫好的檔案不會還原，之後可以同步或繼續。',
     action_attach: '接手背景執行者的對話：要批准權限、想看它在做什麼或直接跟它說話時用。在 Windows Terminal 裡會開一個新分頁執行 claude attach；其他終端機會複製「claude attach <代號>」讓你貼上。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
@@ -2652,7 +2671,7 @@ export const register: Register = (on, options) => {
         : kind === 'reply' && askingError(p) ? retrySignature(p) : null)
       const running = active?.kind === kind
       const elapsed = running ? Math.max(0, Math.floor((renderedAt - active.at) / 1000)) : 0
-      const label = blocked ? `⇢ 無法派工：${blocked}` : running ? `${rich ? '' : '⋯ '}${actionLabel(kind, p)}… ${elapsed}s`
+      const label = blocked ? `⇢ 無法派工：${blocked}` : running ? `${rich ? '' : '⋯ '}${actionLabel(kind, p)}… ${elapsed}秒`
         : confirming ? '再按一次確認' : actionLabel(kind, p)
       return <Box key={'help-' + key} hover={{ scope: 'help-action_' + kind }} gap={running && rich ? 1 : 0}>
         {running && rich && <ui.Client key={'spin-' + key} module="./spinner.tsx" width={1} height={1} props={{ color: C.dim }} />}

@@ -25,20 +25,20 @@ test('list prices by model and the cache-write multiplier per TTL', () => {
 test('warm, nearly cold and cold views; a running turn or a small context shows nothing', () => {
   const warm = cacheView(clock(), 60_000, false, null)!
   expect(warm).toEqual({ warm: true, leftMs: 240_000, coldForMs: 0, cost: 1, ttl: '5m' })
-  expect(cacheChip(warm, false)).toEqual({ text: '快取 4m', tone: 'green' })
-  expect(cacheChip(cacheView(clock(), 250_000, false, null)!, false)).toEqual({ text: '快取 50s', tone: 'amber' })
+  expect(cacheChip(warm, false)).toEqual({ text: '快取 4分', tone: 'green' })
+  expect(cacheChip(cacheView(clock(), 250_000, false, null)!, false)).toEqual({ text: '快取 50秒', tone: 'amber' })
   const cold = cacheView(clock(), 12 * 60_000, false, null)!
   expect(cacheChip(cold, false)).toEqual({ text: '快取已冷 $1.00', tone: 'red' })
   expect(cacheChip(cold, true)).toEqual({ text: '⧗冷 $1.00', tone: 'red' })
-  expect(cacheWarning(clock(), cold)).toBe('主控台快取已過期 7m：這則提示會重寫約 200k tokens（約 $1.00）')
-  expect(cacheWarning(clock(), warm)).toBe('主控台快取 4m 後過期：之後送出的提示會重寫約 200k tokens（約 $1.00）')
+  expect(cacheWarning(clock(), cold)).toBe('主控台快取已過期 7分：這則提示會重寫約 200k tokens（約 $1.00）')
+  expect(cacheWarning(clock(), warm)).toBe('主控台快取 4分 後過期：之後送出的提示會重寫約 200k tokens（約 $1.00）')
   expect(cacheView(clock(), 60_000, true, null)).toBe(null)
   expect(cacheView(clock({ tokens: 5_000 }), 60_000, false, null)).toBe(null)
   expect(cacheView(null, 0, false, null)).toBe(null)
-  expect(leftText(90 * 60_000)).toBe('1h')
-  expect(leftText(45_000)).toBe('45s')
-  expect(leftText(400)).toBe('1s')
-  expect(leftText(60_000)).toBe('1m')
+  expect(leftText(90 * 60_000)).toBe('1時')
+  expect(leftText(45_000)).toBe('45秒')
+  expect(leftText(400)).toBe('1秒')
+  expect(leftText(60_000)).toBe('1分')
 })
 
 test('the TTL is learned only from an idle gap on the same model', () => {
@@ -71,8 +71,8 @@ test('the transcript tail gives the last main-thread response, timed from its re
   expect(transcriptCache(row({ type: 'assistant', timestamp: '2030-01-01T00:00:00Z', message: { id: 'a', model: 'm', usage: usage(30, 0) } }))?.ttl).toBe('5m')
   expect(transcriptCache('')).toBe(null)
   expect(transcriptPathFor('C:/Users/me/.claude/', 'D:\\Work\\K app', 'abc')).toBe('C:/Users/me/.claude/projects/D--Work-K-app/abc.jsonl')
-  expect(ttlLabel('1h', 'usage')).toBe('1h・實際')
-  expect(ttlLabel('5m', undefined)).toBe('5m・預設')
+  expect(ttlLabel('1h', 'usage')).toBe('1 小時・實際')
+  expect(ttlLabel('5m', undefined)).toBe('5 分鐘・預設')
 })
 
 test('a compaction replaces the clock: the summary is what the next prompt writes, and it is not called cold', () => {

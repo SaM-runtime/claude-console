@@ -68,9 +68,9 @@ export function tokensText(tokens: number): string {
 
 /** `4m`, `45s` in the last minute, `1h`. */
 export function leftText(ms: number): string {
-  if (ms < 60_000) return `${Math.max(1, Math.ceil(ms / 1000))}s`
+  if (ms < 60_000) return `${Math.max(1, Math.ceil(ms / 1000))}秒`
   const minutes = Math.floor(ms / 60_000)
-  return minutes >= 60 ? `${Math.floor(minutes / 60)}h` : `${minutes}m`
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}時` : `${minutes}分`
 }
 
 export type CacheView = { warm: boolean; leftMs: number; coldForMs: number; cost: number | null; ttl: CacheTtl; compacted?: true }
@@ -85,7 +85,7 @@ export function cacheView(clock: CacheClock | null | undefined, now: number, bus
   return { warm: left > 0, leftMs: Math.max(0, left), coldForMs: Math.max(0, -left), cost: rewriteCost(clock.tokens, clock.model, ttl, override), ttl }
 }
 
-/** The band chip: `快取 4m` while warm, `快取已冷 $0.90` once cold, `已壓縮 $0.12` after a compaction. */
+/** The band chip: `快取 4分` while warm, `快取已冷 $0.90` once cold, `已壓縮 $0.12` after a compaction. */
 export function cacheChip(view: CacheView, compact: boolean): { text: string; tone: 'green' | 'amber' | 'red' } {
   if (view.compacted) return { text: `${compact ? '⧗壓' : '已壓縮'}${view.cost === null ? '' : ` ${usd(view.cost)}`}`, tone: 'green' }
   if (view.warm) return { text: compact ? `⧗${leftText(view.leftMs)}` : `快取 ${leftText(view.leftMs)}`, tone: view.leftMs <= CACHE_WARN_MS ? 'amber' : 'green' }
@@ -166,7 +166,7 @@ export function transcriptPathFor(configDir: string, cwd: string, sessionId: str
 
 /** The TTL label in the pane: `1h・實際` when read from usage, `5m・預設` before anything is known. */
 export function ttlLabel(ttl: CacheTtl, source: TtlSource | undefined): string {
-  return `${ttl}・${source === 'usage' ? '實際' : source === 'option' ? '設定' : source === 'learned' ? '推測' : '預設'}`
+  return `${ttl === '1h' ? '1 小時' : '5 分鐘'}・${source === 'usage' ? '實際' : source === 'option' ? '設定' : source === 'learned' ? '推測' : '預設'}`
 }
 
 /**
