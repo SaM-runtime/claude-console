@@ -60,6 +60,10 @@ test('executor argv builders keep the two command contracts separate', () => {
   expect(claudeArgs('D:/Work/Project Alpha', 'next', { model: '', effort: 'max' }, '12345678-1234-1234-1234-123456789abc')).toEqual([
     'claude', '--bg', '--resume', '12345678-1234-1234-1234-123456789abc', '--effort', 'max', 'next',
   ])
+  // On standard input the prompt is not an argument at all.
+  expect(claudeArgs('D:/Work/Project Alpha', 'line one\nline two', { model: '', effort: '' }, undefined, 'console-x-0', true)).toEqual([
+    'claude', '--bg', '--name', 'console-x-0',
+  ])
 })
 
 test('codex executor reuses companion jobs, dispatch and log files', async () => {
@@ -112,6 +116,21 @@ test('claude dispatch persists starting first, confirms a full session id, then 
   )
   await executor.dispatch('D:/Project Alpha', 'second task', { model: '', effort: '' })
   expect(h.calls[4].argv).toEqual(['claude', '--bg', '--name', NAME1, '--resume', '11111111-2222-4333-8444-555555555555', 'second task'])
+})
+
+test('on Windows a Claude dispatch hands its prompt over on standard input, where claude.cmd cannot cut it', async () => {
+  const h = harness()
+  const deps = { ...h.deps, windows: true }
+  const prompt = '依 STATUS CARD 的下一步繼續\n使用者回覆："A & B" 100%'
+  h.replies.push(
+    { exitCode: 0, stdout: '[]', stderr: '' },
+    { exitCode: 0, stdout: 'backgrounded · abc12345 · ' + NAME0, stderr: '' },
+    { exitCode: 0, stdout: JSON.stringify([{ id: 'abc12345', name: NAME0, sessionId: '11111111-2222-4333-8444-555555555555', cwd: 'D:/Project Alpha', kind: 'background', status: 'busy', state: 'working' }]), stderr: '' },
+  )
+  await createExecutor('claude', deps, { companionScript: '', companionStateRoots: [], claudeSessionsPath: 'D:/claude.json' }).dispatch('D:/Project Alpha', prompt, { model: 'sonnet' })
+  expect(h.calls[1]).toEqual({ argv: ['claude', '--bg', '--name', NAME0, '--model', 'sonnet'], init: { cwd: 'D:/Project Alpha', timeoutMs: 60_000, stdin: prompt } })
+  // The job still remembers what it was asked.
+  expect(JSON.parse(h.files['D:/claude.json']).roots['d:/project alpha'].jobs[0].prompt).toBe(prompt)
 })
 
 test('claude blocks a duplicate when the owned session is active or a launch is unresolved', async () => {

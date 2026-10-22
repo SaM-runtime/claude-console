@@ -35,8 +35,8 @@ jobs:
         run: claude plugin test plugins/console-status
       - name: Check docs
         run: node scripts/check-docs.mjs
-      - name: Check how a dispatch prompt reaches claude
-        run: node scripts/check-dispatch.mjs --report
+      - name: Check the commands console-status runs on this OS
+        run: node scripts/check-commands.mjs
 
   latest:
     # The CLI on a person's machine updates itself; this run shows a hooks API change before it reaches them.
@@ -61,3 +61,5 @@ jobs:
         run: claude plugin validate plugins/console-status
       - name: Test plugin
         run: claude plugin test plugins/console-status
+      - name: Check the commands console-status runs on this OS
+        run: node scripts/check-commands.mjs

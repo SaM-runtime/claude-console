@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.32.1
+
+- **Windows: a Claude dispatch reaches its executor whole.** Where `claude` is npm's `claude.cmd` (the npm install), Claude Code runs it through cmd.exe, which ends an argument at its first line break and splits it at `&`. A dispatch prompt is several lines, so the executor got only its first line, without the STATUS path, the rules or the job code it is meant to write back, and a reply holding `"A & B"` was cut at the `&`. On Windows the prompt now goes to `claude --bg` on standard input, which reaches the session whole whether `claude` is `claude.cmd` or a native `claude.exe`. macOS and Linux keep passing it as the last argument.
+- **PowerShell output is UTF-8.** Windows PowerShell prints in the console's code page (950 on a Traditional Chinese Windows, 437 on an English one), so Chinese in a `驗證` command's output came back garbled in the verification line, and a transcript read through PowerShell could lose lines to Big5's `許功蓋` bytes. `▶ 執行驗證`, the transcript tails and both Codex probe scripts now switch their output to UTF-8 first.
+- **The Windows Codex preflight reads every state root.** It looked only in the Temp folder, so with the companion's state under plugin data, an old Codex background process's workspace read `unknown`. It now gets the same roots as the macOS and Linux probe (`-StateRoots`). Where `Get-AppxPackage` cannot load, it prints `UNKNOWN` instead of failing.
+- When `gh pr view --web` fails, the fallback opens the pull request's address as it is instead of turning its slashes into backslashes.
+- Finding the console's own transcript before a hook names it reads USERPROFILE before HOME, as Claude Code does on Windows.
+- **CI runs the commands for real.** `scripts/check-commands.mjs` builds each outside command with console-status's own code and runs it through Claude Code's own process runner on Windows and Ubuntu: the Codex probe scripts against a made-up Codex folder, a `驗證` command (passing, failing, printing Chinese), both transcript tails, and a Claude dispatch whose prompt must reach the background session whole. It is part of the required checks and of the latest-Claude-Code run.
+
 ## 0.32.0
 
 - **The command guard catches more of what cannot be taken back.** Each new kind says in plain words what it does, as 0.25.0's do:

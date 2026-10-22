@@ -14,9 +14,14 @@ export type DispatchOptions = { model?: string; effort?: string; kind?: 'sync' |
 export type ExecutorJob = Job & { executor?: ExecutorKind; nativeId?: string; sessionId?: string }
 
 type RunResult = { exitCode: number; stdout: string; stderr: string }
-type RunInit = { cwd?: string; timeoutMs?: number }
+type RunInit = { cwd?: string; timeoutMs?: number; stdin?: string }
 export type ExecutorDeps = {
   run(argv: readonly string[], init?: RunInit): Promise<RunResult>
+  /**
+   * On Windows `claude` is often npm's `claude.cmd`, which runs through cmd.exe: there an argument ends at its
+   * first line break and splits at `&`, so a Claude dispatch hands its prompt over on standard input.
+   */
+  windows?: boolean
   files: {
     read(path: string): Promise<string>
     list(path: string): Promise<{ name: string; kind: string }[]>
@@ -127,14 +132,15 @@ export function codexArgs(root: string, prompt: string, config: Pick<ExecutorCon
   ]
 }
 
-export function claudeArgs(_root: string, prompt: string, opts: DispatchOptions, sessionId?: string, launchName?: string): string[] {
+/** The prompt goes last, or on standard input (`onStdin`, see ExecutorDeps.windows), which `claude --bg` reads when it has no prompt argument. */
+export function claudeArgs(_root: string, prompt: string, opts: DispatchOptions, sessionId?: string, launchName?: string, onStdin = false): string[] {
   return [
     'claude', '--bg',
     ...(launchName ? ['--name', launchName] : []),
     ...(sessionId ? ['--resume', sessionId] : []),
     ...(opts.model ? ['--model', opts.model] : []),
     ...(opts.effort ? ['--effort', opts.effort] : []),
-    prompt,
+    ...(onStdin ? [] : [prompt]),
   ]
 }
 
@@ -548,7 +554,7 @@ function createClaude(deps: ExecutorDeps, config: ExecutorConfig): Executor {
 
       let result: RunResult
       try {
-        result = await deps.run(claudeArgs(rootName, prompt, opts, launch.sessionId, launch.launchName), { cwd: rootName, timeoutMs: 60_000 })
+        result = await deps.run(claudeArgs(rootName, prompt, opts, launch.sessionId, launch.launchName, !!deps.windows), { cwd: rootName, timeoutMs: 60_000, ...(deps.windows ? { stdin: prompt } : {}) })
       } catch (error) {
         await markUnknown(deps, path, key, launch.pendingId)
         throw error

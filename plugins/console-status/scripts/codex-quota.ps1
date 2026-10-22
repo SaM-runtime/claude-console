@@ -8,6 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {}
 
 if ([string]::IsNullOrWhiteSpace($SessionsRoot)) {
     $SessionsRoot = Join-Path $env:USERPROFILE '.codex\sessions'

@@ -3,6 +3,7 @@
  * for the project card and for the context a prompt about that project carries.
  * Pure parts first; `loadDigest` is the one that touches files, through the `DigestIo` it is given.
  */
+import { PS_UTF8 } from './platform'
 import { jobKindText, phaseText } from './wording'
 
 /** How much of a transcript's end is parsed. */
@@ -139,7 +140,7 @@ export function tailArgs(path: string, windows: boolean, bytes = TAIL_CHARS): st
   if (!windows) return ['tail', '-c', String(bytes), path]
   const quoted = path.replace(/'/g, "''")
   return ['powershell', '-NoProfile', '-NonInteractive', '-Command',
-    `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $f=[IO.File]::Open('${quoted}','Open','Read','ReadWrite'); try { $n=[Math]::Min($f.Length,${bytes}); [void]$f.Seek(-$n,'End'); $b=New-Object byte[] $n; [void]$f.Read($b,0,$n); [Console]::Out.Write([Text.Encoding]::UTF8.GetString($b)) } finally { $f.Close() }`]
+    `${PS_UTF8}$f=[IO.File]::Open('${quoted}','Open','Read','ReadWrite'); try { $n=[Math]::Min($f.Length,${bytes}); [void]$f.Seek(-$n,'End'); $b=New-Object byte[] $n; [void]$f.Read($b,0,$n); [Console]::Out.Write([Text.Encoding]::UTF8.GetString($b)) } finally { $f.Close() }`]
 }
 
 async function readJson(io: DigestIo, path: string): Promise<any> {

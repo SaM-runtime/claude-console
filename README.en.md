@@ -209,6 +209,8 @@ This is the default. It uses native Claude Code background agents and does not r
 
 The mod keeps a project-to-session mapping and the latest 20 managed job records per project in `claudeSessionsPath`. A first task starts in native background mode with the project as its working directory; later tasks resume the mapped full session ID. Local help from Claude Code 2.1.289 documents `--bg`, `--resume`, and `--continue`. The mod uses `--bg` with a unique `--name`, confirms the returned short ID through the agents list, and uses the saved full session ID for resume. It does not use `--continue --bg`, because that combination selects the most recent session for the working directory instead of the explicitly managed session.
 
+On Windows `claude` is often npm's `claude.cmd`, which runs through cmd.exe: an argument there ends at its first line break and splits at `&`, so a multi-line dispatch prompt arrived as its first line. On Windows the prompt therefore goes to `claude --bg` on standard input (since 0.32.1; a native `claude.exe` gets it the same way); macOS and Linux still pass it as the last argument.
+
 `claude agents --json --all --cwd <project-root>` supplies active and completed agents. The mod accepts only background agents whose `cwd` exactly matches the project, uses their short `id`, full `sessionId`, `name`, `state`, `status`, and `waitingFor`, and reads output with `claude logs <id>`. A launch must resolve by its unique name to exactly one full session UUID (the existing UUID when resuming) before the mapping is saved; an ambiguous launch stays unresolved and blocks another dispatch. A later refresh can recover a uniquely named launch. Blocked or waiting agents remain running, and an absent agent does not imply completion. The local sample showed `working` and `blocked` states with `busy`, `idle`, and `waiting` statuses; the documented terminal states `done`, `failed`, and `stopped` end the managed job.
 
 The sessions file is mod-owned state. Malformed content fails closed instead of discarding the saved session identity. Writes are serialized inside one mod process, so keep one console process as its writer; simultaneous writes from separate processes are not guaranteed atomic. Claude dispatch adds no permission-bypass flag and inherits the normal Claude Code permission flow. A background agent that finished its turn on a question is answered from the console with `↩ 回覆執行者` (see [Project actions](#project-actions)); one that waits on a permission prompt is opened with `↗ 接手對話` to handle the approval.
@@ -483,7 +485,7 @@ Since 0.31.0 the while-away summary follows [afkswitch](https://github.com/augba
 
 ## Limitations
 
-- Bundled probes: PowerShell scripts on Windows, `sh` scripts on macOS and Linux (Linux is covered by tests and a simulated stale broker, not daily use). There a broker is reported STALE when its `codex app-server` started before the installed Codex CLI was last upgraded.
+- Bundled probes: PowerShell scripts on Windows, `sh` scripts on macOS and Linux (Linux is covered by tests and a simulated stale broker, not daily use). CI runs them for real on Windows and Ubuntu against a made-up Codex folder (`scripts/check-commands.mjs`); the Windows STALE path needs the Codex desktop app, which CI does not have. There a broker is reported STALE when its `codex app-server` started before the installed Codex CLI was last upgraded.
 - On macOS, `open STATUS.md` falls back to `open` when the `code` CLI is unavailable.
 - The UI is currently Traditional Chinese.
 - Project matching depends on the configured registry and STATUS contract.
@@ -500,7 +502,7 @@ One line per version, newest first; see [CHANGELOG.md](CHANGELOG.md) or [GitHub 
 
 | Version | Highlights |
 | --- | --- |
-| 0.32 | The command guard catches more: code run straight from a download, emptied databases, cloud deletes, the Windows registry and restore points, git's safety nets, more ways to publish; `git clean -fd build` no longer asks; the README says what the guard cannot see |
+| 0.32 | The command guard catches more: code run straight from a download, emptied databases, cloud deletes, the Windows registry and restore points, git's safety nets, more ways to publish; `git clean -fd build` no longer asks; the README says what the guard cannot see; 0.32.1 fixes Windows: npm's `claude.cmd` cut a multi-line dispatch prompt to its first line, so the prompt now goes on standard input; PowerShell prints UTF-8, so Chinese in verification output is no longer garbled; CI runs these commands on Windows for real |
 | 0.31 | Many projects stay manageable: `⊟ 封存` the ones you are not working on, `▴ 置頂` the ones you care about; back after a while away, the console first sums up what happened (`awayMinutes`); the CARD lines a selection carries are marked as reference data |
 | 0.30 | `n` jumps to each thing waiting on you and `/console inbox` lists them; `/console add` adds a project in one command; projects left alone for days read `久未動` and are offered first (`staleDays`); 0.30.1 points a first run without a registry to `/console add`, leads the `/console` menu line with the common commands, and opens the README with a four-step quick start |
 | 0.29 | With a `驗證` on the CARD, `⟳ 自動接力` runs it between hops and stops on a failure; quota numbers more than 45 minutes old stop a cycle instead of braking on them; the usage table says how old Claude's windows are |
@@ -551,7 +553,10 @@ claude plugin validate .
 claude plugin validate plugins/console-status
 claude plugin test plugins/console-status
 node scripts/check-docs.mjs
+node scripts/check-commands.mjs
 ```
+
+`check-commands.mjs` builds each outside command with the mod's own code and runs it on this machine through Claude Code's own process runner: the Codex probe scripts (PowerShell on Windows), a `驗證` command, the transcript tails, and one Claude dispatch whose prompt must reach the background session whole. It uses a throwaway home and an API address nothing listens on, so no request leaves the machine.
 
 ## Star History
 
