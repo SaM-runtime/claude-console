@@ -139,7 +139,7 @@ function harness(on: any, sessionId = 'console-session') {
   const state = { jobs: [] as any[] }
   const launches: string[][] = []
   const toasts: string[] = []
-  const data = { session: sessionId, claudeAgents: 0 }
+  const data = { session: sessionId, claudeAgents: 0, afterWrite: undefined as ((path: string) => void) | undefined }
   on('fs.stat', (_: any, e: any) => {
     const path = fixturePath(e.path)
     if (!(path in files)) throw Object.assign(new Error(`ENOENT ${path}`), { code: 'ENOENT' })
@@ -152,7 +152,7 @@ function harness(on: any, sessionId = 'console-session') {
     if (!(path in files) && path === LEASE) throw Object.assign(new Error(`ENOENT ${path}`), { code: 'ENOENT' })
     return { value: files[path] ?? '' }
   })
-  on('fs.write', (_: any, e: any) => { files[fixturePath(e.path)] = e.text; return { value: undefined } })
+  on('fs.write', (_: any, e: any) => { files[fixturePath(e.path)] = e.text; data.afterWrite?.(fixturePath(e.path)); return { value: undefined } })
   on('fs.list', (_: any, e: any) => ({ value: fixturePath(e.path) === 'D:/State' ? [{ name: 'Project Alpha-hash', kind: 'dir' }] : [] }))
   on('process.run', (_: any, e: any) => {
     let stdout = e.argv[0] === 'claude' ? '[]' : 'OK codex=0.0.0-test'
@@ -221,4 +221,23 @@ test('any console dispatches; a project another live console dispatched moments 
   const left = JSON.parse(h.files[LEASE]!)
   expect(left.consoles['console-session']).toBeUndefined()
   expect(left.projects[STATUS_KEY]).toBeUndefined()
+})
+
+test('a lease another console rewrote at the same moment is read back and written again, so neither claim is lost', { options: BASE }, async ($, on) => {
+  const h = harness(on)
+  const STATUS_KEY = 'D:/Project Alpha/.console/STATUS.md'
+  // Another console's own write lands between this console's claim and its read-back, once.
+  let raced = false
+  h.data.afterWrite = path => {
+    if (path !== LEASE || raced || !JSON.parse(h.files[LEASE]!).projects?.[STATUS_KEY]) return
+    raced = true
+    h.files[LEASE] = JSON.stringify({ consoles: { 'other-console-1234': NOW - 5_000 }, projects: { 'D:/Beta/STATUS.md': { sessionId: 'other-console-1234', at: NOW - 5_000 } } })
+  }
+  await $.command.run({ command: 'console', args: 'continue Project Alpha' } as any)
+  expect(raced).toBe(true)
+  expect(h.launches.length).toBe(1)
+  const lease = JSON.parse(h.files[LEASE]!)
+  expect(Object.keys(lease.consoles).sort()).toEqual(['console-session', 'other-console-1234'])
+  expect(lease.projects['D:/Beta/STATUS.md'].sessionId).toBe('other-console-1234')
+  expect(lease.projects[STATUS_KEY].sessionId).toBe('console-session')
 })

@@ -35,3 +35,27 @@ jobs:
         run: claude plugin test plugins/console-status
       - name: Check docs
         run: node scripts/check-docs.mjs
+
+  latest:
+    # The CLI on a person's machine updates itself; this run shows a hooks API change before it reaches them.
+    # Not a required check: a red run here warns, it does not block a merge.
+    name: latest Claude Code (${{ matrix.os }})
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the latest Claude Code
+        run: npm install -g @anthropic-ai/claude-code@latest
+      - name: Show version
+        run: claude --version
+      - name: Validate plugin
+        run: claude plugin validate plugins/console-status
+      - name: Test plugin
+        run: claude plugin test plugins/console-status

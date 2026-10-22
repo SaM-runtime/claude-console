@@ -1,6 +1,6 @@
 {
   "name": "console-status",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "description": "Claude Console：跨專案 STATUS、Claude/Codex 派工、工作階段與用量總覽（含手機 Remote Control）",
   "types": "./types/index.d.ts",
   "author": {
@@ -140,6 +140,12 @@
       "title": "Auto-cycle quota brake",
       "description": "A cycle of ⟳ 自動接力 stops before its next hop once a Claude 5-hour window is used this much (percent, 1–100, default 70), or when any window at its pace runs out within the hour. off: no quota brake (cycleMaxHops still applies).",
       "default": "70"
+    },
+    "confirmContinue": {
+      "type": "string",
+      "title": "Confirm a continue",
+      "description": "on: ⇢ 繼續下一步 and ↻ 重試 dispatch only on a second press within six seconds. off: one press dispatches.",
+      "default": "on"
     },
     "suggestNext": {
       "type": "string",

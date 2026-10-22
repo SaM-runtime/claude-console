@@ -67,6 +67,11 @@ export function activationMode(value: unknown): Activation {
 }
 
 /** `suggestNext` option: `on` (default) offers the way on as the prompt box's Tab suggestion, `off` leaves the box to Claude Code. */
+/** `confirmContinue`: `off` lets one press of ⇢ 繼續下一步 or ↻ 重試 dispatch; anything else keeps the second press. */
+export function confirmContinueMode(value: unknown): 'on' | 'off' {
+  return String(value ?? '').trim().toLowerCase() === 'off' ? 'off' : 'on'
+}
+
 export function suggestNextMode(value: unknown): 'on' | 'off' {
   return String(value ?? '').trim().toLowerCase() === 'off' ? 'off' : 'on'
 }
