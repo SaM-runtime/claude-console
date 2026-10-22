@@ -319,7 +319,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 `gitProbe` 設為 `git` 可略過 GitHub，設為 `off` 兩者都略過。專案根目錄不是 Git repo 時不顯示任何 Git 資訊。
 
-驗證會保存每個專案最新時間、exit status 與最後三行輸出。`驗證` 只能放可信任的本機檢查；它會透過 shell 執行，不得包含部署或正式環境操作。CARD 由背景執行者寫入，因此面板會顯示完整指令；此專案未執行過的指令（新的或已被修改）須在 10 秒內再按一次才會執行，已確認的指令會依專案記住、跨 session 保留。
+驗證會保存每個專案最新時間、exit status 與最後三行輸出。`驗證` 只能放可信任的本機檢查；它會透過 shell 執行，不得包含部署或正式環境操作。CARD 由背景執行者寫入，因此面板會顯示完整指令；此專案未執行過的指令（新的或已被修改）須在 10 秒內再按一次才會執行，已確認的指令會依專案記住、跨 session 保留。確認的是指令這一行字：`npm test` 確認過之後，即使 `package.json` 裡的 test 腳本被改掉，也不會再問，所以 `驗證` 最好直接寫出要跑的檢查。
 
 派工後會先樂觀顯示 RUNNING，直到受管理狀態刷新。受理不代表完成。GATE 為紫色，排序在 ACTION 之後、RUNNING 之前，直到對應 Claude 審核回合結束才解除。`prompt.fill` 在沒有 composer 或對話框佔用時可能拒絕；面板會回報失敗，不會代送決策。Remote Control composer 仍需實機驗收。
 
@@ -428,6 +428,10 @@ Bash 或 PowerShell 要執行無法復原的指令時，會先用 Claude Code �
 
 涵蓋：遞迴刪除（`rm -r`、`Remove-Item -Recurse`、`rd /s`，但 `node_modules`、`dist`、`build`、`.next`、`target`、`coverage`、`__pycache__` 等建置輸出與快取除外）、強制或鏡像推送與刪除遠端分支、`git reset --hard`、`git clean -f`、丟棄整個工作區變更、`git branch -D`、`git stash drop|clear`、改寫歷史、`DROP TABLE`／`TRUNCATE TABLE`、格式化磁碟與直接寫裝置、`terraform destroy`、大量 `kubectl delete`、`helm uninstall`、`docker system prune -a`、`gh repo|release delete`，以及發布（`npm|pnpm|yarn|cargo publish`、`gh release create`）。也會檢查 `bash -c`、`powershell -Command`、`cmd /c`、`eval`、`Invoke-Expression`／`iex` 裡的指令，看穿包裝指令與其選項（`sudo -u root`、`env`、`nice -n 10`、`timeout 60`、`xargs -0`），把經 `xargs` 執行的遞迴 `rm` 視為刪除管線傳入的所有項目，把 `-Recurse:$true` 視同 `-Recurse`，並攔下 `+分支` 強制推送、`push --prune`、`checkout -f`／`switch -f`、`find -delete` 與 `find -exec rm -r`。`--force-with-lease`、刪單一檔案、一般推送、試跑（`-n`、`--dry-run`、`-WhatIf`）、刪除暫存目錄裡的東西（`/tmp/…`、`$TMPDIR/…`、`$env:TEMP\…`）、PowerShell 對單一檔案的 `rm -Force`，以及只是搜尋或記錄文字的指令中出現的 SQL 字樣（`git commit -m "drop table…"`、`grep`）不會被攔。
 
+0.32.0 起還涵蓋：PowerShell 的 `del`、`erase`、`rd`、`rmdir` 加 `-Recurse`、cmd 的 `erase /s`、從管線傳進去的刪除（`Get-ChildItem -Recurse | Remove-Item`）、`docker system prune -af`；git 的後悔藥（`git reflog expire --expire=now`、`git gc --prune=now`、`git prune`）與 `git worktree remove --force`；Windows 的登錄檔刪除（`reg delete`、對 `HKCU:\`、`HKLM:\` 的 `Remove-Item`）、系統還原點（`vssadmin delete shadows`）、`cipher /w`、`diskpart`、`bcdedit`、`robocopy /MIR` 與 `/PURGE`、對磁碟根目錄或系統資料夾的 `icacls /t`、`takeown /r`；下載後直接執行（`curl … | sh`、`irm … | iex`、`bash <(curl …)`、`iex (irm …)`）；清空資料庫（沒寫 TABLE 的 `TRUNCATE`、沒有 WHERE 的 `DELETE FROM`、`redis-cli FLUSHALL`、MongoDB 的 `dropDatabase()`、`dropdb`、`prisma migrate reset`、`rails db:drop`、`artisan migrate:fresh`、`manage.py flush`）；Docker 資料卷（`docker volume rm`、`docker compose down -v`）；雲端刪除（`tofu destroy`、`pulumi destroy`、`aws s3 rm --recursive`、`gcloud … delete`、`az … delete`）；更多發布（`yarn npm publish`、`twine upload`、`gem push`、`dotnet nuget push`、`vsce publish` 等）；GitHub 的 `gh repo edit --visibility public`、`gh api -X DELETE`、`gh repo archive`、`gh secret delete`；刪除 `~/.ssh`、`~/.aws`、`~/.gnupg`、`/etc` 底下的檔案，以及 `crontab -r`。反過來，只清建置輸出的 `git clean -fd build` 改成不問。
+
+**護欄管不到的地方。** 護欄只看 Claude Code 的 Bash 與 PowerShell 工具要執行的那一行指令。Codex 執行者的指令由 Codex 自己執行，不經過這個護欄；`node -e`、`python -c`、專案腳本（`npm run clean`、`make clean`）裡面做的刪除，指令上看不出來，也攔不到。它是防手滑的提醒，不能取代備份、git 與權限設定。
+
 只要啟用此外掛，每個 session 都有護欄，背景執行者也包含在內：背景 agent 碰到時會像其他提問一樣等待回答（attach 進去處理），沒有人可問的情況則直接拒絕。`commandGuard` 設為 `deny` 不詢問直接拒絕，設為 `off` 關閉。
 
 ## 重複失敗護欄
@@ -495,6 +499,7 @@ claude plugin install paste-preview@paste-preview
 
 | 版本 | 重點 |
 | --- | --- |
+| 0.32 | 指令護欄多攔：下載後直接執行、清空資料庫、雲端刪除、Windows 登錄檔與系統還原點、git 的後悔藥、更多發布方式；`git clean -fd build` 不再問；README 寫清楚護欄管不到的地方 |
 | 0.31 | 專案多了也好管：`⊟ 封存` 不常碰的專案、`▴ 置頂` 常用的專案；離開一陣子回來，先列出這段時間發生的事（`awayMinutes`）；選取專案時附上的狀態卡內容標成參考資料 |
 | 0.30 | 按 `n` 依序跳到每一件在等你的事，`/console inbox` 用文字列出；`/console add` 一個指令加入新專案；好幾天沒動的專案標出「久未動」並優先建議繼續（`staleDays`）；0.30.1 還沒有登錄表時直接告訴你用 `/console add`，`/console` 指令說明先列常用的，README 改成四步快速開始 |
 | 0.29 | 自動接力在狀態卡有 `驗證` 時，每跳之間先跑驗證，沒過就停；額度數字太久沒更新（超過 45 分鐘）時自動接力停下，不再拿舊數字當煞車；用量表標出額度是多久前讀到的 |

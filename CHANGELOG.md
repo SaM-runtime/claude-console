@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.32.0
+
+- **The command guard catches more of what cannot be taken back.** Each new kind says in plain words what it does, as 0.25.0's do:
+  - the same deletes written another way: PowerShell's `del`, `erase`, `rd` and `rmdir` with `-Recurse` (all aliases of Remove-Item), cmd's `erase /s`, a delete fed by a pipe (`Get-ChildItem -Recurse | Remove-Item`, `ls | rm -r`, and anything a `find` lists piped to `xargs rm`), and `docker system prune -af`;
+  - git's safety nets: `git reflog expire --expire=now`, `git gc --prune=now`, `git prune`, and `git worktree remove --force`;
+  - Windows: `reg delete` and `Remove-Item` or `Remove-ItemProperty` on the registry, `vssadmin delete shadows` and `wmic shadowcopy delete`, `cipher /w`, `diskpart`, `Remove-Partition`, `bcdedit` changes, `robocopy /MIR` or `/PURGE` (not into build output), and `icacls /t` or `takeown /r` from a drive root, the Windows, Users or Program Files folders or a home folder;
+  - code run straight from a download: `curl … | sh`, `wget … | bash`, `irm … | iex`, `bash <(curl …)`, `sh -c "$(curl …)"`, `iex (irm …)`, `DownloadString` into `iex`, and a download piped to `python -` or a bare `node` (piping JSON to `python -c` or `jq` still passes);
+  - databases: `TRUNCATE` without TABLE, `DELETE FROM` without WHERE, `redis-cli FLUSHALL` / `FLUSHDB`, MongoDB's `dropDatabase()` and `.drop()`, `dropdb`, `mysqladmin drop`, `prisma migrate reset`, `prisma db push --force-reset`, `rails db:drop` / `db:reset`, `artisan migrate:fresh` and `db:wipe`, `manage.py flush`, also through `npx`, `bundle exec` or `uv run`;
+  - containers and cloud: `docker volume rm` / `prune`, `docker compose down -v`, `tofu destroy`, `terraform apply -destroy`, `pulumi destroy`, `aws s3 rm --recursive`, `aws s3 rb --force`, `gsutil rm -r`, `gcloud … delete`, `az … delete`;
+  - publishing: `yarn npm publish`, `twine upload`, `gem push`, `dotnet nuget push`, `vsce` / `ovsx publish`, and `publish` from poetry, flit, hatch, uv, bun, deno and jsr;
+  - GitHub beyond `gh repo delete`: `gh repo edit --visibility public`, `gh api -X DELETE`, `gh repo archive`, `gh secret delete`;
+  - keys and settings: deleting even one file under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.azure`, `~/.config/gcloud` or `/etc`, and `crontab -r`.
+- **`git clean -fd build` no longer asks.** Cleaning only build output and caches passes, as `rm -rf build` does.
+- **The README says what the guard cannot see:** a Codex executor's commands, and deletes inside `node -e`, `python -c` or a project script. It also says that an approved `驗證` command is trusted as written: a changed `test` script behind `npm test` does not ask again.
+
 ## 0.31.0
 
 - **⊟ 封存: archive a project you are not working on.** With many projects, finished or paused ones crowded the table and still cost a STATUS read, `git status` and `gh` on every refresh. `⊟ 封存` on the action menu's new 清單 line (or `/console archive <project>`) moves the row from the registry's `## STATUS 卡位置` table to a `## 已封存` section in the same file, made at the end with the same header the first time, so the registry still says where the project is and the row can be moved back by hand. An archived project is never probed; the pane keeps one quiet line at the bottom, `⊟ 已封存 2：api・docs`, whose `▸ 取回` lists them with `↺ 取回` each, and `/console unarchive [project]` does the same from the keyboard (with no name it lists them). A project whose work runs is not archived, and this console's `⟳ 自動接力` on it stops. `/console add` on an archived folder brings it back instead of registering it twice, and a new project never takes an archived name. The workflow skill tells the console to treat an archived project as paused.
