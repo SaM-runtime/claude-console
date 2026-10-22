@@ -1,0 +1,5 @@
+{
+  "name": "dispatch-probe",
+  "version": "0.0.0",
+  "description": "CI only: starts background sessions the way console-status dispatches them, for scripts/check-dispatch.mjs."
+}
