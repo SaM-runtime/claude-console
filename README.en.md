@@ -17,13 +17,14 @@ Run `/console demo` in any Claude Code session to see the whole pane without a r
 
 ## Features
 
-- **Every project in one table.** One row per project: its state (`●` decision needed, `◆` awaiting review, `▶` running, `↻` needs sync, `○` idle), a six-step pipeline (spec → build → sync → verify → review → release), when it was updated, and a Git summary. The next-step card on top names the one thing to handle now, and when nothing waits on you it names a project you can continue instead (`⇢ 沒有在等你，可以繼續`, with its continue button); an idle project with a next step shows `⇢ <next step>` in its row, apart from projects with nothing to do; with the pane closed, the band above the prompt still counts each state. See [Project actions](#project-actions) and [Pipeline and project mode](#pipeline-and-project-mode).
+- **Every project in one table.** One row per project: its state (`●` decision needed, `◆` awaiting review, `▶` running, `↻` needs sync, `○` idle), a six-step pipeline (spec → build → sync → verify → review → release), when it was updated, and a Git summary. The next-step card on top names the one thing to handle now, and when nothing waits on you it names a project you can continue instead (`⇢ 沒有在等你，可以繼續`, with its continue button); an idle project with a next step shows `⇢ <next step>` in its row, apart from projects with nothing to do; a project with something left to do and no CARD change for days gets an amber age and `久未動`, and is offered first (`staleDays`). `n` jumps to each thing waiting on you in turn (decisions, gates, syncs, failed CI, failed verifications) and opens its action menu; `/console inbox` lists the same as text. With the pane closed, the band above the prompt still counts each state. See [Project actions](#project-actions) and [Pipeline and project mode](#pipeline-and-project-mode).
 - **Decisions are pressed, not typed.** Every option in a card can be pressed; with the action menu open, number keys answer the decisions in order (`2` then `1` reads `1B 2-1`) and Backspace takes the last pick back. `✎ 填入決策` or `✎ 做決定` puts the answer in the prompt; Enter sends it.
 - **One-button actions.** Verify, sync STATUS, continue to the next step, review a gate, open STATUS.md: right-click or `m` opens the action menu, and every action has a single-key shortcut. When an executor finished without writing the CARD back, the console dispatches one sync by itself (`autoSync`) and shows its progress step by step. An executor that stopped to ask you is answered from the console (`↩ 回覆執行者`); one an error stopped (a lapsed login, a used-up quota) says why and offers `↻ 重試`; a stuck job is stopped with `■ 停止工作` (`x`), and `↗ 接手對話` (`t`) opens its session for a permission prompt; and the way on waits in the prompt box as a dim suggestion: Tab, then Enter (`suggestNext`). `⟳ 自動接力` (`a`) keeps pressing for you: continue, sync, hand a gate to the console, at most one hop per refresh, running the CARD's `驗證` between hops when it has one, and stops at a decision, an executor's question, a release gate, a failure, a failed verification, the hop limit or the quota brake.
 - **Your choice of executor.** Claude Code background agents by default; Codex for everything or per project, with a fallback to Claude when Codex is unusable or low on quota. A prompt sent with a project selected carries an executor digest (what it was last doing, its last three tool calls, its last words), and the project card's 執行者 section shows the same. See [Dispatch settings](#dispatch-settings).
 - **Git, PR and CI without switching windows.** Branch and ahead/behind, uncommitted line counts, stash, recent commits, a warning when the last fetch is old; `▸ 檔案` opens the files grouped like `git status`, `▸ 分支圖` a coloured branch and merge graph; the PR's review state and failing CI checks, with the band turning red on a CI failure. See [Git, PR and CI](#git-pr-and-ci).
 - **Usage and cache.** Claude's 5-hour, weekly and per-model limits and Codex's quota share one 用量 table, with an estimate of when the current pace runs out; the prompt cache's countdown, the cost of re-writing it once cold, and the last hit rate. See [Usage pace](#usage-pace) and [Prompt cache and cost](#prompt-cache-and-cost).
 - **Guards.** Commands that cannot be taken back (`rm -r`, force pushes, `git reset --hard`, `DROP TABLE` and more) ask first; a tool call that failed twice with the same error is not tried a third time. See [Command guard](#command-guard) and [Loop guard](#loop-guard).
+- **One command adds a project.** `/console add` in a project's folder writes the registry row (making the registry if needed), puts `.console/STATUS.md` in place and adds `.console/` to `.git/info/exclude`, so no table is typed by hand. See [Adding a project](#adding-a-project).
 - **Only where you want it.** By default only a session where you ran `/console` runs the console (and again when it resumes); other sessions get the guards only, and a session inside a registered project switches to project mode. See [Light sessions](#light-sessions).
 - **Updates from the pane.** The footer shows the installed version; when a new one is out, press `⬆ 更新` or run `/console update`. See [Upgrade](#upgrade).
 
@@ -109,11 +110,22 @@ Marketplace management is covered by the official [plugin marketplace documentat
 | `cycleMaxHops` | Hops one press of `⟳ 自動接力` may dispatch (continue, sync, or a gate sent to the console), 1–20; blank or not a number is the default. At the limit the project is handed back to you | `6` |
 | `cycleQuotaStop` | Auto-cycle quota brake: once a Claude 5-hour window is used this much (percent, 1–100), or any window at its pace runs out within the hour, the cycle stops before its next hop and ⟳ is refused; so it does when the numbers are more than 45 minutes old (the console has not answered since); `off` turns the brake off (the hop limit still applies). Codex's own quota keeps `codexMinQuotaPercent` | `70` |
 | `confirmContinue` | `on`: `⇢ 繼續下一步` and `↻ 重試` dispatch only on a second press within six seconds (against a stray click); `off`: one press dispatches. `⟳ 自動接力` never needs the second press | `on` |
+| `staleDays` | A project with something still to do (a decision, a gate, a sync or a next step) whose CARD has not changed for this many days (1–60) reads `久未動`: its age turns amber, and the next-step card and Tab suggestion offer it to continue first; `off` turns it off | `3` |
 | `suggestNext` | `on`: the way on (a decision, a reply to an executor that asked, a gate, a sync, a continue) waits in the prompt box as a dim suggestion, Tab to take (see [Tab for the next step](#tab-for-the-next-step)); `off`: leave the box to Claude Code's own suggestions | `on` |
 | `activation` | `auto`: only a session where you ran `/console` runs the console, and it starts again when that session resumes; other sessions get the command guard only (see [Light sessions](#light-sessions)). `always`: every interactive session, except the executor sessions the console dispatched; non-interactive sessions still get the guard only | `auto` |
 | `projectMode` | `auto`: a session opened inside a registered project switches to project mode (see [Pipeline and project mode](#pipeline-and-project-mode)); `off`: always the multi-project console | `auto` |
 
 Paths beginning with `~` expand on Windows, macOS, and Linux. Run `/reload-plugins` or start another Claude Code session after plugin configuration changes. See [the registry example](workflow/projects-scope.example.md).
+
+### Adding a project
+
+Open Claude Code in the project's folder and run `/console add` (or `/console add <folder>` from the console):
+
+- the folder is added to the registry at `registryPath`, named after the folder (numbered when the name is taken; edit the table to rename it); a missing registry is created;
+- a folder without `.console/STATUS.md` gets one from the [STATUS template](workflow/STATUS-template.md), its CARD saying it was just added; an existing one is kept;
+- in a git repository, `.console/` is added to `.git/info/exclude` so the STATUS file is not committed (delete that line to version it).
+
+That session does not become a console; an open console refreshes and shows the new project at once. Write the first task in the CARD's `下一步` and `⇢ 繼續下一步` dispatches it. Adding a folder from elsewhere: Claude Code must have been opened there once and trusted before background work can run in it.
 
 ## Dispatch settings
 
@@ -247,7 +259,7 @@ Set `關卡` to `無`, `spec：…`, `review：…`, or `release：…`. Unknown
 
 ## Project actions
 
-The right-click menu (or `m` on the keyboard for the row under the cursor; Esc closes it) and expanded project cards expose the same actions. With the menu open, digit keys answer the pending decisions in order (`2` then `1` reads `1B 2-1`) and Backspace takes the last pick back; 做決定 and `d` fill the composer with the picks made so far. The menu shows the project's state and pipeline, what is running with its elapsed time and latest output line, and the CARD's decision, gate and next step. A dispatch that is blocked by running work is stated as `派工鎖定：…` instead of a disabled button. Mobile uses card Buttons. Every trigger shows an immediate toast, shows elapsed seconds and rejects duplicate activation while running, then writes its result to the activity feed.
+The right-click menu (or `m` on the keyboard for the row under the cursor; Esc closes it) and expanded project cards expose the same actions. `n` jumps to the next thing waiting on you and opens its menu (most urgent first: decisions, gates, syncs, failed CI, failed verifications; after the last it starts over). With the menu open, digit keys answer the pending decisions in order (`2` then `1` reads `1B 2-1`) and Backspace takes the last pick back; 做決定 and `d` fill the composer with the picks made so far. The menu shows the project's state and pipeline, what is running with its elapsed time and latest output line, and the CARD's decision, gate and next step. A dispatch that is blocked by running work is stated as `派工鎖定：…` instead of a disabled button. Mobile uses card Buttons. Every trigger shows an immediate toast, shows elapsed seconds and rejects duplicate activation while running, then writes its result to the activity feed.
 
 | Action | Availability | Behavior |
 | --- | --- | --- |
@@ -303,6 +315,8 @@ A dispatch shows RUNNING optimistically until managed state is refreshed. Accept
 | --- | --- |
 | `/console` | Open or close the panel |
 | `/console refresh` | Refresh files and slow probes |
+| `/console add [folder]` | Add a folder (by default this session's own) to the registry with a STATUS file (see [Adding a project](#adding-a-project)) |
+| `/console inbox` | List what waits on you as text (in `n`'s order), other sessions waiting on you, and projects left alone |
 | `/console reply <project> <answer>` | Answer the executor that stopped to ask, in its own session |
 | `/console cycle <project> [off]` | Start or stop that project's auto-cycle (the menu's ⟳) |
 | `/console sync\|continue\|gate\|verify <project>` | Run that project action; sending `continue` is its confirmation, `verify` of a new command still asks to run it again |
@@ -450,6 +464,7 @@ One line per version, newest first; see [CHANGELOG.md](CHANGELOG.md) or [GitHub 
 
 | Version | Highlights |
 | --- | --- |
+| 0.30 | `n` jumps to each thing waiting on you and `/console inbox` lists them; `/console add` adds a project in one command; projects left alone for days read `久未動` and are offered first (`staleDays`) |
 | 0.29 | With a `驗證` on the CARD, `⟳ 自動接力` runs it between hops and stops on a failure; quota numbers more than 45 minutes old stop a cycle instead of braking on them; the usage table says how old Claude's windows are |
 | 0.28 | `confirmContinue: off` makes continue and retry one press; a Codex project's digest has its last words; the cache countdown in Chinese units (`快取 4分`); a claim another console overwrote is no longer lost; CI also runs the latest Claude Code |
 | 0.27 | An executor an error stopped (a lapsed login, a used-up quota) is no longer "waiting for you": the row says why and offers `↻ 重試`; new `■ 停止工作` (`x`) and `↗ 接手對話` (`t`, a new Windows Terminal tab) |

@@ -105,6 +105,8 @@ Write one decision per `；` segment and its choices inline as `<question>：A) 
 
 ## Add a project
 
+`/console add` in the project's folder (or `/console add <folder>`) does steps 1 and 3: it writes `.console/STATUS.md` from the template unless one exists, excludes `.console/` in `.git/info/exclude`, and adds the registry row. Then fill in scope and the first CARD. By hand:
+
 1. Copy [the STATUS template](../STATUS-template.md) to the project (for git projects, `.console/STATUS.md`, optionally excluded via `.git/info/exclude`).
 2. Fill in scope and the first CARD.
 3. Add a row under `## STATUS 卡位置` in the registry ([example](../projects-scope.example.md)); set `Executor` if the project should not use the global one.

@@ -648,6 +648,45 @@ export function next(s: Snapshot): string | null {
   return null
 }
 
+export type InboxItem = { project: string; kind: 'action' | 'gate' | 'sync' | 'ci' | 'verify'; text: string }
+
+/**
+ * Everything that waits on the person, one item per project, most urgent first: the rows a decision, a gate or
+ * a sync holds (in the table's order), then an open PR whose checks fail, then a verification that failed.
+ * `n` in the pane walks it and /console inbox lists it.
+ */
+export function inbox(s: Snapshot, failedVerify: (p: Project) => boolean = () => false): InboxItem[] {
+  if (s.error) return []
+  const kinds: Partial<Record<State, InboxItem['kind']>> = { ACTION: 'action', GATE: 'gate', SYNC: 'sync' }
+  const out: InboxItem[] = rows(s).flatMap(r => kinds[r.state] ? [{ project: r.full, kind: kinds[r.state]!, text: r.item }] : [])
+  const listed = () => new Set(out.map(item => item.project))
+  for (const p of s.projects) {
+    const ci = p.pr && p.pr.state === 'OPEN' ? p.pr.checks : null
+    if (ci?.fail && !listed().has(p.name)) out.push({ project: p.name, kind: 'ci', text: `PR #${p.pr!.number} 的 CI 失敗${ci.failing.length ? `：${ci.failing.slice(0, 2).join('、')}` : ''}` })
+  }
+  for (const p of s.projects) if (!listed().has(p.name) && failedVerify(p)) out.push({ project: p.name, kind: 'verify', text: '驗證沒過' })
+  return out
+}
+
+/** The inbox item after the project `current`, from the top again past the last; the first when `current` holds none. */
+export function nextInbox(items: InboxItem[], current: string | null): InboxItem | undefined {
+  if (!items.length) return undefined
+  return items[(items.findIndex(item => item.project === current) + 1) % items.length]
+}
+
+/**
+ * Whole days since a project's CARD was updated, once that is `days` or more and the project still has something
+ * to do (a decision, a gate, a sync or a next step) with no job running. A project with nothing left is never
+ * stale, nor is any project with `days` null (`staleDays: off`); null then.
+ */
+export function staleFor(p: Project, now: number, days: number | null): number | null {
+  if (days === null || !p.hasCard || p.jobs.some(j => j.kind === 'running')) return null
+  const t = cardTime(p.updated)
+  if (t === null || t > now || now - t < days * 86_400_000) return null
+  const open = hasAsk(p) || parseGate(p.gate) !== null || p.jobs.some(j => j.kind === 'newer') || (p.next.trim() !== '' && !saysNone(p.next))
+  return open ? Math.floor((now - t) / 86_400_000) : null
+}
+
 const normPath = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 
 /** Lines of the waiting-sessions list in the pane; the rest is summed up as `…另 N 條`. */

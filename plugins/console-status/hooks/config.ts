@@ -66,12 +66,23 @@ export function activationMode(value: unknown): Activation {
   return String(value ?? '').trim().toLowerCase() === 'always' ? 'always' : 'auto'
 }
 
-/** `suggestNext` option: `on` (default) offers the way on as the prompt box's Tab suggestion, `off` leaves the box to Claude Code. */
 /** `confirmContinue`: `off` lets one press of ⇢ 繼續下一步 or ↻ 重試 dispatch; anything else keeps the second press. */
 export function confirmContinueMode(value: unknown): 'on' | 'off' {
   return String(value ?? '').trim().toLowerCase() === 'off' ? 'off' : 'on'
 }
 
+/**
+ * `staleDays`: days without a CARD update before a project that still has something to do reads 久未動
+ * (1–60, default 3); `off` never marks one.
+ */
+export function staleDaysOption(value: unknown): number | null {
+  const text = String(value ?? '').trim().toLowerCase()
+  if (text === 'off') return null
+  const days = Number(text)
+  return text && Number.isFinite(days) ? Math.max(1, Math.min(60, Math.round(days))) : 3
+}
+
+/** `suggestNext` option: `on` (default) offers the way on as the prompt box's Tab suggestion, `off` leaves the box to Claude Code. */
 export function suggestNextMode(value: unknown): 'on' | 'off' {
   return String(value ?? '').trim().toLowerCase() === 'off' ? 'off' : 'on'
 }
