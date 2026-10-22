@@ -58,10 +58,10 @@ test('readable lines for cards and prompt context', () => {
 })
 
 test('CI transitions: a new failure toasts, a recovery and a merge are feed lines, another PR is not compared', () => {
-  expect(prTransitions('A', pr({ pending: 1 }), pr({ fail: 1, failing: ['x'] }))).toEqual([{ text: 'A　PR #5 CI 失敗：x', tone: 'red', toast: true }])
+  expect(prTransitions('A', pr({ pending: 1 }), pr({ fail: 1, failing: ['x'] }))).toEqual([{ text: 'A　PR #5 CI 失敗：x', tone: 'red', toast: true, kind: 'ci-fail' }])
   expect(prTransitions('A', pr({ fail: 1 }), pr({ fail: 2 }))).toEqual([])
-  expect(prTransitions('A', pr({ fail: 1 }), pr({ pass: 2 }))).toEqual([{ text: 'A　PR #5 CI 全部通過', tone: 'green', toast: false }])
-  expect(prTransitions('A', pr({ pass: 2 }), pr({ pass: 2 }, { state: 'MERGED' }))).toEqual([{ text: 'A　PR #5 已合併', tone: 'green', toast: false }])
+  expect(prTransitions('A', pr({ fail: 1 }), pr({ pass: 2 }))).toEqual([{ text: 'A　PR #5 CI 全部通過', tone: 'green', toast: false, kind: 'ci-pass' }])
+  expect(prTransitions('A', pr({ pass: 2 }), pr({ pass: 2 }, { state: 'MERGED' }))).toEqual([{ text: 'A　PR #5 已合併', tone: 'green', toast: false, kind: 'merged' }])
   expect(prTransitions('A', pr({ pass: 1 }), pr({ fail: 1 }, { number: 6 }))).toEqual([])
   expect(prTransitions('A', undefined, pr({ fail: 1 }))).toEqual([])
 })

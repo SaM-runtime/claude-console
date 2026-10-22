@@ -111,6 +111,10 @@ Write one decision per `；` segment and its choices inline as `<question>：A) 
 2. Fill in scope and the first CARD.
 3. Add a row under `## STATUS 卡位置` in the registry ([example](../projects-scope.example.md)); set `Executor` if the project should not use the global one.
 
+## Archived projects
+
+`/console archive <project>` (or `⊟ 封存` in the panel) moves the project's row from `## STATUS 卡位置` to `## 已封存` in the registry, and the panel stops refreshing it. Treat an archived project as paused: do not dispatch or report on it unless the user brings it back (`/console unarchive <project>`, or the row moved back by hand).
+
 ## Report
 
 - State first, one line per project, at most five bullets, one next step.

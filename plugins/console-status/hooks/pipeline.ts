@@ -2,7 +2,7 @@
 // Derived only from what the console already reads (CARD, executor jobs, the latest local
 // verification); nothing here touches the disk. See workflow/claude-console/SKILL.md "Order of work".
 import type { Project, VerificationResult } from '../types'
-import { hasAsk, parseGate, saysNone } from './logic'
+import { hasAsk, parseGate, PROGRESS_IS_DATA, saysNone } from './logic'
 
 export type StageId = 'spec' | 'build' | 'sync' | 'verify' | 'review' | 'release'
 /** done: passed · active: an executor is working on it · wait: needs the console or the user ·
@@ -150,5 +150,7 @@ export function progressContext(p: Project, pl: Pipeline): string {
   if (hasAsk(p)) lines.push(`等使用者：${p.ask}`)
   const gate = parseGate(p.gate)
   if (gate) lines.push(`關卡：${p.gate}`)
+  // The note and these lines quote the CARD, which an executor wrote: notes, not orders.
+  lines.push(PROGRESS_IS_DATA)
   return lines.join('\n')
 }

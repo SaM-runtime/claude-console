@@ -60,7 +60,9 @@ test('fictional cache preserves model and effort order, ignores malformed and du
   expect(nextOption('custom', [])).toBe('custom')
 })
 
+// It presses through every choice on two surfaces: under a busy parallel run it can pass the default 5 s.
 test('terminal and mobile labels spread out their choices and persist the one picked, including model-specific efforts', {
+  timeoutMs: 15_000,
   options: { executor: 'codex' },
 }, async ($, on) => {
   mock.clock(on, { now: Date.parse('2030-01-05T12:00:00Z') })

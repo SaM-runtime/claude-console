@@ -82,6 +82,17 @@ export function staleDaysOption(value: unknown): number | null {
   return text && Number.isFinite(days) ? Math.max(1, Math.min(60, Math.round(days))) : 3
 }
 
+/**
+ * `awayMinutes`: minutes without using the console after which the next-step card sums up what happened meanwhile
+ * (5–1440, default 30); `off` never does.
+ */
+export function awayMinutesOption(value: unknown): number | null {
+  const text = String(value ?? '').trim().toLowerCase()
+  if (text === 'off') return null
+  const minutes = Number(text)
+  return text && Number.isFinite(minutes) ? Math.max(5, Math.min(1440, Math.round(minutes))) : 30
+}
+
 /** `suggestNext` option: `on` (default) offers the way on as the prompt box's Tab suggestion, `off` leaves the box to Claude Code. */
 export function suggestNextMode(value: unknown): 'on' | 'off' {
   return String(value ?? '').trim().toLowerCase() === 'off' ? 'off' : 'on'
