@@ -30,6 +30,10 @@ test('a digest grows while nobody uses the console, freezes on the return and st
   const look = cameBack({ ...back, log: [line(-3, 'api　STATUS 已更新', 'green', 'status')] }, NOW + 5 * MIN, AWAY)
   expect(look.digest).toBe(back.digest)
   expect(look.log).toEqual([])
+  // What answered the person's own press, seconds after it, is not news on their return.
+  const own = { activeAt: NOW - 60 * MIN, log: [{ at: NOW - 60 * MIN + 2_000, text: 'api：已封存', tone: 'green' as const }], digest: null }
+  expect(awayView(own, NOW, AWAY)).toBeNull()
+  expect(cameBack(own, NOW, AWAY).digest).toBeNull()
   // off: never.
   expect(awayView(away, NOW, null)).toBeNull()
   expect(cameBack(away, NOW, null).digest).toBeNull()

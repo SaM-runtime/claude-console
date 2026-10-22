@@ -7,6 +7,12 @@ export const AWAY_LOG_MAX = 200
 /** Lines the digest lists under its counts; the rest are only counted. */
 export const AWAY_SHOWN = 4
 
+/** Lines this soon after the person used the console answer what they did (`已封存`, `已送出`): they saw them, so not counted. */
+export const SEEN_MS = 10_000
+
+/** The feed lines written while the person was not there: after their last use, past what answered it. */
+const unseen = (state: AwayState) => state.log.filter(event => event.at > state.activeAt + SEEN_MS)
+
 /** When the person last used the console, the feed lines since, and the digest frozen at their last return. */
 export type AwayState = { activeAt: number; log: FeedEvent[]; digest: AwayDigest | null }
 
@@ -15,7 +21,7 @@ export type AwayState = { activeAt: number; log: FeedEvent[]; digest: AwayDigest
  * frozen, to stay up until dismissed. The log starts over either way, since what came before was seen.
  */
 export function cameBack(state: AwayState, now: number, awayMs: number | null): AwayState {
-  const since = state.log.filter(event => event.at > state.activeAt)
+  const since = unseen(state)
   const away = awayMs !== null && now - state.activeAt >= awayMs && since.length > 0
   return { activeAt: now, log: [], digest: away ? { from: state.activeAt, to: now, events: since } : state.digest }
 }
@@ -26,7 +32,7 @@ export function cameBack(state: AwayState, now: number, awayMs: number | null): 
  */
 export function awayView(state: AwayState, now: number, awayMs: number | null): AwayDigest | null {
   if (awayMs === null) return null
-  const since = state.log.filter(event => event.at > state.activeAt)
+  const since = unseen(state)
   if (now - state.activeAt >= awayMs && since.length) return { from: state.activeAt, to: now, events: since }
   return state.digest && now - state.digest.to < awayMs ? state.digest : null
 }

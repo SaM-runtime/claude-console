@@ -385,7 +385,7 @@ After `awayMinutes` (default 30) without using this console (no prompt, no `/con
 
 While you are away the card grows with the feed; the moment you are back (a prompt, a command or a press in the pane) it is frozen, and stays until `✓ 知道了` or until `awayMinutes` after your return. With the pane closed the band shows `◷ 離開期間 9 則`, and `/console inbox` starts with the same summary, for a phone or Remote Control.
 
-It only sums up what the feed already had and calls no model. Each console keeps its own, counted from when that console started; a long absence keeps the newest 200 lines. `awayMinutes: off` turns it off.
+It only sums up what the feed already had and calls no model; lines within 10 seconds of your own press (such as `已封存`) answer what you did and are not counted. Each console keeps its own, counted from when that console started; a long absence keeps the newest 200 lines. `awayMinutes: off` turns it off.
 
 ## Light sessions
 
