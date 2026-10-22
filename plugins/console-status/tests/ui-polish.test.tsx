@@ -143,7 +143,7 @@ test('a missing registry names the path and the way out', { options: { registryP
   on('ui.toast', () => ({ value: undefined }) as any)
   await $.command.run({ command: 'console', args: 'refresh' } as any)
   const ui = await $.ui.mount({ plugin: 'console-status', component: 'Pane', requestId: 'console-status', surface: 'mobile', props: { bodyColumns: 200, scroll: { offset: 0, total: 0, visible: 0 } } } as any)
-  expect(await ui.find({ type: 'Text', text: /找不到登錄表 D:\/Nowhere\/registry\.md.*\/console demo/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /找不到登錄表 D:\/Nowhere\/registry\.md.*\/console add.*\/console demo/ })).toBeDefined()
   await ui.unmount()
 })
 
