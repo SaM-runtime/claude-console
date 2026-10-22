@@ -161,6 +161,11 @@ test('claude jobs map blocked to running and stamp completion only when done is 
   const line = await executor.lastLine(jobs[0])
   expect(line).toBe('last link done')
   expect(/[\x00-\x1f\x7f]/.test(line)).toBe(false)
+  // A whole replayed screen: the newest reply or tool result counts, not the spinner, prompt or hints below it.
+  h.replies.push({ exitCode: 0, stdout: '\x1b[44B\x1b[38;2;215;119;87m✻\x1b[39m\r\x1b[12B  ⎿  Invalid API key · Fix external API key\r\x1b[14B✻\x1b[3GCrunched for 0s · done 5:36 AM\r\x1b[3B❯ \r\x1b[33C\x1b[2B · esc to interrupt\n? for shortcuts\n', stderr: '' })
+  expect(await executor.lastLine(jobs[0])).toBe('Invalid API key · Fix external API key')
+  h.replies.push({ exitCode: 0, stdout: '● Bash(npm test)\n✶\x1b[3GThinking…\n❯ \n', stderr: '' })
+  expect(await executor.lastLine(jobs[0])).toBe('Bash(npm test)')
 })
 
 test('ambiguous claude launch is not guessed or silently retried', async () => {

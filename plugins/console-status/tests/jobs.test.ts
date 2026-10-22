@@ -67,7 +67,7 @@ test('task metadata includes a generic shortened model id and effort', () => {
   expect(shortModel(' custom\n model ')).toBe('custom model')
   const [task] = jobTasks([{ id: 'one', jobClass: 'task', status: 'running', startedAt: '2030-01-05T10:00:00Z', request: { prompt: 'work', model: 'vendor-0-sample', effort: 'high' } }])
   expect(task.model).toBe('vendor-0-sample')
-  expect(taskMeta(task, Date.parse('2030-01-05T10:12:00Z')).meta).toBe('已跑 12m · sample · high')
+  expect(taskMeta(task, Date.parse('2030-01-05T10:12:00Z')).meta).toBe('已跑 12分 · sample · high')
 })
 
 test('refresh reads both configured roots and renders the newest job model', {

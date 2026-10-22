@@ -37,24 +37,31 @@ test('completed jobs preserve their producer and name Codex or Claude in the fee
 test('a completed job without an executor keeps the sensible generic fallback', () => {
   const before = snapshot([])
   const after = snapshot(produced('done-unknown', 'completed'))
-  expect(diffToasts(before, after)).toEqual(['Project Alpha：執行者 完成（done-unknown），狀態卡待更新'])
+  expect(diffToasts(before, after)).toEqual(['Project Alpha：執行者完成，狀態卡待更新'])
   expect(events(before, after)).toEqual([{ at: after.at, text: 'Project　執行者 完成，待同步', tone: 'blue' }])
 })
 
 test('failed and cancelled jobs never appear as completed', () => {
   const before = snapshot([])
   const failed = snapshot([newer('fail-1', 'failed', 'codex')])
-  expect(diffToasts(before, failed)).toEqual(['Project Alpha：執行者 失敗（fail-1），請檢查任務'])
+  expect(diffToasts(before, failed)).toEqual(['Project Alpha：執行者失敗，請檢查任務'])
   expect(events(before, failed)).toEqual([{
     at: failed.at, text: 'Project　Codex 失敗，請檢查', tone: 'red',
   }])
 
   const cancelled = snapshot([newer('cancel-1', 'cancelled', 'claude')])
-  expect(diffToasts(before, cancelled)).toEqual(['Project Alpha：執行者 已取消（cancel-1）'])
+  expect(diffToasts(before, cancelled)).toEqual(['Project Alpha：執行者已取消'])
   expect(events(before, cancelled)).toEqual([{
     at: cancelled.at, text: 'Project　Claude 已取消', tone: 'red',
   }])
   const unknown = taskMeta({ id: 'unknown', status: '?', title: '', model: '', effort: '' }, before.at)
   expect(unknown.icon).toBe('?')
   expect(unknown.tone).toBe('dim')
+})
+
+test('a job that ended its turn on a question says it waits for you, not that its CARD is due', () => {
+  const before = snapshot([])
+  const asked = snapshot([{ ...newer('ask-1', 'completed', 'claude'), asks: true }])
+  expect(diffToasts(before, asked)).toEqual(['Project Alpha：執行者停下來等你回覆'])
+  expect(events(before, asked)).toEqual([{ at: asked.at, text: 'Project　Claude 停下來等你回覆', tone: 'amber' }])
 })

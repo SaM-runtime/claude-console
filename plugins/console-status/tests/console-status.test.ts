@@ -148,7 +148,7 @@ test('reset time: same day shows clock and countdown, later days show the date',
 test('running job line: elapsed time and the last log line', () => {
   expect(lastLogLine(['start', '[12:00:01] reading files', '----', ''].join('\n'))).toBe('reading files')
   const now = Date.parse('2030-01-05T10:30:00Z')
-  expect(runLine({ kind: 'running', id: 'x', status: 'running', summary: '', startedAt: '2030-01-05T10:18:00Z', last: '跑測試' }, now)).toBe('已跑 12m・跑測試')
+  expect(runLine({ kind: 'running', id: 'x', status: 'running', summary: '', startedAt: '2030-01-05T10:18:00Z', last: '跑測試' }, now)).toBe('已跑 12分・跑測試')
   expect(runLine({ kind: 'running', id: 'x', status: 'running', summary: '' }, now)).toBe('執行中')
 })
 
@@ -159,8 +159,8 @@ test('executor tasks: titles from the prompt, live first, three latest finished'
     job('d', 'completed', '2030-01-05T02:00:00Z'), job('e', 'completed', '2030-01-04T02:00:00Z'), { id: 'f', jobClass: 'status-card', status: 'running' }])
   expect(list.map(t => t.id).join()).toBe('b,c,d,a')
   const now = Date.parse('2030-01-05T04:00:00Z')
-  expect(taskMeta(list[1], now).meta).toBe('1h 前完成 · high')
-  expect(taskMeta({ ...list[0], startedAt: '2030-01-05T03:48:00Z' }, now).meta).toBe('已跑 12m · high')
+  expect(taskMeta(list[1], now).meta).toBe('1時前完成 · high')
+  expect(taskMeta({ ...list[0], startedAt: '2030-01-05T03:48:00Z' }, now).meta).toBe('已跑 12分 · high')
 })
 
 test('codex quota: weekly window, reset time, credits; a past reset counts as full', () => {

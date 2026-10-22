@@ -29,7 +29,7 @@ test('terminal rows fit 70 and 120 columns with an intact age and a right margin
       expect(cells.reduce((sum: number, cell: any) => sum + displayWidth(text(cell)), gaps) <= bodyColumns - 1).toBe(true)
       for (const cell of cells) expect(displayWidth(text(cell)) <= cell.props.width).toBe(true)
       expect(displayWidth(text(cells[cells.length - 1]))).toBe(4)
-      expect(text(cells[cells.length - 1]).trim()).toMatch(/^(now|\d+[mhd]|>99d|—)$/)
+      expect(text(cells[cells.length - 1]).trim()).toMatch(/^(剛剛|\d+[分時天]|很久|—)$/)
     }
     await ui.unmount()
   }

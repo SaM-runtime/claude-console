@@ -298,8 +298,8 @@ export function diffToasts(prev: Snapshot | null, cur: Snapshot): string[] {
   const prevNewer = new Set(prev.projects.flatMap(p => p.jobs.filter(j => j.kind === 'newer').map(j => j.id)))
   for (const p of cur.projects) {
     for (const j of p.jobs) if (j.kind === 'newer' && !prevNewer.has(j.id)) {
-      const result = jobResult(j.status)
-      out.push(`${p.name}：執行者 ${result.label}（${j.id}）${result.followup ? `，${result.followup}` : ''}`)
+      const result = jobResult(j.status, j.asks)
+      out.push(`${p.name}：執行者${result.label}${result.followup ? `，${result.followup}` : ''}`)
     }
   }
   for (const p of cur.projects) {
@@ -549,16 +549,28 @@ export type State = 'ACTION' | 'GATE' | 'RUNNING' | 'SYNC' | 'IDLE' | 'NOCARD'
 export type Row = { state: State; project: string; item: string; age: string; full: string }
 export const STATE_ORDER: State[] = ['ACTION', 'GATE', 'RUNNING', 'SYNC', 'IDLE', 'NOCARD']
 
-/** `now - t` as now / 12m / 3h / 4d / >99d; a future timestamp has no age. */
+/** How long a job has run: `剛開始`, `已跑 12分`; empty with no start time. */
+export function ranFor(t: number, now: number): string {
+  const age = ago(t, now)
+  return age === '—' ? '' : age === '剛剛' ? '剛開始' : `已跑 ${age}`
+}
+
+/** When a job finished: `剛剛完成`, `12分前完成`, or `完成` with no time. */
+export function doneAgo(t: number, now: number): string {
+  const age = ago(t, now)
+  return age === '—' ? '完成' : age === '剛剛' ? '剛剛完成' : `${age}前完成`
+}
+
+/** `now - t` as 剛剛 / 12分 / 3時 / 4天 / 很久 (four columns at most); a future timestamp has no age. */
 export function ago(t: number | null, now: number): string {
   if (t === null || !Number.isFinite(t) || !Number.isFinite(now)) return '—'
   if (t > now) return '—'
   const m = Math.floor((now - t) / 60000)
-  if (m === 0) return 'now'
-  if (m < 60) return `${m}m`
-  if (m < 1440) return `${Math.floor(m / 60)}h`
+  if (m === 0) return '剛剛'
+  if (m < 60) return `${m}分`
+  if (m < 1440) return `${Math.floor(m / 60)}時`
   const days = Math.floor(m / 1440)
-  return days > 99 ? '>99d' : `${days}d`
+  return days > 99 ? '很久' : `${days}天`
 }
 
 /** Terminal display width: CJK and other wide glyphs occupy two columns. */
@@ -608,7 +620,9 @@ export function rows(s: Snapshot): Row[] {
       return { state: 'ACTION', project: name, item, age, full }
     }
     if (p.jobs.some(j => j.kind === 'newer')) return { state: 'SYNC', project: name, item: '結果未同步至 STATUS', age, full }
-    return { state: 'IDLE', project: name, item: shortAsk(p.state || '—', 30), age, full }
+    // An idle project with a step to continue reads differently from one with nothing to do.
+    const step = p.executor !== 'manual' && p.next.trim() && !saysNone(p.next) ? p.next.trim() : ''
+    return { state: 'IDLE', project: name, item: step ? `⇢ ${shortAsk(step, 28)}` : shortAsk(p.state || '—', 30), age, full }
   })
   return out.sort((a, b) => STATE_ORDER.indexOf(a.state) - STATE_ORDER.indexOf(b.state))
 }
@@ -732,7 +746,9 @@ export function selectionContext(snap: Snapshot | null, full: string | null): st
 export type Limit = { kind: string; percent: number }
 export type Event = { at: number; text: string; tone: 'amber' | 'teal' | 'blue' | 'red' | 'green' }
 
-function jobResult(status: string): { label: string; followup: string; event: string; tone: 'blue' | 'red' } {
+function jobResult(status: string, asks = false): { label: string; followup: string; event: string; tone: 'blue' | 'red' | 'amber' } {
+  // Ended its turn on a question: nothing to sync yet, the person answers first.
+  if (status === 'completed' && asks) return { label: '停下來等你回覆', followup: '', event: '停下來等你回覆', tone: 'amber' }
   if (status === 'completed') return { label: '完成', followup: '狀態卡待更新', event: '完成，待同步', tone: 'blue' }
   if (status === 'failed') return { label: '失敗', followup: '請檢查任務', event: '失敗，請檢查', tone: 'red' }
   if (status === 'cancelled') return { label: '已取消', followup: '', event: '已取消', tone: 'red' }
@@ -809,7 +825,7 @@ export function events(prev: Snapshot | null, cur: Snapshot): Event[] {
       const was = prevJobs.get(j.id)
       if (j.kind === 'running' && was !== 'running') out.push({ at: cur.at, text: `${short(p.name)}　執行者開始執行`, tone: 'teal' })
       if (j.kind === 'newer' && was !== 'newer') {
-        const result = jobResult(j.status)
+        const result = jobResult(j.status, j.asks)
         const executor = j.executor === 'codex' ? 'Codex' : j.executor === 'claude' ? 'Claude' : '執行者'
         out.push({ at: cur.at, text: `${short(p.name)}　${executor} ${result.event}`, tone: result.tone })
       }
@@ -871,7 +887,7 @@ export function lastLogLine(log: string): string {
 /** `已跑 12m・<last log line or phase>` for a running job. */
 export function runLine(j: JobFlag, now: number): string {
   const t = Date.parse(j.startedAt ?? '')
-  const elapsed = Number.isNaN(t) ? '' : `已跑 ${ago(t, now)}`
+  const elapsed = Number.isNaN(t) ? '' : ranFor(t, now)
   const detail = j.last || (j.phase && j.phase !== 'running' ? phaseText(j.phase) : '') || ''
   if (!elapsed && !detail) return j.executor ? `${j.executor} 執行中` : '執行中'
   const body = elapsed && detail ? `${elapsed}・${detail}` : elapsed || detail
@@ -917,11 +933,11 @@ export function shortModel(model: string, max = 14): string {
 export function taskMeta(t: ExecutorTask, now: number): { icon: string; tone: 'teal' | 'dim' | 'green' | 'red'; meta: string } {
   const settings = [shortModel(t.model ?? ''), t.effort, t.fallbackFrom ? `${t.fallbackFrom}→claude` : ''].filter(Boolean).join(' · ')
   const suffix = settings ? ` · ${settings}` : ''
-  if (t.status === 'running') return { icon: '●', tone: 'teal', meta: `已跑 ${ago(Date.parse(t.startedAt ?? ''), now)}${suffix}` }
+  if (t.status === 'running') return { icon: '●', tone: 'teal', meta: `${ranFor(Date.parse(t.startedAt ?? ''), now) || '執行中'}${suffix}` }
   if (t.status === 'queued') return { icon: '○', tone: 'dim', meta: `排隊中${suffix}` }
   if (t.status === 'failed' || t.status === 'cancelled') return { icon: '✕', tone: 'red', meta: `${t.status === 'failed' ? '失敗' : '已取消'}${suffix}` }
   if (t.status !== 'completed') return { icon: '?', tone: 'dim', meta: `狀態未知（${t.status || '?'}）${suffix}` }
-  return { icon: '✓', tone: 'green', meta: `${ago(Date.parse(t.completedAt ?? ''), now)} 前完成${suffix}` }
+  return { icon: '✓', tone: 'green', meta: `${doneAgo(Date.parse(t.completedAt ?? ''), now)}${suffix}` }
 }
 
 /**

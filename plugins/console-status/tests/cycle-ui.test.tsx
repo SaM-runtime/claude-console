@@ -342,3 +342,18 @@ test('review P3: another console dispatched the project a minute ago: the cycle 
   expect((h.store.cycles as any)[STATUS].waiting).toBe('等另一個主控台')
   expect(h.feed.some(text => text.includes('接力停止'))).toBe(false)
 })
+
+test('with nothing waiting on you, the next-step card offers the project it would continue, and its row says so', OPTIONS, async ($, on) => {
+  const h = harness(on, { next: '.task/build.md' })
+  await refresh($)
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ type: 'Text', text: /沒有在等你，可以繼續/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '⇢ .task/build.md' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /目前沒有需要處理的項目/ })).toBeUndefined()
+  // Its chip is the continue button, with the same second press as anywhere else.
+  await ui.press({ key: 'next-action' })
+  expect(h.launches.length).toBe(0)
+  await ui.press({ key: 'next-action' })
+  expect(h.launches.length).toBe(1)
+  await ui.unmount()
+})

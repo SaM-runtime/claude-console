@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.26.0
+
+- **The next-step card says what you can continue.** With no decision, gate or sync waiting, the card used to read `✓ 就緒 目前沒有需要處理的項目` even while projects had a next step ready, and the prompt's Tab suggestion meanwhile offered `/console continue <project>`. The card now names that same project, `⇢ 沒有在等你，可以繼續` with its next step and the `⇢ 繼續下一步` button (the second press still applies). With nothing to continue it still says `✓ 就緒`.
+- **Idle rows show their next step.** An idle project with a step to continue reads `⇢ <next step>` in the table, so it no longer looks like a project with nothing to do; one without a next step (or a `manual` one) still shows its state.
+- **Times in plain Chinese.** The table's update column reads `剛剛`, `12分`, `3時`, `4天` (`很久` past 99 days) instead of `now`, `12m`, `3h`, `4d`; the menu and the detail cards read `剛剛更新`, `3 天前更新` instead of `now前更新`, `4d前更新`; a running job reads `剛開始` or `已跑 12分`, a finished task `12分前完成`. A gate waiting on the console reads `審核關卡等主控台判斷` instead of `待主控台審核審核關卡`.
+- **An executor that stopped to ask is not announced as done.** Its toast and feed line said `執行者 完成（<job id>），狀態卡待更新`; they now say `執行者停下來等你回覆`, in amber. Toasts no longer carry the internal job id.
+- **A new project's first dispatch says what to do.** Claude Code refuses to start a background session in a folder it was never trusted in, and the feed showed its English line cut off (`✕ Workspace not trusted. Run …`). It now reads `專案資料夾還沒在 Claude Code 信任過：先在那裡開一次 claude、選「信任」，再派工（<folder>）`.
+- `✎ 填入決策` no longer shows `：1：` before any option is picked.
+- **A running Claude job's latest line is what it said, not the screen.** The line beside a running job comes from `claude logs`, a replay of the executor's screen, and it often showed the screen's own furniture: the prompt `❯`, a spinner, or hints with letters lost to cursor moves (`?shorcuts`). It now shows the newest reply, tool call or tool result (`Bash(npm test)`, `Invalid API key · Fix external API key`), and words a cursor move skipped over keep their space.
+
 ## 0.25.1
 
 - **An executor that says it needs nothing no longer waits for you.** A Codex turn whose last line negates an ask (`沒有需要我處理的事項，已完成。`, `不需要你確認`, `no need for your approval`) was read as a question: auto-sync skipped it and `⟳ 自動接力` stopped with `執行者在等你回覆`. Negated phrases are now left out, `要不要我…` still asks, and only the last line counts, as documented.
