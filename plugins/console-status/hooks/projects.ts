@@ -3,10 +3,23 @@ import { STATUS_TEMPLATE } from './template'
 import { parseRegistry } from './logic'
 import type { RegistryRow } from './logic'
 
-/** The folder /console add names: the words after it (quotes dropped), else the session's own; slashes forward, no trailing one. */
-export function addFolder(words: string, cwd: string | null): string | null {
+/**
+ * The folder /console add names: the words after it (quotes dropped), else the session's own; slashes forward, no
+ * trailing one. `~` (`~\` on Windows) is the home folder and a relative folder is the session's, as in a shell.
+ */
+export function addFolder(words: string, cwd: string | null, home = ''): string | null {
   const raw = words.trim().replace(/^(["'])([\s\S]*)\1$/, '$2').trim() || (cwd ?? '').trim()
-  const folder = raw.replace(/\\/g, '/').replace(/(?<=.)\/+$/, '')
+  let folder = raw.replace(/\\/g, '/')
+  if (home) folder = folder.replace(/^~(?=\/|$)/, home.replace(/\\/g, '/').replace(/(?<=.)\/+$/, ''))
+  if (folder && cwd && !/^(?:\/|[a-z]:|~)/i.test(folder)) {
+    const parts = cwd.trim().replace(/\\/g, '/').replace(/\/+$/, '').split('/')
+    for (const part of folder.split('/')) {
+      if (part === '..') { if (parts.length > 1) parts.pop() }
+      else if (part && part !== '.') parts.push(part)
+    }
+    folder = parts.join('/') || '/'
+  }
+  folder = folder.replace(/(?<=.)\/+$/, '')
   return folder || null
 }
 

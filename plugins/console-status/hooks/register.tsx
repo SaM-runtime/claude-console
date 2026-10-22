@@ -1541,10 +1541,10 @@ function inboxText(s: Snapshot, results: Record<string, VerificationResult>, day
  * missing), a STATUS file from the workflow's template unless it has one, and `.console/` kept out of git.
  */
 async function addProject($: any, options: PluginOptions, words: string): Promise<string> {
-  const folder = addFolder(words, sessionCwd)
+  const { home, config } = await paths($, options)
+  const folder = addFolder(words, sessionCwd, home)
   if (!folder) return '用法：/console add（登錄這個對話所在的資料夾）或 /console add <資料夾>'
   if (!(await Promise.resolve().then(() => $.fs.exists(folder)).catch(() => false))) return `找不到資料夾：${folder}`
-  const { home, config } = await paths($, options)
   const registry = await Promise.resolve().then(() => $.fs.read(config.registryPath)).catch(() => null) as string | null
   const listed = registry === null ? [] : parseRegistry(registry, home)
   const same = (path: string) => path.replace(/\/+$/, '').toLowerCase() === folder.toLowerCase()

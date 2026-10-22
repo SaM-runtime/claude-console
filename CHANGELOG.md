@@ -10,6 +10,7 @@ Fixes for a console with many projects.
 - **A name the registry lists twice is numbered.** Two rows named `api` made one of them impossible to select, open or command. The second now shows as `api 2`, with `⚠ 登錄表有兩個專案叫 api，第二個先顯示成「api 2」；改登錄表的名稱就好` under the project list; a STATUS file listed twice shows once. Archiving a numbered project moves its own row, found by its STATUS path, and says the name to bring it back by.
 - **`api` no longer takes `api-gateway`'s Codex jobs.** A project read every companion workspace whose folder name started with its own, so its row could show another project's running job and lock its dispatch. It now reads only `<folder>-<hash>`. Two projects in folders of one name still cannot be told apart: with Codex in use the pane says so under the project list, and `/console add` says so when it adds such a folder.
 - **One refresh shows three toasts at most.** A refresh that found many changes at once (back from sleep, several decisions arriving together) sent a toast for each, and the terminal dropped some before they were drawn (`a toast left the stack before it was ever drawn`). Past three, the third now reads `另有 N 則更新，見主控台動態`; every change is still in the feed.
+- **`/console add ~/work/api` finds the folder.** The `~` was kept as typed, so the folder was never found (`找不到資料夾：~/work/api`). It is now the home folder, written `~/` or, on Windows, `~\`; a relative folder such as `../web` is taken from the conversation's folder, so the registry gets its full path.
 
 ## 0.32.1
 

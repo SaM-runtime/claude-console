@@ -147,6 +147,22 @@ test('/console add in a project folder registers it with a STATUS file, keeps it
   expect((await $.command.run({ command: 'console', args: 'add D:/Work/missing' } as any) as any).text).toBe('找不到資料夾：D:/Work/missing')
 })
 
+test('/console add reads ~ as the home folder and a relative folder from the conversation\'s own', { options: { registryPath: REGISTRY } }, async ($, on) => {
+  const h = fixture(on, { 'Project Delta': WAITING['Project Delta'] }, ['C:/Users/example/Work/api', 'D:/Work/web'])
+  on('command.register', () => ({ value: undefined }))
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'D:\\Work\\new-app', surface: 'terminal', isInteractive: true } as any)
+  await h.clock.settle()
+  const home = (await $.command.run({ command: 'console', args: 'add ~\\Work\\api' } as any) as any).text as string
+  expect(home.split('\n')[0]).toBe('已加入專案「api」：建立 .console/STATUS.md、寫進登錄表。')
+  expect(h.files['C:/Users/example/Work/api/.console/STATUS.md']!.startsWith('# api STATUS\n')).toBe(true)
+  const near = (await $.command.run({ command: 'console', args: 'add ../web' } as any) as any).text as string
+  expect(near.split('\n')[0]).toBe('已加入專案「web」：建立 .console/STATUS.md、寫進登錄表。')
+  expect(h.files[REGISTRY]!.endsWith('| api | `C:/Users/example/Work/api/.console/STATUS.md` |\n| web | `D:/Work/web/.console/STATUS.md` |\n')).toBe(true)
+  expect((await $.command.run({ command: 'console', args: 'add ~/Work/api/' } as any) as any).text).toBe('已經登錄過：api（C:/Users/example/Work/api/.console/STATUS.md）')
+  expect((await $.command.run({ command: 'console', args: 'add ~/missing' } as any) as any).text).toBe('找不到資料夾：C:/Users/example/missing')
+})
+
 test('/console add <folder> from elsewhere keeps an existing STATUS file and says the folder must be trusted first', OPTIONS, async ($, on) => {
   const h = fixture(on, { 'Project Delta': WAITING['Project Delta'] }, ['D:/Work/api'])
   h.files['D:/Work/api/.console/STATUS.md'] = card({ 下一步: '接著做' }, NOW - 3_600_000)
