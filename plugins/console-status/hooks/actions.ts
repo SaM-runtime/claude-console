@@ -2,6 +2,7 @@ import type { Project, Snapshot, ActionKind, ContinueConfirmation, VerificationR
 import { terminalLines } from './terminal'
 import type { State } from './logic'
 import { hasAsk, parseGate, rows, saysNone, staleFor } from './logic'
+import { PS_UTF8 } from './platform'
 
 export const ACTION_LABEL: Record<ActionKind, string> = {
   verify: '▶ 執行驗證', sync: '⇢ 同步 STATUS', continue: '⇢ 繼續下一步', reply: '↩ 回覆執行者',
@@ -247,7 +248,7 @@ export const verifyTrusted = (trusted: Record<string, string>, statusPath: strin
 export function verificationArgs(command: string, windows: boolean): string[] {
   if (!windows) return ['sh', '-lc', command]
   return ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
-    `$ErrorActionPreference = 'Stop'; & { ${command}\n}; $consoleVerifyOK = $?; if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; if (-not $consoleVerifyOK) { exit 1 }`]
+    `${PS_UTF8}$ErrorActionPreference = 'Stop'; & { ${command}\n}; $consoleVerifyOK = $?; if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; if (-not $consoleVerifyOK) { exit 1 }`]
 }
 
 /** The API returns separate streams; append stderr, then keep only the final three nonblank lines. */

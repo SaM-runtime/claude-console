@@ -1,5 +1,6 @@
 # Read-only Codex broker preflight.
 # Prints one line beginning with OK, STALE, or UNKNOWN. It never stops a process.
+# -StateRoots: more companion state roots, joined by '|' (a Windows path cannot hold one).
 [CmdletBinding()]
 param(
     [Parameter()]
@@ -8,10 +9,16 @@ param(
 
     [Parameter()]
     [AllowEmptyString()]
-    [string]$CompanionStateDir = ''
+    [string]$CompanionStateDir = '',
+
+    [Parameter()]
+    [AllowEmptyString()]
+    [string]$StateRoots = ''
 )
 
 $ErrorActionPreference = 'Stop'
+# UTF-8 out, whatever the console's code page: a workspace name may not be ASCII.
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {}
 
 if ([string]::IsNullOrWhiteSpace($CompanionStateDir)) {
     $localData = [Environment]::GetFolderPath('LocalApplicationData')
@@ -29,9 +36,14 @@ $companionStatus = if ([string]::IsNullOrWhiteSpace($CompanionScript)) {
     'MISSING'
 }
 
-$codexPackage = Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction SilentlyContinue |
-    Sort-Object Version -Descending |
-    Select-Object -First 1
+# Get-AppxPackage throws where the Appx module cannot load (some PowerShell 7 hosts, Windows Server Core).
+$codexPackage = try {
+    Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction SilentlyContinue |
+        Sort-Object Version -Descending |
+        Select-Object -First 1
+} catch {
+    $null
+}
 if (-not $codexPackage) {
     "UNKNOWN codex=unavailable companion=$companionStatus"
     return
@@ -71,8 +83,12 @@ if ($stale.Count -eq 0) {
 }
 
 $owners = @{}
-if (Test-Path -LiteralPath $CompanionStateDir -PathType Container) {
-    Get-ChildItem -LiteralPath $CompanionStateDir -Recurse -File -Filter 'broker.json' -ErrorAction SilentlyContinue |
+$roots = @($CompanionStateDir) + ($StateRoots -split '\|') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+foreach ($root in $roots) {
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        continue
+    }
+    Get-ChildItem -LiteralPath $root -Recurse -File -Filter 'broker.json' -ErrorAction SilentlyContinue |
         ForEach-Object {
             $workspace = $_.Directory.Name -replace '-[0-9a-f]{16}$', ''
             try {

@@ -211,6 +211,8 @@ Mod 會在 `claudeSessionsPath` 保存專案與 session 的對應，以及每個
 
 `claude agents --json --all --cwd <專案根目錄>` 會列出執行中與已完成 agent。Mod 只接受 `cwd` 完全符合專案的 background agent，使用其短 `id`、完整 `sessionId`、`name`、`state`、`status`、`waitingFor`，並以 `claude logs <id>` 讀取輸出。派工必須透過唯一名稱對應到一個新產生的完整 session UUID 才會保存；無法唯一確認時保持未解狀態並阻止再次派工，後續刷新可恢復唯一具名的派工。Blocked 或 waiting 仍算執行中，查不到 agent 也不推定完成。本機樣本觀察到 `working`、`blocked` state 與 `busy`、`idle`、`waiting` status；文件定義的終止 state `done`、`failed`、`stopped` 會結束受管理工作。
 
+Windows 上 `claude` 常是 npm 安裝的 `claude.cmd`，它會經過 cmd.exe：參數遇到換行就被截斷、遇到 `&` 會被拆開，所以多行的派工提示只剩第一行。因此在 Windows 上，派工提示改從標準輸入交給 `claude --bg`（0.32.1 起；原生安裝的 `claude.exe` 也一樣），macOS 與 Linux 仍放在最後一個參數。
+
 Session 檔是 mod 自有狀態。內容損壞時會 fail closed，不會丟棄已保存的 session 身分。同一 mod process 內的寫入會序列化，因此請只讓一個主控台 process 寫入；不同 process 同時寫入不保證 atomic。Claude 派工不加入略過權限的旗標，沿用一般 Claude Code 權限流程。背景 agent 做完一輪停在提問時，用 `↩ 回覆執行者` 在主控台回覆即可（見[專案動作](#專案動作)）；停在權限提示（等待批准）的，按 `↗ 接手對話` 接手那個對話處理。
 
 模型 Button 提供 CLI 已觀察到的 alias：`fable`、`opus`、`sonnet`、`haiku`；`/console model <name>` 也接受自由輸入。Effort 為 `low`、`medium`、`high`、`xhigh`、`max`。空值交給 Claude Code 決定。
@@ -482,7 +484,7 @@ claude plugin install paste-preview@paste-preview
 
 ## 限制
 
-- 內附探測：Windows 用 PowerShell 腳本，macOS 與 Linux 用 `sh` 腳本（Linux 已有測試與模擬過期 broker 驗證，但未經日常使用）。在這兩個平台上，若 broker 的 `codex app-server` 啟動時間早於 Codex CLI 最近一次升級，會判定為 STALE。
+- 內附探測：Windows 用 PowerShell 腳本，macOS 與 Linux 用 `sh` 腳本（Linux 已有測試與模擬過期 broker 驗證，但未經日常使用）。CI 在 Windows 與 Ubuntu 上用假的 Codex 資料夾真的執行這些腳本（`scripts/check-commands.mjs`），但 Windows 上的 STALE 判斷要有 Codex 桌面應用程式才會走到，CI 沒有。在這兩個平台上，若 broker 的 `codex app-server` 啟動時間早於 Codex CLI 最近一次升級，會判定為 STALE。
 - macOS 上找不到 `code` CLI 時，開啟 STATUS.md 改用 `open`。
 - UI 目前只有繁體中文。
 - 專案對應依賴設定的登錄表與 STATUS contract。
@@ -499,7 +501,7 @@ claude plugin install paste-preview@paste-preview
 
 | 版本 | 重點 |
 | --- | --- |
-| 0.32 | 指令護欄多攔：下載後直接執行、清空資料庫、雲端刪除、Windows 登錄檔與系統還原點、git 的後悔藥、更多發布方式；`git clean -fd build` 不再問；README 寫清楚護欄管不到的地方 |
+| 0.32 | 指令護欄多攔：下載後直接執行、清空資料庫、雲端刪除、Windows 登錄檔與系統還原點、git 的後悔藥、更多發布方式；`git clean -fd build` 不再問；README 寫清楚護欄管不到的地方；0.32.1 修正 Windows：npm 安裝的 `claude.cmd` 會把多行派工提示截成第一行，改從標準輸入送；PowerShell 輸出改成 UTF-8，驗證結果的中文不再亂碼；CI 在 Windows 上真的跑這些指令 |
 | 0.31 | 專案多了也好管：`⊟ 封存` 不常碰的專案、`▴ 置頂` 常用的專案；離開一陣子回來，先列出這段時間發生的事（`awayMinutes`）；選取專案時附上的狀態卡內容標成參考資料 |
 | 0.30 | 按 `n` 依序跳到每一件在等你的事，`/console inbox` 用文字列出；`/console add` 一個指令加入新專案；好幾天沒動的專案標出「久未動」並優先建議繼續（`staleDays`）；0.30.1 還沒有登錄表時直接告訴你用 `/console add`，`/console` 指令說明先列常用的，README 改成四步快速開始 |
 | 0.29 | 自動接力在狀態卡有 `驗證` 時，每跳之間先跑驗證，沒過就停；額度數字太久沒更新（超過 45 分鐘）時自動接力停下，不再拿舊數字當煞車；用量表標出額度是多久前讀到的 |
@@ -550,7 +552,10 @@ claude plugin validate .
 claude plugin validate plugins/console-status
 claude plugin test plugins/console-status
 node scripts/check-docs.mjs
+node scripts/check-commands.mjs
 ```
+
+`check-commands.mjs` 用 mod 自己的程式組出每個外部指令，經 Claude Code 自己的執行方式在這台機器上真的跑一次：Codex 探測腳本（Windows 是 PowerShell）、`驗證` 指令、讀對話紀錄尾端，以及一次 Claude 派工（提示要完整送到背景對話）。它用暫時的 home 與一個沒有人在聽的 API 位址，不會送出任何請求。
 
 ## Star History
 

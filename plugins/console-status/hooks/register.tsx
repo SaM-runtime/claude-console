@@ -15,7 +15,7 @@ import { actionKinds, actionLabel, askingError, askingSession, attachTabArgs, at
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
-import { isWindowsOs, openFallbackArgs, preflightArgs, quotaArgs } from './platform'
+import { isWindowsOs, openFallbackArgs, preflightArgs, quotaArgs, tailLinesArgs } from './platform'
 import { stateFormatIssues, stateFormatWarning } from './jobs'
 import { pipeline, projectForCwd, projectModeSection, progressContext, progressSignature, verdict } from './pipeline'
 import { addFolder, archivedRows, excludeWith, localMinute, newStatusFile, projectNameFor, registryArchive, registryUnarchive, registryWith } from './projects'
@@ -1009,6 +1009,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
         run: (argv, init) => $.process.run(argv, init),
         files: { read: path => $.fs.read(path), list: path => $.fs.list(path), write: (path, text) => $.fs.write(path, text) },
         now: () => $.clock.now(),
+        windows: isWindowsOs(await $.env.get('OS').catch(() => '')),
       }
       if (eff.executor === 'codex' && !companion?.path && !config.companionScript) companion = await resolveCompanion({ read: (path: string) => $.fs.read(path), list: (path: string) => $.fs.list(path) }, home, config.companionScript).catch(() => null)
       const execConfig = withCompanion(config)
@@ -1771,10 +1772,7 @@ async function transcriptTail($: any, path: string): Promise<string | null> {
   if (typeof text === 'string') return text
   const stat: any = await Promise.resolve().then(() => $.fs.stat(path)).catch(() => null)
   if (!stat) return null
-  const args = isWindowsOs(await $.env.get('OS'))
-    ? ['powershell', '-NoProfile', '-Command', `Get-Content -LiteralPath '${path.replace(/'/g, "''")}' -Tail 400 -Encoding UTF8`]
-    : ['tail', '-n', '400', path]
-  const r: any = await $.process.run(args, { timeoutMs: 10_000 }).catch(() => null)
+  const r: any = await $.process.run(tailLinesArgs(path, isWindowsOs(await $.env.get('OS')), 400), { timeoutMs: 10_000 }).catch(() => null)
   return r && r.exitCode === 0 ? String(r.stdout ?? '') : null
 }
 
@@ -2087,7 +2085,8 @@ async function startConsole($: any, options: PluginOptions, remember: boolean, r
   cacheTimer = $.clock.every(1000, () => void cacheTickOnce($, options).catch(() => {}))
   // Until a classic hook names the transcript, find it where Claude Code keeps it.
   if (!transcriptPath) {
-    const configDir = await $.env.get('CLAUDE_CONFIG_DIR') || `${await $.env.get('HOME') || await $.env.get('USERPROFILE') || ''}/.claude`
+    // USERPROFILE first, as paths() reads it: on Windows a HOME set by Git or MSYS is not where Claude Code keeps its files.
+    const configDir = await $.env.get('CLAUDE_CONFIG_DIR') || `${await $.env.get('USERPROFILE') || await $.env.get('HOME') || ''}/.claude`
     const sessionId = await $.session.id().catch(() => null)
     if (sessionId && sessionStartCwd && !configDir.startsWith('/.claude')) transcriptPath = transcriptPathFor(configDir, sessionStartCwd, sessionId)
   }
