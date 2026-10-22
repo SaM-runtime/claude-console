@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { JobFlag } from '../types'
+import { dispatchErrorText } from '../hooks/actions'
 import {
   ago,
   blockedSessions,
@@ -17,11 +18,11 @@ const NOW = new Date(2030, 0, 5, 12, 0).getTime()
 
 test('A1: age is bounded to four columns and future timestamps are not ages', () => {
   const cases: Array<[number, string]> = [
-    [NOW, 'now'],
-    [NOW - 12 * 60_000, '12m'],
-    [NOW - 3 * 3_600_000, '3h'],
-    [NOW - 4 * 86_400_000, '4d'],
-    [NOW - 100 * 86_400_000, '>99d'],
+    [NOW, '剛剛'],
+    [NOW - 12 * 60_000, '12分'],
+    [NOW - 3 * 3_600_000, '3時'],
+    [NOW - 4 * 86_400_000, '4天'],
+    [NOW - 100 * 86_400_000, '很久'],
     [NOW + 60_000, '—'],
   ]
   for (const [time, expected] of cases) {
@@ -32,11 +33,11 @@ test('A1: age is bounded to four columns and future timestamps are not ages', ()
 
 test('A1/A6: demo dates are relative to now and demo preflight is healthy', () => {
   const demo = demoSnapshot(NOW)
-  expect(rows(demo).map(row => row.age).sort()).toEqual(['12m', '1d', '2d', '3h', '4d'])
+  expect(rows(demo).map(row => row.age).sort()).toEqual(['12分', '1天', '2天', '3時', '4天'])
   expect(codexHealth(demo.codex)).toBe('ok')
 
   const betweenMinutes = demoSnapshot(NOW + 37_000)
-  expect(rows(betweenMinutes).map(row => row.age).sort()).toEqual(['12m', '1d', '2d', '3h', '4d'])
+  expect(rows(betweenMinutes).map(row => row.age).sort()).toEqual(['12分', '1天', '2天', '3時', '4天'])
 })
 
 test('demo covers all useful states, quotas, tasks and two relative feed events', () => {
@@ -101,5 +102,11 @@ test('A7: running text names its executor or gives a neutral fallback', () => {
   expect(runLine(job({ executor: 'codex' }), NOW)).toBe('codex 執行中')
   expect(runLine(job({}), NOW)).toBe('執行中')
   expect(runLine(job({ executor: 'claude', startedAt: new Date(NOW - 12 * 60_000).toISOString(), last: '跑測試' }), NOW))
-    .toBe('claude · 已跑 12m・跑測試')
+    .toBe('claude · 已跑 12分・跑測試')
+})
+
+test('a dispatch Claude Code refuses in an untrusted folder says what to do, the folder last', () => {
+  expect(dispatchErrorText('Workspace not trusted. Run `claude` in /home/me/api and accept the trust dialog.', 'C:/Projects/api'))
+    .toBe('專案資料夾還沒在 Claude Code 信任過：先在那裡開一次 claude、選「信任」，再派工（C:/Projects/api）')
+  expect(dispatchErrorText('Codex dispatch failed (exit 1).', 'C:/Projects/api')).toBe('Codex dispatch failed (exit 1).')
 })

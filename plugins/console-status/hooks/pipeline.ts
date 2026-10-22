@@ -64,7 +64,7 @@ export function pipeline(p: Project, local?: VerificationResult): Pipeline {
     current = 'sync'; status = 'wait'; note = '執行者已結束，結果待寫回 STATUS'
   } else if (gateStage) {
     current = gateStage; status = 'wait'
-    note = gateStage === 'release' ? '待使用者核准上線範圍' : `待主控台審核${STAGES[INDEX[gateStage]].label}關卡`
+    note = gateStage === 'release' ? '待使用者核准上線範圍' : `${STAGES[INDEX[gateStage]].label}關卡等主控台判斷`
   } else if (result === 'fail') {
     current = 'verify'; status = 'fail'; note = '驗證未通過'
   } else if (next) {

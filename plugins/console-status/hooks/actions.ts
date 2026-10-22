@@ -38,6 +38,16 @@ export function actionKinds(project: Project, state: State): ActionKind[] {
   return [...kinds, 'open']
 }
 
+/**
+ * A dispatch failure in words the person can act on. Claude Code refuses `--bg` in a folder it was never
+ * trusted in (`Workspace not trusted. Run \`claude\` in …`), which every new project meets once; the folder
+ * goes last so a cut-off feed line still says what to do.
+ */
+export function dispatchErrorText(message: string, root: string): string {
+  if (/workspace not trusted/i.test(message)) return `專案資料夾還沒在 Claude Code 信任過：先在那裡開一次 claude、選「信任」，再派工（${root}）`
+  return message
+}
+
 /** A submitted review may wait this long for a turn to finish it before the row unlocks by itself. */
 export const GATE_PENDING_MS = 10 * 60_000
 
@@ -243,12 +253,22 @@ export function suggestedPrompt(s: Snapshot, pending: Record<string, unknown> = 
     if (kinds.includes('sync')) return `/console sync ${p.name}`
     return null
   }
-  for (const r of list) {
+  const p = continuable(s, pending)
+  return p ? `/console continue ${p.name}` : null
+}
+
+/**
+ * With nothing waiting on the person, the idle project the console would continue: the first one, in the
+ * table's order, with a next step to continue and no press of its own in flight.
+ */
+export function continuable(s: Snapshot, pending: Record<string, unknown> = {}): Project | undefined {
+  if (s.demo || s.error) return undefined
+  for (const r of rows(s)) {
     if (r.state !== 'IDLE') continue
-    const p = ready(r.full)
-    if (p && actionKinds(p, 'IDLE').includes('continue')) return `/console continue ${p.name}`
+    const p = s.projects.find(x => x.name === r.full)
+    if (p && !pending[p.statusPath] && actionKinds(p, 'IDLE').includes('continue')) return p
   }
-  return null
+  return undefined
 }
 
 /**

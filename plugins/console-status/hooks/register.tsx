@@ -11,7 +11,7 @@ import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles
 import type { DispatchSettings, ProjectOverride } from './dispatch'
 import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, askingSession, newJobTag, withJobTag, commandTarget, decisionProject, replyPrompt, reviewPrompt, suggestedPrompt, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, freshSyncPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
+import { actionKinds, actionLabel, askingSession, newJobTag, withJobTag, commandTarget, decisionProject, replyPrompt, reviewPrompt, suggestedPrompt, continuable, dispatchErrorText, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, freshSyncPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -33,7 +33,7 @@ import { commandPreview, dangerOf, guardMode } from './guard'
 import { compareVersions, gitBranchArgs, gitPullArgs, gitTopArgs, hasUpdate, LATEST_MANIFEST_URL, localFolder, manifestVersion, marketplaceUpdateArgs, pluginListArgs, UPDATE_CHECK_MS, updateArgs, updateOutcome, versionLine } from './updater'
 
 import type { Project, Snapshot, ActionKind, VerificationResult, PendingAction } from '../types'
-import { jobWarnings, waitingNames, parseGate, parseCodexQuota, claudeLimits, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, gateText, battery, blockedLines, resetText, nextProject, buildProject, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, parseLimitKind, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
+import { jobWarnings, waitingNames, parseGate, parseCodexQuota, claudeLimits, taskMeta, runLine, hasAsk, parseAsk, askSummary, splitClauses, decisionAnswer, pickDecision, gateText, battery, blockedLines, resetText, nextProject, buildProject, cardTime, counts, demoSnapshot, diffToasts, displayWidth, events, limitHelp, limitName, parseLimitKind, meter, next, parseRegistry, projectRoot, relevantBlocked, relevantCodex, rows, selectionContext, ROTATE_PERCENT } from './logic'
 import type { Agent, State } from './logic'
 import { projectColumnWidth, demoEvents } from './logic'
 import { batteryBody, METER } from './battery'
@@ -1063,7 +1063,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       await update($, syncProgress, values => values[statusPath]?.stage !== 'dispatch' ? values
         : { ...values, [statusPath]: { ...values[statusPath]!, stage: 'dispatch-failed', endedAt, detail: message } })
     }
-    await actionNotice($, `${project?.name ?? statusPath}：✕ ${message}`, false)
+    await actionNotice($, `${project?.name ?? statusPath}：✕ ${dispatchErrorText(message, projectRoot(statusPath))}`, false)
   } finally {
     if (!keepPending) timer?.cancel()
     try {
@@ -2527,13 +2527,22 @@ export const register: Register = (on, options) => {
         note || pace ? <Box key={key + '-note'} flexShrink={1}><Text color={C.dim} wrap="truncate-end">{note}{pace ? <Text color={pace.tone === 'red' ? C.red : C.amber}>{`${note ? '・' : ''}${pace.text}`}</Text> : null}</Text></Box> : null,
       ])
     }
-    const target = nextProject(s)
+    /** `3 小時前更新` for a card, from its 更新 field; nothing for a missing or future time. */
+    const updatedLabel = (p: Project): string | null => {
+      const t = cardTime(p.updated)
+      return t === null || t > s.at ? null : `${agoText(t, s.at)}更新`
+    }
+    const urgentTarget = nextProject(s)
+    // Nothing waits on the person: the card offers the project the prompt's Tab suggestion would continue.
+    const ready = n === null && !urgentTarget ? continuable(s, pending) : undefined
+    const target = urgentTarget ?? ready?.name ?? null
     const targetProject = s.projects.find(p => p.name === target)
     const targetState = list.find(r => r.full === target)?.state
     const primaryAction: ActionKind | null = targetState === 'ACTION'
       ? (targetProject && !hasAsk(targetProject) ? (['reply', 'sync'] as const).find(kind => actionKinds(targetProject, 'ACTION').includes(kind)) ?? null
         : targetProject && dispatchBlockReason(targetProject) ? null : 'decide')
-      : targetState === 'GATE' && parseGate(targetProject?.gate)?.kind !== 'unknown' ? 'gate' : targetState === 'SYNC' && targetProject && !isManual(targetProject) ? 'sync' : null
+      : targetState === 'GATE' && parseGate(targetProject?.gate)?.kind !== 'unknown' ? 'gate' : targetState === 'SYNC' && targetProject && !isManual(targetProject) ? 'sync'
+      : ready ? 'continue' : null
     const focus = sel ?? list[Math.max(0, cur)]?.full ?? null
     const menuProject = menu === null ? null : s.projects.find(x => x.name === menu) ?? null
     // A review the CARD has moved past no longer holds its row; the next sweep forgets it.
@@ -2641,7 +2650,7 @@ export const register: Register = (on, options) => {
             </Box>
           ))}
           {dispatchBlockReason(p) ? <Box marginTop={1}><Text color={C.dim} wrap="wrap">{`派工鎖定：${dispatchBlockReason(p)}；${pickable ? '選好的答案會保留，' : ''}工作結束後再填入決策`}</Text></Box> : <Box marginTop={1} gap={2}>
-            <Button key={prefix + 'ask-submit'} variant="primary" label={pickable ? `✎ 填入決策：${answer}` : '✎ 填入決策'}
+            <Button key={prefix + 'ask-submit'} variant="primary" label={pickable && Object.keys(mine).length ? `✎ 填入決策：${answer}` : '✎ 填入決策'}
               onPress={() => void (async () => {
                 const filled = await $.prompt.fill({ text: `「${p.name}」決策：${answer}`, mode: 'replace' })
                 if (!filled.isFilled) { await actionNotice($, `${p.name}：輸入框無法預填，請直接輸入「${p.name}」決策：${answer}`, false); return }
@@ -3090,10 +3099,10 @@ export const register: Register = (on, options) => {
 
         {/* The one card that says what to do now: an accent edge in the colour of whoever it waits on, its action as a filled chip. */}
         <Box key="next" flexDirection="row" backgroundColor={C.bar}>
-          <Box width={1} flexShrink={0} backgroundColor={n ? (targetState ? FG[targetState] : C.amber) : C.green} />
+          <Box width={1} flexShrink={0} backgroundColor={n ? (targetState ? FG[targetState] : C.amber) : ready ? C.blue : C.green} />
           <Box flexDirection="column" flexGrow={1} flexShrink={1} paddingX={1}>
             <Box justifyContent="space-between" gap={1}>
-              <Text bold color={n ? (targetState ? FG[targetState] : C.amber) : C.green}>{n ? '▸ 下一步' : '✓ 就緒'}{targetProject && cycles[targetProject.statusPath] ? <Text color={C.teal}>{`　${chipOf(cycles[targetProject.statusPath]!)}`}</Text> : null}</Text>
+              <Text bold color={n ? (targetState ? FG[targetState] : C.amber) : ready ? C.blue : C.green}>{n ? '▸ 下一步' : ready ? '⇢ 沒有在等你，可以繼續' : '✓ 就緒'}{targetProject && cycles[targetProject.statusPath] ? <Text color={C.teal}>{`　${chipOf(cycles[targetProject.statusPath]!)}`}</Text> : null}</Text>
               {targetProject && primaryAction && (
                 <Box key="next-cta" flexShrink={0} paddingX={1} backgroundColor={targetState && BG[targetState] ? BG[targetState] : C.sel}
                   hover={{ backgroundColor: targetState === 'GATE' ? '#463755' : targetState === 'ACTION' ? '#4D412B' : '#2B3D5E' }}>
@@ -3102,7 +3111,8 @@ export const register: Register = (on, options) => {
               )}
             </Box>
             {/* Who, then what: the project name carries the weight, the step reads as body text. */}
-            <Text color={C.text} wrap="wrap">{n === null ? <Text color={C.dim}>目前沒有需要處理的項目</Text>
+            <Text color={C.text} wrap="wrap">{n === null ? ready ? [<Text key="rw" bold color={C.strong}>{ready.name}</Text>, <Text key="rs" color={C.faint}>{'　'}</Text>, <Text key="rx">{ready.next.trim()}</Text>]
+              : <Text color={C.dim}>目前沒有需要處理的項目</Text>
               : n.includes('・') ? [<Text key="nw" bold color={C.strong}>{n.slice(0, n.indexOf('・'))}</Text>, <Text key="ns" color={C.faint}>{'　'}</Text>, <Text key="nx">{n.slice(n.indexOf('・') + 1)}</Text>] : n}</Text>
           </Box>
         </Box>
@@ -3130,7 +3140,7 @@ export const register: Register = (on, options) => {
                   <Text bold color={C.strong} wrap="truncate-end">{menuProject.name}</Text>
                 </Box>
                 <Box gap={2} flexShrink={0}>
-                  {(() => { const age = list.find(r => r.full === menuProject.name)?.age; return age && age !== '—' ? <Text color={C.dim}>{`${age}前更新`}</Text> : null })()}
+                  {(() => { const at = updatedLabel(menuProject); return at ? <Text color={C.dim}>{at}</Text> : null })()}
                   <Button key="m-close" plain dimColor label="✕ 關閉" onPress={() => void update($, menuFor, () => null)} />
                 </Box>
               </Box>
@@ -3196,7 +3206,7 @@ export const register: Register = (on, options) => {
                       <Text bold color={FG[row.state]} backgroundColor={BG[row.state]}>{chipText(row.state)}</Text>
                       <Text bold color={C.strong} wrap="truncate-end">{p.name}</Text>
                     </Box>
-                    <Text color={C.dim}>{row.age && row.age !== '—' ? `${row.age}前更新` : '無狀態卡'}</Text>
+                    <Text color={C.dim}>{p.hasCard ? updatedLabel(p) ?? '' : '無狀態卡'}</Text>
                   </Box>
                   {pipes.get(p.name) && <Box marginTop={1}>{pipelineLine(pipes.get(p.name)!, PIPE, ui, 'd-pipeline-' + p.name, { noteless: true })}</Box>}
                   {projectInfo(p, 'd-info-' + p.name + '-', { state: true })}
