@@ -87,9 +87,17 @@ test('verify stores one result per project, shows output, animates and blocks re
   expect(data.processCalls[0].argv.slice(0, 7)).toEqual(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', expect.any(String)])
   await clock.advance(1000)
   await pressing
-  expect(data.state.verificationResults[STATUS]).toEqual({ command: 'node test.mjs', at: clock.now(), ok: true, exitCode: 0, lines: ['two', 'three', 'four'], truncated: false })
+  expect(data.state.verificationResults[STATUS]).toEqual({ command: 'node test.mjs', at: clock.now(), ok: true, exitCode: 0, lines: ['one', 'two', 'three', 'four'], truncated: false })
   expect(await ui.find({ type: 'Text', text: /✓ 最後驗證/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^four$/ })).toBeDefined()
+  // The last three lines show; the rest opens on request and closes again.
+  expect(await ui.find({ type: 'Text', text: /^one$/ })).toBeUndefined()
+  expect((await ui.find({ key: 'detail-Project Alpha-output-toggle' }))?.text).toBe('▸ 完整輸出（4 行）')
+  await ui.press({ key: 'detail-Project Alpha-output-toggle' })
+  expect(await ui.find({ type: 'Text', text: /^one$/ })).toBeDefined()
+  expect((await ui.find({ key: 'detail-Project Alpha-output-toggle' }))?.text).toBe('▴ 收起輸出')
+  await ui.press({ key: 'detail-Project Alpha-output-toggle' })
+  expect(await ui.find({ type: 'Text', text: /^one$/ })).toBeUndefined()
   expect(data.state.feed.some((item: any) => item.text.includes('✓ 驗證通過'))).toBe(true)
   await ui.unmount()
   const reopened = await $.ui.mount(PANE())

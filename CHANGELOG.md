@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.3
+
+- **A failed verification can be read in the pane.** `▶ 執行驗證` kept only the last three lines of output, which for a failing test run is usually the summary (`1 failed`) and not which test or why, so reading it meant rerunning the command in a terminal. It now keeps the last 30 lines. The card still shows the last three; `▸ 完整輸出（N 行）` under them opens the rest and `▴ 收起輸出` closes it. One project's output is open at a time.
+
 ## 0.32.2
 
 Fixes for a console with many projects.

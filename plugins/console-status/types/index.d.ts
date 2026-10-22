@@ -228,6 +228,8 @@ declare module 'claude-code' {
       awayDigest: AwayDigest | null
       /** The archived projects' list is open under the table. */
       archiveOpen: boolean
+      /** The project (status path) whose whole verification output is open. */
+      outputOpen: string | null
     }
   }
 }
