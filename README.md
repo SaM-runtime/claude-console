@@ -6,14 +6,20 @@
 <p align="center"><a href="docs/demo.mp4">▶ 觀看 45 秒示範影片（MP4）</a> · <a href="#版本紀錄">版本紀錄</a> · <a href="README.en.md">English</a></p>
 <p align="center"><sub>Claude Code 2.1.294 與 console-status 0.15.0 在終端機中的實際畫面（tmux 逐格擷取後轉成影片），資料來自 <code>/console demo</code>；下方字幕與滑鼠指標為後製加上。</sub></p>
 
-## 先看示範
+## 快速開始
 
-```powershell
-claude plugin marketplace add SaM-runtime/claude-console
-claude plugin install console-status@claude-console
-```
+1. **安裝。** 在 Claude Code 裡輸入這兩行，裝好就能用，不用重開。安裝時跳出的設定畫面按 Esc 關掉就好，全部用預設值。用終端機安裝見[安裝](#安裝)。
 
-在任一 Claude Code session 輸入 `/console demo`，不用登錄表也能看到完整面板；`/console refresh` 換回實際狀態。接上自己的專案請看[設定](#設定)。
+   ```text
+   /plugin marketplace add SaM-runtime/claude-console
+   /plugin install console-status@claude-console
+   ```
+
+2. **先看示範。** 輸入 `/console demo`，不用任何專案就能看到完整面板；`/console refresh` 換回自己的資料。
+3. **加入專案。** 在專案資料夾開 Claude Code，輸入 `/console add`。登錄表和狀態卡（`.console/STATUS.md`）會自動建好，每個專案做一次（見[加入專案](#加入專案)）。
+4. **開始用。** 在任何一個對話輸入 `/console` 打開面板。在專案的狀態卡寫上「下一步」（動作選單按 `o` 開檔，把 `- 下一步：無` 改成要做的事），再按 `⇢ 繼續下一步`，背景執行者就會去做。之後在等你的事會排在「下一步」卡，按 `n` 一件一件看。
+
+設定都有預設值，不改也能用；要改見[設定](#設定)。
 
 ## 功能一覽
 
@@ -43,12 +49,21 @@ claude plugin install console-status@claude-console
 
 ## 需求
 
-- Windows 或 macOS（macOS 使用內附的 POSIX `sh` 探測腳本，不需要 PowerShell）
-- Claude Code 2.1.289 以上，且支援 mod
-- 一份專案登錄表，以及每個專案各一份 STATUS 檔
+- Windows、macOS 或 Linux（macOS 與 Linux 使用內附的 POSIX `sh` 探測腳本，不需要 PowerShell）
+- Claude Code 2.1.291 以上（CI 在這一版和最新版上測試）
+- 一份專案登錄表，以及每個專案各一份 STATUS 檔：`/console add` 會自動建立，也可以照[範例](workflow/projects-scope.example.md)自己寫
 - 只有 `executor: codex` 需要 Node.js、Codex Companion 與 Codex 帳號。Windows 探測需要 PowerShell 與 Codex 桌面應用程式；macOS 探測需要 `PATH` 上有 `codex` CLI（會自動補上 Homebrew 路徑）
 
 ## 安裝
+
+在 Claude Code 裡（裝好立刻生效）：
+
+```text
+/plugin marketplace add SaM-runtime/claude-console
+/plugin install console-status@claude-console
+```
+
+或在終端機（之後開的 Claude Code 對話都會載入）：
 
 ```powershell
 claude plugin marketplace add SaM-runtime/claude-console
@@ -66,25 +81,13 @@ Marketplace 管理請參考官方 [plugin marketplace 文件](https://code.claud
 
 ## 設定
 
-`claude plugin configure` 接受每個值都是單行字串的 JSON object。未提供的設定保留原值。
+不設定也能用，每一項都有預設值（見下表）。要改的時候：
+
+- 在 Claude Code 輸入 `/plugin configure console-status@claude-console`，選要改的項目，最後選 **Save configuration**；
+- 或在終端機執行 `claude plugin configure console-status@claude-console` 看目前的值，用 `--values-stdin` 改：傳入的 JSON 每個值都是單行字串，沒寫到的設定保留原值。
 
 ```powershell
-@'
-{
-  "registryPath": "C:\\Projects\\console\\projects-scope.md",
-  "dispatchSettingsPath": "~/.claude/handoffs/dispatch.json",
-  "claudeSessionsPath": "~/.claude/handoffs/claude-sessions.json",
-  "executor": "claude",
-  "defaultModel": "",
-  "defaultEffort": "",
-  "companionScript": "",
-  "companionStateDir": "",
-  "companionStateRoots": "",
-  "modelsCachePath": "~/.codex/models_cache.json",
-  "codexFallback": "ask",
-  "codexMinQuotaPercent": "10"
-}
-'@ | claude plugin configure console-status@claude-console --values-stdin
+echo '{"registryPath": "D:/Work/projects-scope.md", "staleDays": "5"}' | claude plugin configure console-status@claude-console --values-stdin
 ```
 
 | 項目 | 用途 | 預設值 |
@@ -117,7 +120,7 @@ Marketplace 管理請參考官方 [plugin marketplace 文件](https://code.claud
 | `activation` | `auto`：只有執行過 `/console` 的 session 會跑主控台，resume 同一個 session 會自動再啟動；其他 session 只有指令護欄（見[輕量 session](#輕量-session)）。`always`：每個互動 session 都跑，但非互動 session 與主控台自己派出去的執行者 session 仍只有護欄 | `auto` |
 | `projectMode` | `auto`：在已登錄專案內開啟的 session 會切到專案模式（見[流程管線與專案模式](#流程管線與專案模式)）；`off`：一律是多專案主控台 | `auto` |
 
-Windows、macOS、Linux 都會展開開頭的 `~`。變更 plugin 設定後，請執行 `/reload-plugins` 或開新 Claude Code session。登錄表格式見 [範例](workflow/projects-scope.example.md)。
+Windows、macOS、Linux 都會展開開頭的 `~`。改完設定後執行 `/reload-plugins` 或開新的 Claude Code 對話才會生效。登錄表格式見 [範例](workflow/projects-scope.example.md)。
 
 ### 加入專案
 
@@ -127,7 +130,7 @@ Windows、macOS、Linux 都會展開開頭的 `~`。變更 plugin 設定後，�
 - 資料夾裡沒有 `.console/STATUS.md` 時，照 [STATUS 範本](workflow/STATUS-template.md) 建立一份，狀態卡寫「剛加入主控台」；已經有的就沿用；
 - 是 git repo 時，把 `.console/` 加進 `.git/info/exclude`，STATUS 不會被 commit（要納入版本控制就刪掉那一行）。
 
-那個 session 不會因此變成主控台；開著的主控台會立刻刷新，新專案馬上出現在表上。接著在狀態卡的「下一步」寫上第一件事，就能按 `⇢ 繼續下一步`。從別的資料夾加入時要注意：Claude Code 要先在那個資料夾開過一次並選「信任」，才能在那裡跑背景工作。
+那個對話不會因此變成主控台；開著的主控台會立刻刷新，新專案馬上出現在表上。接著把狀態卡的 `- 下一步：無` 改成第一件要做的事（動作選單按 `o` 開檔），就能按 `⇢ 繼續下一步`。從別的資料夾加入時要注意：Claude Code 要先在那個資料夾開過一次並選「信任」，才能在那裡跑背景工作。
 
 ### 封存與置頂
 
@@ -291,7 +294,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 **同步進度。** 同步時，專案的「同步」欄會顯示步驟 `● 派工 ─ ◉ 執行 ─ ○ 寫回 STATUS`（● 完成、◉ 進行中、○ 未到、✕ 停在這一步），下一行是執行者、目前階段與經過時間；橫帶顯示 `↻ 同步：執行中 1 分 20 秒`。CARD 的「更新」有變才算完成；同步結束卻沒改到 CARD 時會直接標出 `✕ 寫回 STATUS`，不會默默停在待同步。結果在畫面上保留五分鐘，也會跳一則提示。有工作或同步在跑時，主控台每 20 秒更新一次（平常每分鐘）。
 
-選單開著時，一個鍵就能執行目前可用的動作：`v` 驗證、`s` 同步、`c` 繼續（仍需第二次確認）、`r` 回覆執行者、`d` 決策、`g` 審核關卡、`o` 開啟 STATUS.md、`p` 開啟 PR。選單底部只列出該專案可用的鍵；不可用的動作按了不會有反應。
+選單開著時，一個鍵就能執行目前可用的動作：`v` 驗證、`s` 同步、`c` 繼續（`confirmContinue: on` 時要再按一次）、`r` 回覆執行者或重試、`d` 決策、`g` 審核關卡、`a` 自動接力、`x` 停止工作、`t` 接手對話、`o` 開啟 STATUS.md、`p` 開啟 PR、`f` Git 檔案、`b` 分支圖、`1`–`9` 選決策選項。選單底部只列出該專案可用的鍵；不可用的動作按了不會有反應。面板上隨時可用：`↑` `↓`（或 `k` `j`）移動、Enter 選取、`m` 開關動作選單、`n` 下一件在等你的事、Esc 關閉選單。
 
 **執行者區塊。** 展開的專案卡片（動作選單，或「↧ 各專案詳細」裡聚焦的專案）多一區「執行者」，內容與執行者摘要同樣四行。卡片展開時讀取（讀完前顯示 `執行者：讀取中…`），之後 transcript 有變才重讀；沒展開的卡片不讀檔。
 
@@ -390,7 +393,7 @@ Claude 代為執行的工作在任務清單標示 `codex→claude`。只有全�
 
 `activation: auto`（預設）時，新的 session 是輕量的：只有指令護欄和 `/console` 指令。它不會執行 git、`gh`、`claude agents` 或 Codex 探測，不顯示橫帶，不在 system prompt 或提示中加入任何內容，也不跳快取或更新提示。臨時開的小 session、`claude -p` 和背景執行者都會維持這樣。
 
-在 session 中第一次使用 `/console` 指令（`version`、`update`、`off` 除外）時，主控台才會在該 session 啟動，並記住這個 session：之後 resume 或重新載入外掛都會自動再啟動，不用再輸入。`/console off` 讓該 session 回到輕量狀態。專案模式也要等該 session 用過 `/console` 才會啟動。把 `activation` 設為 `always` 可回到 0.6.0 以前每個 session 都跑主控台的行為；非互動 session 和主控台自己派出去的執行者（`claude-sessions.json` 記錄的 session）仍維持輕量。
+在 session 中第一次使用 `/console` 指令（`add`、`version`、`update`、`off` 除外）時，主控台才會在該 session 啟動，並記住這個 session：之後 resume 或重新載入外掛都會自動再啟動，不用再輸入。`/console off` 讓該 session 回到輕量狀態。專案模式也要等該 session 用過 `/console` 才會啟動。把 `activation` 設為 `always` 可回到 0.6.0 以前每個 session 都跑主控台的行為；非互動 session 和主控台自己派出去的執行者（`claude-sessions.json` 記錄的 session）仍維持輕量。
 
 ## 流程管線與專案模式
 
@@ -493,7 +496,7 @@ claude plugin install paste-preview@paste-preview
 | 版本 | 重點 |
 | --- | --- |
 | 0.31 | 專案多了也好管：`⊟ 封存` 不常碰的專案、`▴ 置頂` 常用的專案；離開一陣子回來，先列出這段時間發生的事（`awayMinutes`）；選取專案時附上的狀態卡內容標成參考資料 |
-| 0.30 | 按 `n` 依序跳到每一件在等你的事，`/console inbox` 用文字列出；`/console add` 一個指令加入新專案；好幾天沒動的專案標出「久未動」並優先建議繼續（`staleDays`） |
+| 0.30 | 按 `n` 依序跳到每一件在等你的事，`/console inbox` 用文字列出；`/console add` 一個指令加入新專案；好幾天沒動的專案標出「久未動」並優先建議繼續（`staleDays`）；0.30.1 還沒有登錄表時直接告訴你用 `/console add`，`/console` 指令說明先列常用的，README 改成四步快速開始 |
 | 0.29 | 自動接力在狀態卡有 `驗證` 時，每跳之間先跑驗證，沒過就停；額度數字太久沒更新（超過 45 分鐘）時自動接力停下，不再拿舊數字當煞車；用量表標出額度是多久前讀到的 |
 | 0.28 | 設定 `confirmContinue: off` 後，繼續與重試按一次就派；Codex 專案的執行者摘要補上最後一句；快取倒數改成中文單位（`快取 4分`）；多個主控台同時寫入不再弄丟派工紀錄；CI 多跑最新版 Claude Code |
 | 0.27 | 執行者出錯（登入失效、額度用完）不再當成「在等你回覆」，會寫出原因並提供 `↻ 重試`；新增 `■ 停止工作`（`x`）與 `↗ 接手對話`（`t`，Windows Terminal 直接開新分頁） |
