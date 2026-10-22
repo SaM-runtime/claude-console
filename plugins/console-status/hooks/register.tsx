@@ -120,6 +120,15 @@ const digestLoads = new Set<string>()
 const lastDigests = new Map<string, string[]>()
 /** Why an asking Claude job stopped (an API error in words, or null for a real question), per job and finish time. */
 const jobErrors = new Map<string, string | null>()
+/** When this console last had an API response, which carries Claude's rate-limit windows. */
+let limitsReadAt = 0
+/** Windows read longer ago than this say how old they are in the usage table. */
+const LIMITS_OLD_MS = 15 * 60_000
+/** When Claude's windows were read: the last response here, or after a reload the transcript's last one (the cache clock's seed). */
+async function limitsTime($: any): Promise<number> {
+  const clock = await Promise.resolve().then(() => read($, cacheClock)).catch(() => null) as CacheClock | null
+  return Math.max(limitsReadAt, clock?.at ?? 0)
+}
 /** When this plugin lifetime began (its first refresh); a reload starts a new one. */
 let lifetimeStart = 0
 /** Finished jobs auto-sync already dispatched a sync for (in `$.store`, so once per job across sessions). */
@@ -720,6 +729,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
     const companionWarning = [companion?.warning, formatWarning].filter(Boolean).join('；')
     const selfId = await io.session.id().catch(() => null) as string | null
     const projectRoots = registryRows.map(({ row, root }) => ({ root, name: row.name }))
+    const limitsAt = await guarded(() => limitsTime($))
     const cur: Snapshot = {
       at: now, executor: settings.executor, projects, blocked: relevantBlocked(agents, selfId, projectRoots, home),
       waiting: waitingNames(agents, selfId, projectRoots, home), codex: codexInUse ? relevantCodex(codex, bases) : '',
@@ -729,6 +739,7 @@ async function refresh($: any, options: PluginOptions, force = false) {
       ...(typeof usage?.cost?.usd === 'number' ? { costUsd: usage.cost.usd } : {}),
       codexQuota: parseCodexQuota(codexQuotaText, now),
       limits: claudeLimits(usage?.rateLimits, now),
+      ...(limitsAt ? { limitsAt } : {}),
     }
     if (executorSignature((await readDispatch(io, config)).settings) !== refreshingExecutor) { owner.queued = true; return }
     await publishDisplay(async () => {
@@ -1383,7 +1394,7 @@ async function toggleCycle($: any, options: PluginOptions, p: Project, want?: bo
   const s = await read($, snapshot)
   const state = s ? rows(s).find(r => r.full === p.name)?.state : undefined
   const quotaStop = cycleQuotaStop((options as any).cycleQuotaStop)
-  const brake = quotaBrake(s?.limits, quotaStop, await $.clock.now())
+  const brake = quotaBrake(s?.limits, quotaStop, await $.clock.now(), s?.limitsAt)
   const refused = isManual(p) ? '手動交接的專案不接力' : !p.hasCard ? '找不到狀態卡' : state === 'ACTION' ? '先處理等你決定／回覆的事' : brake ?? ''
   if (refused) { $.ui.toast(`${name}：${refused}`); return `${name}：${refused}` }
   const max = cycleMaxHops((options as any).cycleMaxHops)
@@ -1392,7 +1403,10 @@ async function toggleCycle($: any, options: PluginOptions, p: Project, want?: bo
   // The brake reads the 5-hour window from this console's own responses; with none yet it has nothing to stop on.
   const blind = quotaStop !== null && !(s?.limits ?? []).some((l: { kind: string }) => parseLimitKind(l.kind)?.window === 'five_hour')
   const brakeText = quotaStop === null ? '' : blind ? `，額度煞車目前讀不到 Claude 5 小時額度（主控台回應過一次才有），先只靠跳數上限` : `，5 小時額度到 ${quotaStop}% 就停`
-  await cycleNotice($, `⟳ ${name} 開始自動接力（最多 ${max} 跳${brakeText}；停在決策、執行者提問、release 關卡與失敗）`, blind ? 'amber' : 'teal', true)
+  const verify = p.verify.trim()
+  const verifyText = !verify ? '' : verifyTrusted(await loadTrust($), p.statusPath, p.verify) ? `；每跳之間先跑驗證（${verify}），沒過就停`
+    : '；驗證指令還沒確認過，第 2 跳前會停下，先按一次 ▶ 執行驗證'
+  await cycleNotice($, `⟳ ${name} 開始自動接力（最多 ${max} 跳${brakeText}${verifyText}；停在決策、執行者提問、release 關卡與失敗）`, blind ? 'amber' : 'teal', true)
   return `${name}：開始自動接力，最多 ${max} 跳`
 }
 
@@ -1423,6 +1437,8 @@ async function autoCycle($: any, options: PluginOptions) {
   const sessions = await activeSessions($)
   const list = rows(s)
   const quotaStop = cycleQuotaStop((options as any).cycleQuotaStop)
+  const results = await read($, verificationResults)
+  const trusted = await loadTrust($)
   const setWaiting = async (path: string, waiting: string) => {
     if (runs[path]?.waiting !== waiting) await saveCycle($, path, run => run && mine(run, me) ? { ...run, waiting } : run)
   }
@@ -1452,13 +1468,27 @@ async function autoCycle($: any, options: PluginOptions) {
     const track = tracks[path]
     if (track && !isSyncEnded(track.stage)) { await setWaiting(path, '等同步'); continue }
     const state = list.find(r => r.full === p.name)?.state ?? 'NOCARD'
-    const plan = cyclePlan(p, state, run, now, { autoSync: autoSyncMode((options as any).autoSync), gatePending, limits: s.limits, quotaStop, ...(track ? { syncStage: track.stage } : {}) })
+    const verification = p.verify.trim() ? { result: results[path], trusted: verifyTrusted(trusted, path, p.verify) } : undefined
+    const plan = cyclePlan(p, state, run, now, {
+      autoSync: autoSyncMode((options as any).autoSync), gatePending, limits: s.limits, quotaStop,
+      ...(s.limitsAt ? { limitsAt: s.limitsAt } : {}), ...(verification ? { verification } : {}), ...(track ? { syncStage: track.stage } : {}),
+    })
     if ('stop' in plan) {
       await drop(path)
       await cycleNotice($, `⟳ ${name} 接力${plan.done ? '完成' : '停止'}：${plan.stop}（第 ${run.hops} 跳）`, plan.done ? 'green' : 'amber', true)
       continue
     }
     if ('wait' in plan) { await setWaiting(path, plan.wait); continue }
+    if (plan.action === 'verify') {
+      // The CARD's 驗證 before the next step: no model, up to five minutes, so it runs off this refresh.
+      // Its result is the next refresh's to read; it is not a hop and does not change what the last hop saw.
+      if (verifyHops.has(path)) continue
+      verifyHops.add(path)
+      await setWaiting(path, '驗證中')
+      await cycleNotice($, `⟳ ${name} 下一步之前先驗證：${p.verify.trim()}`, 'teal', false)
+      $.clock.after(0, () => void triggerAction($, options, path, 'verify', { auto: true }).finally(() => verifyHops.delete(path)))
+      continue
+    }
     const kind = plan.action
     // Another console's dispatch, as 0.20.1 does it: a continue or a gate waits out its two-minute claim (a press
     // would be refused just the same); a sync is the dispatching console's to send, as auto-sync does it.
@@ -1480,6 +1510,8 @@ async function autoCycle($: any, options: PluginOptions) {
 type Hop = { path: string; name: string; kind: 'continue' | 'gate' | 'sync'; rev: number | null; next: string; gate: string; label: string; detail: string }
 /** Gate hops scheduled and not yet sent, so a second refresh in between does not schedule another. */
 const gateHops = new Set<string>()
+/** Verifications a cycle started and that have not finished, likewise. */
+const verifyHops = new Set<string>()
 
 /** One hop: the existing action, then whether it went out; a hop that did not go out stops the cycle, it is not retried. */
 async function sendHop($: any, options: PluginOptions, hop: Hop) {
@@ -1996,6 +2028,7 @@ export const register: Register = (on, options) => {
     await update($, isTurnRunning, () => true)
     const result = yield* next(e)
     const u = result?.usage
+    if (u) limitsReadAt = await $.clock.now()
     if (u) {
       const tokens = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens + u.output_tokens
       const prev = await read($, cacheClock)
@@ -3393,7 +3426,10 @@ export const register: Register = (on, options) => {
               if (ctx !== null) out.push(meterRow('ctx', tool(), { id: 'ctx', label: '上下文', used: ctx, hint: ctx >= ROTATE_PERCENT ? '建議換新主控台' : '' }))
               for (const l of limits) {
                 const pace = s.demo ? null : limitPace(l.kind, l.percent, l.resetsAt, now)
-                out.push(meterRow('lim' + l.kind, tool(), { id: 'limit_' + l.kind, label: limitName(l.kind), used: l.percent, hint: '', note: resetText(l.resetsAt, now, width < 64), pace: pace && !pace.lasts ? pace : null }))
+                // Numbers the console read a while ago (it has not answered since) say how old they are.
+                const old = !s.demo && s.limitsAt && now - s.limitsAt > LIMITS_OLD_MS ? `${agoText(s.limitsAt, now)}讀到` : ''
+                const note = [resetText(l.resetsAt, now, width < 64), old].filter(Boolean).join('・')
+                out.push(meterRow('lim' + l.kind, tool(), { id: 'limit_' + l.kind, label: limitName(l.kind), used: l.percent, hint: '', note, pace: pace && !pace.lasts ? pace : null }))
               }
               if (paneCache) {
                 const warn = paneCache.view.warm && paneCache.view.leftMs <= CACHE_WARN_MS

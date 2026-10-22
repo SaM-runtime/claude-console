@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { AUTO_SYNC_GRACE_MS } from '../hooks/sync'
-import { CYCLE_DEFAULT_HOPS, CYCLE_DEFAULT_QUOTA_STOP, cardRev, cycleMaxHops, cyclePlan, cycleQuotaStop, newCycleRun, quotaBrake } from '../hooks/cycle'
+import { CYCLE_DEFAULT_HOPS, CYCLE_DEFAULT_QUOTA_STOP, QUOTA_STALE_MS, cardRev, cycleMaxHops, cyclePlan, cycleQuotaStop, newCycleRun, quotaBrake } from '../hooks/cycle'
 import type { CycleRun } from '../hooks/cycle'
 import { claudeLimits } from '../hooks/logic'
 
@@ -45,6 +45,39 @@ test('(a) cyclePlan: every way a project can be, and what one hop does with it',
   for (const [name, p, state, r, o, expected] of cases) {
     expect([name, cyclePlan(p, state as any, r, NOW, opts(o))]).toEqual([name, expected])
   }
+})
+
+test('(a2) with a 驗證 in the CARD, work this cycle sent is verified before the next step goes out', () => {
+  const after = run({ hops: 1, lastAt: NOW - 5 * 60_000, lastNext: '.task/before.md', lastRev: 6, lastKind: 'continue' })
+  const verified = (ok: boolean, at = NOW - 60_000, exitCode: number | null = ok ? 0 : 1) => ({ command: 'npm test', at, ok, exitCode, lines: [], truncated: false })
+  const p = project({ verify: 'npm test' })
+  const cases: [string, any, CycleRun, Record<string, unknown>, unknown][] = [
+    ['the first hop goes without a check', p, run(), { verification: { trusted: true } }, { action: 'continue' }],
+    ['after a hop, a trusted 驗證 runs first', p, after, { verification: { trusted: true } }, { action: 'verify' }],
+    ['a pass from before the last hop does not count', p, after, { verification: { trusted: true, result: verified(true, NOW - 10 * 60_000) } }, { action: 'verify' }],
+    ['a pass since the last hop lets the step go', p, after, { verification: { trusted: true, result: verified(true) } }, { action: 'continue' }],
+    ['a failure since the last hop stops', p, after, { verification: { trusted: true, result: verified(false) } }, { stop: '驗證沒過（結束碼 1）' }],
+    ['a check that could not run stops', p, after, { verification: { trusted: true, result: verified(false, NOW - 60_000, null) } }, { stop: '驗證沒過（逾時或無法執行）' }],
+    ['a command nobody confirmed is not run on its own', p, after, { verification: { trusted: false } }, { stop: '驗證指令還沒確認過：先按一次 ▶ 執行驗證，之後每跳之間會自己驗證' }],
+    ['a result of another command does not count', p, after, { verification: { trusted: true, result: { ...verified(true), command: 'old' } } }, { action: 'verify' }],
+    ['no 驗證, no check, as before', project(), after, {}, { action: 'continue' }],
+    ['a gate is not held for it', project({ verify: 'npm test', gate: 'review：x' }), after, { verification: { trusted: true } }, { action: 'gate' }],
+  ]
+  for (const [name, proj, r, o, expected] of cases) {
+    const state = proj.gate !== '無' ? 'GATE' : 'IDLE'
+    expect([name, cyclePlan(proj, state as any, r, NOW, opts(o))]).toEqual([name, expected])
+  }
+})
+
+test('(a3) Claude windows the console read too long ago stop a cycle instead of braking on old numbers', () => {
+  const limits = [{ kind: 'five_hour', percent: 20, resetsAt: iso(NOW + 3_600_000) }]
+  expect(quotaBrake(limits, 70, NOW, NOW - 10 * 60_000)).toBeNull()
+  expect(quotaBrake(limits, 70, NOW, NOW - QUOTA_STALE_MS - 60_000)).toBe('額度數字已 46 分沒更新，無法確認還剩多少：在主控台送一則訊息就會更新，再按 ⟳')
+  // Unknown read time, no windows at all, or the brake off: as before.
+  expect(quotaBrake(limits, 70, NOW)).toBeNull()
+  expect(quotaBrake([], 70, NOW, NOW - 3 * 3_600_000)).toBeNull()
+  expect(quotaBrake(limits, null, NOW, NOW - 3 * 3_600_000)).toBeNull()
+  expect(cyclePlan(project(), 'IDLE', run(), NOW, opts({ limits, limitsAt: NOW - QUOTA_STALE_MS - 60_000 }))).toEqual({ stop: '額度數字已 46 分沒更新，無法確認還剩多少：在主控台送一則訊息就會更新，再按 ⟳' })
 })
 
 test('(b) cycleMaxHops: blank and junk fall back to 6; out of range is clamped to 1–20', () => {

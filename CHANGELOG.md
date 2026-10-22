@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.29.0
+
+- **⟳ 自動接力 checks the work between hops.** For a project whose CARD has `驗證`, a cycle now runs that command before every continue after its first hop (in the project root, no model, as `▶ 執行驗證` does) and sends the next step only on a pass newer than the last hop. A failure stops the cycle with `驗證沒過（結束碼 1）`, so a broken step is not built on for six more hops. A command not yet confirmed in this console is never run on its own: the cycle stops before its second hop with `驗證指令還沒確認過：先按一次 ▶ 執行驗證…`, and the start line says which of the two it will do. A project without `驗證` cycles as before.
+- **Old quota numbers stop a cycle instead of braking on them.** Claude's 5-hour and weekly windows come only with the console's own responses, and while hops run in the background the console may answer nothing for hours, so the quota brake read numbers from before the executors spent anything. Numbers more than 45 minutes old now refuse `⟳` and stop a running cycle with `額度數字已 N 分沒更新，無法確認還剩多少：在主控台送一則訊息就會更新，再按 ⟳`. `cycleQuotaStop: off` still turns the brake off.
+- The usage table says how old Claude's windows are once they are more than 15 minutes old (`…・40 分鐘前讀到`), so a calm percent from an hour ago no longer looks current.
+
 ## 0.28.0
 
 - **`confirmContinue`.** `⇢ 繼續下一步` and `↻ 重試` dispatch only on a second press within six seconds, against a stray click. With `confirmContinue: off` one press dispatches (button, key or the next-step card). The default `on` keeps the second press.

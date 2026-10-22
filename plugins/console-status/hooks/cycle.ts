@@ -1,6 +1,6 @@
 // ⟳ 自動接力: one press runs a project's cycle (continue → sync → review → gate → …) by pressing the existing
 // buttons in turn, and stops wherever a person is needed. Pure planning, no I/O; register.tsx runs the loop.
-import type { CycleRun, Project } from '../types'
+import type { CycleRun, Project, VerificationResult } from '../types'
 import type { State } from './logic'
 import { hasAsk, limitName, parseGate, parseLimitKind, saysNone } from './logic'
 import { actionKinds, dispatchBlockReason, isManual } from './actions'
@@ -39,8 +39,13 @@ export type UsageLimit = { kind: string; percent: number; resetsAt?: string }
  * limit, or any window that at its pace runs out within the hour. Every hop spends Claude quota, a gate hop
  * the console's own and a Codex hop that falls back to Claude; Codex's own quota keeps `codexMinQuotaPercent`.
  */
-export function quotaBrake(limits: UsageLimit[] | undefined, stopAt: number | null, now: number): string | null {
+export function quotaBrake(limits: UsageLimit[] | undefined, stopAt: number | null, now: number, readAt?: number): string | null {
   if (stopAt === null) return null
+  // The windows come with the console's own responses; while hops run in the background it may answer
+  // nothing for a long time, and numbers that old cannot show what the executors have used since.
+  if (limits?.length && readAt !== undefined && now - readAt > QUOTA_STALE_MS) {
+    return `額度數字已 ${Math.floor((now - readAt) / 60_000)} 分沒更新，無法確認還剩多少：在主控台送一則訊息就會更新，再按 ⟳`
+  }
   for (const limit of limits ?? []) {
     if (parseLimitKind(limit.kind)?.window === 'five_hour' && limit.percent >= stopAt) {
       return `額度煞車：${limitName(limit.kind)}額度已用 ${Math.round(limit.percent)}%（門檻 ${stopAt}%）`
@@ -52,6 +57,9 @@ export function quotaBrake(limits: UsageLimit[] | undefined, stopAt: number | nu
   }
   return null
 }
+
+/** Claude's windows older than this cannot brake a cycle: it stops instead of guessing. */
+export const QUOTA_STALE_MS = 45 * 60_000
 
 export type { CycleRun }
 
@@ -76,7 +84,7 @@ export function storedCycles(value: unknown): Record<string, CycleRun> {
   return out
 }
 
-export type CyclePlan = { action: 'continue' | 'gate' | 'sync' } | { wait: string } | { stop: string; done?: boolean }
+export type CyclePlan = { action: 'continue' | 'gate' | 'sync' | 'verify' } | { wait: string } | { stop: string; done?: boolean }
 
 export type CycleOptions = {
   autoSync: 'on' | 'off'
@@ -88,6 +96,10 @@ export type CycleOptions = {
   /** Claude's rate-limit windows as the usage table reads them, and the 5-hour percent that stops a cycle (null: off). */
   limits?: UsageLimit[]
   quotaStop?: number | null
+  /** When the console last read those windows (its last API response); unknown leaves the age unchecked. */
+  limitsAt?: number
+  /** The CARD's 驗證: its latest result here and whether this console may run it (the person confirmed it once). */
+  verification?: { result?: VerificationResult; trusted: boolean }
 }
 
 export const newCycleRun = (now: number, max: number, owner?: string): CycleRun => ({ startedAt: now, hops: 0, max, lastRev: null, lastNext: '', lastKind: '', lastAt: 0, ...(owner !== undefined ? { owner } : {}) })
@@ -149,8 +161,18 @@ export function cyclePlan(project: Project, state: State, run: CycleRun, now: nu
   // Like auto-sync, a hop sent a moment ago leaves room for the person's own continue or reply.
   if (run.lastAt && now - run.lastAt < AUTO_SYNC_GRACE_MS) return { wait: '稍候' }
   if (run.hops >= run.max) return { stop: `已達上限 ${run.max} 跳` }
-  const brake = quotaBrake(options.limits, options.quotaStop === undefined ? CYCLE_DEFAULT_QUOTA_STOP : options.quotaStop, now)
+  const brake = quotaBrake(options.limits, options.quotaStop === undefined ? CYCLE_DEFAULT_QUOTA_STOP : options.quotaStop, now, options.limitsAt)
   if (brake) return { stop: brake }
+  // Work this cycle sent is checked with the CARD's 驗證 before the next step goes out: a pass newer than the
+  // last hop lets it go, a failure stops, and a command nobody confirmed here is not run on its own.
+  const command = project.verify.trim()
+  if (action === 'continue' && run.hops > 0 && command && options.verification) {
+    const { result, trusted } = options.verification
+    const fresh = result && result.command === command && result.at > run.lastAt ? result : undefined
+    if (!fresh && !trusted) return { stop: '驗證指令還沒確認過：先按一次 ▶ 執行驗證，之後每跳之間會自己驗證' }
+    if (!fresh) return { action: 'verify' }
+    if (!fresh.ok) return { stop: `驗證沒過${fresh.exitCode === null ? '（逾時或無法執行）' : `（結束碼 ${fresh.exitCode}）`}` }
+  }
   return { action }
 }
 

@@ -28,7 +28,7 @@ function harness(on: any, first: { next: string; gate?: string; ask?: string }, 
     'C:/Users/example/.claude/handoffs/claude-sessions.json': '{"version":1,"roots":{}}',
   }
   const state = { jobs }
-  const h = { clock, files, state, launches: [] as string[][], toasts: [] as string[], submitted: [] as any[], rev: 1, store: {} as Record<string, unknown>, feed: [] as string[] }
+  const h = { clock, files, state, launches: [] as string[][], toasts: [] as string[], submitted: [] as any[], rev: 1, store: {} as Record<string, unknown>, feed: [] as string[], verifies: 0, verifyExit: 0 }
   on('fs.stat', () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) })
   on('fs.read', (_: any, e: any) => {
     const path = fixturePath(e.path)
@@ -38,6 +38,11 @@ function harness(on: any, first: { next: string; gate?: string; ask?: string }, 
   on('fs.list', (_: any, e: any) => ({ value: fixturePath(e.path) === 'D:/State' ? [{ name: 'Project Alpha-hash', kind: 'dir' }] : [] }))
   on('process.run', (_: any, e: any) => {
     let stdout = e.argv[0] === 'claude' ? '[]' : 'OK codex=0.0.0-test'
+    // The CARD's 驗證 (`npm test`), run through the shell.
+    if (e.argv.some((arg: string) => String(arg).includes('npm test'))) {
+      h.verifies++
+      return { value: { exitCode: h.verifyExit, stdout: h.verifyExit ? '1 failing' : 'all passed', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (e.argv[0] === 'node' && e.argv.includes('task')) {
       h.launches.push([...e.argv])
       const id = `task-${h.launches.length}`
@@ -356,4 +361,56 @@ test('with nothing waiting on you, the next-step card offers the project it woul
   await ui.press({ key: 'next-action' })
   expect(h.launches.length).toBe(1)
   await ui.unmount()
+})
+
+/** The CARD with a 驗證 line, as an executor keeps it. */
+const withVerify = (text: string) => text.replace('- 關卡：', '- 驗證：`npm test`\n- 關卡：')
+
+test('(l) with a 驗證 the cycle checks the work before the next step, and a failing check stops it', OPTIONS, async ($, on) => {
+  const h = harness(on, { next: '.task/a.md' })
+  h.files[STATUS] = withVerify(h.files[STATUS]!)
+  // The person ran it once with ▶ 執行驗證: the command is trusted here.
+  h.store.trustedVerify = { [STATUS]: 'npm test' }
+  await refresh($)
+  expect((await arm($)).text).toMatch(/開始自動接力/)
+  expect(h.feed.some(text => text.includes('每跳之間先跑驗證（npm test），沒過就停'))).toBe(true)
+  await refresh($)
+  // The first hop goes as before.
+  expect(h.launches.length).toBe(1)
+  expect(h.verifies).toBe(0)
+  finish(h, 'task-1', '.task/b.md')
+  h.files[STATUS] = withVerify(h.files[STATUS]!)
+  await later(h, $)
+  // Before the second step the check runs (no model); the step goes out once it has passed.
+  expect(h.verifies).toBe(1)
+  expect(h.launches.length).toBe(2)
+  expect(h.feed.slice(0, 4).reverse()).toEqual([
+    '⟳ Project 下一步之前先驗證：npm test',
+    'Project：✓ 驗證通過（結束碼 0）',
+    'Project：codex 已接受繼續下一步，等待執行結果',
+    '⟳ Project 第 2 跳：⇢ 繼續下一步（.task/b.md）',
+  ])
+  // This time the check fails: the cycle stops and the third step is not sent.
+  finish(h, 'task-2', '.task/c.md')
+  h.files[STATUS] = withVerify(h.files[STATUS]!)
+  h.verifyExit = 1
+  await later(h, $)
+  expect(h.verifies).toBe(2)
+  expect(h.launches.length).toBe(2)
+  expect(h.feed.some(text => text === '⟳ Project 接力停止：驗證沒過（結束碼 1）（第 2 跳）')).toBe(true)
+})
+
+test('(l) a 驗證 nobody confirmed here is not run by the cycle: it stops before the second step and says how to go on', OPTIONS, async ($, on) => {
+  const h = harness(on, { next: '.task/a.md' })
+  h.files[STATUS] = withVerify(h.files[STATUS]!)
+  await refresh($)
+  await arm($)
+  expect(h.feed.some(text => text.includes('驗證指令還沒確認過，第 2 跳前會停下'))).toBe(true)
+  await refresh($)
+  finish(h, 'task-1', '.task/b.md')
+  h.files[STATUS] = withVerify(h.files[STATUS]!)
+  await later(h, $)
+  expect(h.verifies).toBe(0)
+  expect(h.launches.length).toBe(1)
+  expect(h.feed.some(text => text === '⟳ Project 接力停止：驗證指令還沒確認過：先按一次 ▶ 執行驗證，之後每跳之間會自己驗證（第 1 跳）')).toBe(true)
 })
