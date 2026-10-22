@@ -10,7 +10,7 @@ export const ROTATE_PERCENT = 50
 const NONE = new Set(['', '無', '沒有', '-', '未知'])
 
 export type RegistryRow = { name: string; statusPath: string; executor?: ProjectExecutor }
-export type Job = { id: string; kind?: 'sync' | 'continue'; fallbackFrom?: 'codex'; fallbackReason?: string; unmanagedSessionId?: string; warning?: string; executor?: 'claude' | 'codex'; nativeId?: string; sessionId?: string; jobClass?: string; status?: string; summary?: string; createdAt?: string; updatedAt?: string; completedAt?: string; startedAt?: string; phase?: string; logFile?: string; /** The code the console gave this job in its prompt, to write in the CARD. */ tag?: string; request?: { prompt?: string; effort?: string; model?: string } }
+export type Job = { id: string; kind?: 'sync' | 'continue'; fallbackFrom?: 'codex'; fallbackReason?: string; unmanagedSessionId?: string; warning?: string; executor?: 'claude' | 'codex'; nativeId?: string; sessionId?: string; jobClass?: string; status?: string; summary?: string; createdAt?: string; updatedAt?: string; completedAt?: string; startedAt?: string; phase?: string; logFile?: string; /** The code the console gave this job in its prompt, to write in the CARD. */ tag?: string; /** An API error that ended its last turn, in words (set by the refresh). */ error?: string; request?: { prompt?: string; effort?: string; model?: string } }
 export type Agent = { name?: string; kind?: string; status?: string; state?: string; waitingFor?: string; sessionId?: string; cwd?: string; pid?: number | null; startedAt?: number | string }
 
 /**
@@ -143,7 +143,7 @@ export function jobFlags(jobs: Job[], cardMs: number | null, named = '', running
   for (const j of jobs) {
     const summary = (j.summary ?? '').slice(0, 60)
     if (isActiveJob(j)) {
-      flags.push({ kind: 'running', id: j.id, executor: j.executor, status: j.status ?? 'unknown', summary, startedAt: j.startedAt ?? j.createdAt, phase: j.phase, logFile: j.logFile })
+      flags.push({ kind: 'running', id: j.id, executor: j.executor, status: j.status ?? 'unknown', summary, startedAt: j.startedAt ?? j.createdAt, phase: j.phase, logFile: j.logFile, ...(j.nativeId ? { nativeId: j.nativeId } : {}) })
       continue
     }
     if (j.jobClass !== 'task') continue
@@ -154,7 +154,7 @@ export function jobFlags(jobs: Job[], cardMs: number | null, named = '', running
     const t = Date.parse(j.completedAt ?? j.createdAt ?? '')
     // A Claude job whose turn ended on a question to the user (the agent went idle while blocked).
     const asks = j.status === 'completed' && (j.phase ?? '').startsWith('idle: 等你回覆')
-    if (cardMs === null || stillRunning || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary, ...(j.kind ? { task: j.kind } : {}), ...(j.completedAt ? { completedAt: j.completedAt } : {}), ...(asks ? { asks: true, ...(j.sessionId ? { sessionId: j.sessionId } : {}) } : {}) })
+    if (cardMs === null || stillRunning || (!Number.isNaN(t) && t > cardMs)) flags.push({ kind: 'newer', id: j.id, executor: j.executor, status: j.status ?? '?', summary, ...(j.kind ? { task: j.kind } : {}), ...(j.completedAt ? { completedAt: j.completedAt } : {}), ...(asks ? { asks: true, ...(j.sessionId ? { sessionId: j.sessionId } : {}), ...(j.nativeId ? { nativeId: j.nativeId } : {}), ...(j.error ? { error: j.error } : {}) } : {}) })
   }
   return flags
 }
@@ -298,7 +298,7 @@ export function diffToasts(prev: Snapshot | null, cur: Snapshot): string[] {
   const prevNewer = new Set(prev.projects.flatMap(p => p.jobs.filter(j => j.kind === 'newer').map(j => j.id)))
   for (const p of cur.projects) {
     for (const j of p.jobs) if (j.kind === 'newer' && !prevNewer.has(j.id)) {
-      const result = jobResult(j.status, j.asks)
+      const result = jobResult(j.status, j.asks, j.error)
       out.push(`${p.name}：執行者${result.label}${result.followup ? `，${result.followup}` : ''}`)
     }
   }
@@ -614,6 +614,9 @@ export function rows(s: Snapshot): Row[] {
     if (running.length) return { state: 'RUNNING', project: name, item: (running.length > 1 ? `${running.length} 個任務・` : '') + runLine(running[0], s.at), age, full }
     // A manual project has no sync button, so the way on is only taking over the session.
     if (p.jobs.some(j => j.kind === 'newer' && j.asks)) {
+      // An API error ended the turn: nothing was asked, the way on is fixing the cause and retrying.
+      const failed = p.jobs.find(j => j.kind === 'newer' && j.asks && j.error)
+      if (failed) return { state: 'ACTION', project: name, item: shortAsk(`執行者出錯：${failed.error}`, 30), age, full }
       // A Claude session that asked can be answered from the console (↩ 回覆); a manual project is only taken over.
       const item = p.executor === 'manual' ? '執行者在等你回覆：切到它的對話接手'
         : p.jobs.some(j => j.kind === 'newer' && j.asks && j.sessionId) ? '執行者在等你回覆：↩ 回覆或同步' : '執行者在等你回覆：切到它的對話接手，或同步'
@@ -746,7 +749,9 @@ export function selectionContext(snap: Snapshot | null, full: string | null): st
 export type Limit = { kind: string; percent: number }
 export type Event = { at: number; text: string; tone: 'amber' | 'teal' | 'blue' | 'red' | 'green' }
 
-function jobResult(status: string, asks = false): { label: string; followup: string; event: string; tone: 'blue' | 'red' | 'amber' } {
+export function jobResult(status: string, asks = false, error = ''): { label: string; followup: string; event: string; tone: 'blue' | 'red' | 'amber' } {
+  // An API error ended its turn: say why, nothing was asked.
+  if (status === 'completed' && asks && error) return { label: `出錯：${error}`, followup: '', event: `出錯：${error}`, tone: 'red' }
   // Ended its turn on a question: nothing to sync yet, the person answers first.
   if (status === 'completed' && asks) return { label: '停下來等你回覆', followup: '', event: '停下來等你回覆', tone: 'amber' }
   if (status === 'completed') return { label: '完成', followup: '狀態卡待更新', event: '完成，待同步', tone: 'blue' }
@@ -825,7 +830,7 @@ export function events(prev: Snapshot | null, cur: Snapshot): Event[] {
       const was = prevJobs.get(j.id)
       if (j.kind === 'running' && was !== 'running') out.push({ at: cur.at, text: `${short(p.name)}　執行者開始執行`, tone: 'teal' })
       if (j.kind === 'newer' && was !== 'newer') {
-        const result = jobResult(j.status, j.asks)
+        const result = jobResult(j.status, j.asks, j.error)
         const executor = j.executor === 'codex' ? 'Codex' : j.executor === 'claude' ? 'Claude' : '執行者'
         out.push({ at: cur.at, text: `${short(p.name)}　${executor} ${result.event}`, tone: result.tone })
       }

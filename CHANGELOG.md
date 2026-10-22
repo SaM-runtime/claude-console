@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.0
+
+- **An executor an error stopped is not "waiting for you".** A Claude executor whose turn ended on an API error (a lapsed login, an invalid API key, a used-up quota, an overloaded service) went idle like one that asked a question, so the row read `執行者在等你回覆：↩ 回覆或同步`, the feed said it stopped to wait for you, `⟳ 自動接力` stopped on `執行者在等你回覆`, and `↩ 回覆` went back into the same error. The console now reads the session's transcript (from the path the background daemon keeps for it, once per job) and, when its last entry is an API error, the row reads `執行者出錯：API key 無效` (`登入失效（先在終端機重新登入）`, `額度用完（3pm 重置）`, `服務出錯：…`), the feed and toast say `出錯：…` in red, and the cycle stops with that reason. The reply button becomes `↻ 重試` (`r`): two presses within six seconds resume the same session with a fixed `上一輪被錯誤中斷…請從中斷的地方繼續` turn, and the Tab suggestion carries the same words. A real question still reads as before.
+- **■ 停止工作.** A stuck or wrong-way job used to leave the project at `派工鎖定：claude 工作尚未結束` with no way out from the console. `■ 停止工作` in the action menu (`x`) stops the project's running jobs after a second press within six seconds: `claude stop <id>` for Claude, the Codex companion's `cancel` for Codex. It reads the jobs again first, so a job dispatched a moment ago is stopped by its id, ends this console's `⟳ 自動接力` on the project, and says what failed if a stop does not take. A cycle another console runs now stops on a stopped job with `工作已停止` instead of `工作失敗`.
+- **↗ 接手對話.** A background session waiting at a permission prompt showed only `等批准`; you had to find it with `claude agents` and type `claude attach`. `↗ 接手對話` (`t`) opens the running Claude session (or the one that stopped to ask) in a new Windows Terminal tab in the project folder when the console runs inside Windows Terminal, and otherwise copies `claude attach <id>` to paste into any terminal.
+- The executor digest calls a finished turn the daemon still lists as blocked `完成／等你回覆` instead of `完成／等批准`.
+
 ## 0.26.0
 
 - **The next-step card says what you can continue.** With no decision, gate or sync waiting, the card used to read `✓ 就緒 目前沒有需要處理的項目` even while projects had a next step ready, and the prompt's Tab suggestion meanwhile offered `/console continue <project>`. The card now names that same project, `⇢ 沒有在等你，可以繼續` with its next step and the `⇢ 繼續下一步` button (the second press still applies). With nothing to continue it still says `✓ 就緒`.

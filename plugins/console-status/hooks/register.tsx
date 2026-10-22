@@ -9,9 +9,9 @@ import { codexHealth, isActiveJob } from './logic'
 import { codexNote } from './wording'
 import { parseModels, modelOptions, nextOption, effortOptions, readSettingsFiles, effectiveDispatch, setProjectOverride, executorSignature, projectOverride, syncDispatch, setSyncSetting } from './dispatch'
 import type { DispatchSettings, ProjectOverride } from './dispatch'
-import { createExecutor, listWorkspaceJobs, sharedAgents } from './executors'
+import { createExecutor, executorErrorText, listWorkspaceJobs, sharedAgents, transcriptApiError } from './executors'
 import type { ExecutorDeps, ExecutorJob, ExecutorKind, DispatchOptions } from './executors'
-import { actionKinds, actionLabel, askingSession, newJobTag, withJobTag, commandTarget, decisionProject, replyPrompt, reviewPrompt, suggestedPrompt, continuable, dispatchErrorText, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, freshSyncPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
+import { actionKinds, actionLabel, askingError, askingSession, attachTabArgs, attachTarget, RETRY_REPLY, retrySignature, stopArgs, stopSignature, newJobTag, withJobTag, commandTarget, decisionProject, replyPrompt, reviewPrompt, suggestedPrompt, continuable, dispatchErrorText, COMMAND_ACTIONS, dispatchBlockReason, dispatchPrompt, freshSession, freshSyncPrompt, gatePrompt, workSignature, confirmationMatches, verificationArgs, verificationResult, outputTail, isManual, CONTINUE_CONFIRM_MS, VERIFY_CONFIRM_MS, verifySignature, verifyTrusted, reviewTurnMatches, staleGate, stalePendingReason } from './actions'
 import { resolveCompanion } from './companion'
 import type { CompanionResolution } from './companion'
 import { decideCodexDispatch } from './fallback'
@@ -44,7 +44,7 @@ import { ALIVE_MS, claim, claimBlocker, heartbeat, leave, parseLease, syncsHere,
 import { advanceSync, cardStamp, autoSyncPlan, autoSyncMode, bandSync, isSyncEnded, syncChip, syncStatus, syncStepsText } from './sync'
 import type { SyncProgress, ExecutorDigest, CycleRun } from '../types'
 import { CYCLE_MAX_AGE_MS, cardRev, cycleChip, cycleMaxHops, cyclePlan, cycleQuotaStop, hopDetail, newCycleRun, quotaBrake, storedCycles } from './cycle'
-import { DIGEST_NONE, DIGEST_TIMEOUT, PROMPT_DIGEST_MS, codexDigestLines, digestContext, digestSource, loadDigest } from './digest'
+import { DIGEST_NONE, DIGEST_TIMEOUT, PROMPT_DIGEST_MS, READ_LIMIT, codexDigestLines, digestContext, digestSource, loadDigest } from './digest'
 import type { DigestCache, DigestIo, DigestResult } from './digest'
 
 const dispatchRevision = atom({ plugin: 'console-status', key: 'dispatchRevision' } as const, 0)
@@ -118,6 +118,8 @@ const transcriptPaths = new Map<string, string>()
 const digestLoads = new Set<string>()
 /** statusPath → the last digest read for it, which a prompt carries when a fresh read takes too long. */
 const lastDigests = new Map<string, string[]>()
+/** Why an asking Claude job stopped (an API error in words, or null for a real question), per job and finish time. */
+const jobErrors = new Map<string, string | null>()
 /** When this plugin lifetime began (its first refresh); a reload starts a new one. */
 let lifetimeStart = 0
 /** Finished jobs auto-sync already dispatched a sync for (in `$.store`, so once per job across sessions). */
@@ -634,6 +636,28 @@ async function refresh($: any, options: PluginOptions, force = false) {
       prCache.set(root, { at, branch, pr })
       return pr
     }
+    // A Claude job that went idle "asking" may instead have hit an API error (a lapsed login, a used-up quota):
+    // its transcript says which, read once per job from the path the daemon keeps for it.
+    const configDir = String(await guarded(() => $.env.get('CLAUDE_CONFIG_DIR')).catch((error: unknown) => { if (error === DISCARDED_REFRESH) throw error; return '' }) ?? '')
+    const claudeDir = (configDir || `${home}/.claude`).replace(/\\/g, '/')
+    const quietRead = (path: string) => (io.fs.read(path) as Promise<string>).catch((error: unknown) => { if (error === DISCARDED_REFRESH) throw error; return null })
+    const withError = async <J extends ExecutorJob>(job: J): Promise<J> => {
+      if ((job.executor ?? 'claude') !== 'claude' || job.status !== 'completed' || !(job.phase ?? '').startsWith('idle: 等你回覆') || !job.nativeId) return job
+      const key = `${job.nativeId}|${job.completedAt ?? ''}`
+      let error = jobErrors.get(key)
+      if (error === undefined) {
+        let record: any = null
+        try { record = JSON.parse((await quietRead(`${claudeDir}/jobs/${job.nativeId}/state.json`)) ?? 'null') } catch { record = null }
+        const path = typeof record?.linkScanPath === 'string' ? record.linkScanPath : ''
+        const size = path ? (await guarded(() => Promise.resolve().then(() => $.fs.stat(path))).catch((error: unknown) => { if (error === DISCARDED_REFRESH) throw error; return null }) as { size?: number } | null)?.size : undefined
+        const transcript = path && typeof size === 'number' && size <= READ_LIMIT ? await quietRead(path) : null
+        error = executorErrorText(transcript ? transcriptApiError(transcript) : null, typeof record?.needs === 'string' ? record.needs : '')
+        // Kept only once the daemon's record was there to read; a missing one is looked for again next time.
+        if (record) jobErrors.set(key, error)
+        if (jobErrors.size > 200) jobErrors.delete(jobErrors.keys().next().value!)
+      }
+      return error ? { ...job, error } : job
+    }
     const bases = registryRows.map(({ root }) => root.replace(/\/+$/, '').split('/').pop() ?? '')
     const kinds = await guarded(() => loadDispatchKinds($))
     const tags = await guarded(() => loadJobTags($))
@@ -649,11 +673,11 @@ async function refresh($: any, options: PluginOptions, force = false) {
           .catch((error: unknown) => { if (error === DISCARDED_REFRESH) throw error; return null }),
         guarded(() => Promise.resolve().then(() => $.fs.stat(row.statusPath))).catch((error: unknown) => { if (error === DISCARDED_REFRESH) throw error; return null }) as Promise<{ mtimeMs?: number } | null>,
       ])
-      const jobs = listed.map(job => {
+      const jobs = await Promise.all(listed.map(job => {
         const kind = job.kind ?? kinds.get(jobKey(job))
         const tag = tags.get(jobKey(job))
         return (kind && kind !== job.kind) || tag ? { ...job, ...(kind ? { kind } : {}), ...(tag ? { tag } : {}) } : job
-      })
+      }).map(withError))
       const git = status ? await gitDetails(root, status) : null
       const pr = git && gitMode === 'on' && git.branch ? await pullRequest(root, git.branch, now, force) : null
       const warnings = jobWarnings(row.name, jobs, lifetimeStart)
@@ -848,6 +872,13 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
     }
     const name = p.name.replace(/\s.*$/, '')
     const now = await $.clock.now()
+    // An executor an API error stopped is retried in its own session: ↻ 重試 sends a fixed reply, after a second press.
+    const failure = kind === 'reply' && !request.text?.trim() ? askingError(p) : undefined
+    if (failure) {
+      if (!request.confirmed && !await confirmed($, statusPath, retrySignature(p), now, CONTINUE_CONFIRM_MS,
+        `${name}：上次${failure}；${CONTINUE_CONFIRM_MS / 1000} 秒內再按一次重試`)) return
+      request = { ...request, text: RETRY_REPLY }
+    }
     if (kind === 'continue' && !request.useClaude && !request.confirmed) {
       if (!await confirmed($, statusPath, workSignature(p), now, CONTINUE_CONFIRM_MS,
         `${name}：${CONTINUE_CONFIRM_MS / 1000} 秒內再按一次派工：${p.next}`)) return
@@ -996,7 +1027,8 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       launchGeneration++
       await update($, snapshot, value => value ? trackRowChanges(value, { ...value, projects: value.projects.map(item => item.statusPath === statusPath ? {
         ...item,
-        jobs: [{ kind: 'running' as const, id, executor: chosen, status: 'queued', summary: actionLabel(kind, p), startedAt, phase: '等待任務狀態' }, ...item.jobs.filter(j => j.id !== id || j.executor !== chosen)],
+        jobs: [{ kind: 'running' as const, id, executor: chosen, status: 'queued', summary: actionLabel(kind, p), startedAt, phase: '等待任務狀態', ...(job.nativeId ? { nativeId: job.nativeId } : {}) },
+          ...item.jobs.filter(j => j.id !== id || j.executor !== chosen)],
         tasks: [{ id, executor: chosen, ...(dispatchOpts.fallbackFrom ? { fallbackFrom: dispatchOpts.fallbackFrom } : {}), status: 'queued', title: actionLabel(kind, p), model: dispatchOpts.model ?? '', effort: dispatchOpts.effort ?? '', startedAt }, ...(item.tasks ?? []).filter(t => t.id !== id)],
       } : item) }, acceptedAt) : value)
       if (kind === 'sync') {
@@ -1010,7 +1042,7 @@ async function triggerAction($: any, options: PluginOptions, statusPath: string,
       }
       const fallbackNote = (dispatchOpts.fallbackFrom ? `（Codex 改由 Claude：${dispatchOpts.fallbackReason}）` : '')
         + (syncPlan?.model || syncPlan?.fresh ? `（${[syncPlan.model && `用 ${syncPlan.model}`, syncPlan.fresh && '新對話'].filter(Boolean).join('・')}）` : '')
-      await actionNotice($, `${name}：${chosen} 已接受${kind === 'sync' ? '同步 STATUS' : kind === 'reply' ? '你的回覆' : '繼續下一步'}${fallbackNote}，等待執行結果`, true)
+      await actionNotice($, `${name}：${chosen} 已接受${kind === 'sync' ? '同步 STATUS' : kind === 'reply' ? (failure ? '重試' : '你的回覆') : '繼續下一步'}${fallbackNote}，等待執行結果`, true)
     } else if (kind === 'decide') {
       // Options already picked in the pane go into the draft, so the CTA and `d` never drop them.
       const picked = (await read($, decisionPicks))[p.statusPath + '\n' + p.ask] ?? {}
@@ -1247,6 +1279,68 @@ async function saveCycle($: any, path: string, change: (run: CycleRun | undefine
  * ⟳ on a project: arm its cycle (the first hop goes out at the next refresh), or stop it. Work already running
  * is not touched. Returns what happened, for a command's answer.
  */
+/**
+ * ■ 停止工作: after a second press, stops the project's running jobs (`claude stop`, the Codex companion's cancel)
+ * and ends this console's relay on it, so a stuck or wrong-way job no longer locks the project.
+ */
+async function stopJobs($: any, options: PluginOptions, p: Project): Promise<string> {
+  const name = p.name.replace(/\s.*$/, '')
+  if (await demoEnabled($)) { $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。'); return '示範資料不停止' }
+  if (!p.jobs.some(job => job.kind === 'running')) { $.ui.toast(`${name}：沒有執行中的工作`); return `${name}：沒有執行中的工作` }
+  const now = await $.clock.now()
+  if (!await confirmed($, p.statusPath, stopSignature(p), now, CONTINUE_CONFIRM_MS,
+    `${name}：${CONTINUE_CONFIRM_MS / 1000} 秒內再按一次停止執行中的工作`)) return `${name}：再按一次停止`
+  await update($, continueConfirmations, values => { const next = { ...values }; delete next[p.statusPath]; return next })
+  // A job dispatched moments ago may not carry its session id yet: read the jobs again before stopping them.
+  await refresh($, options, true)
+  const latest = (await read($, snapshot))?.projects.find((item: Project) => item.statusPath === p.statusPath)
+  const running = (latest ?? p).jobs.filter(job => job.kind === 'running')
+  if (!running.length) { await actionNotice($, `${name}：工作已經結束了`, true); return `${name}：工作已經結束了` }
+  const { home, config } = await paths($, options)
+  if (running.some(job => job.executor === 'codex') && !companion?.path && !config.companionScript) companion = await resolveCompanion({ read: (path: string) => $.fs.read(path), list: (path: string) => $.fs.list(path) }, home, config.companionScript).catch(() => null)
+  const root = projectRoot(p.statusPath)
+  const failed: string[] = []
+  const said = (text: string) => text.split(/\r?\n/).map(line => line.trim()).filter(Boolean).pop()?.slice(0, 80) ?? ''
+  for (const job of running) {
+    const argv = stopArgs(job, withCompanion(config).companionScript, root)
+    const result = argv ? await $.process.run(argv, { cwd: root, timeoutMs: 30_000 }).catch((error: unknown) => ({ exitCode: null, stderr: String(error) })) : null
+    if (!result || result.exitCode !== 0) failed.push(`${job.executor ?? '執行者'}${argv ? `（${said(result?.stderr || result?.stdout || '') || `結束碼 ${result?.exitCode ?? '無'}`}）` : '（還沒拿到工作代號，稍後再試）'}`)
+  }
+  const runs = await loadCycles($)
+  const run = runs[p.statusPath]
+  if (run && mine(run, await mySession($))) {
+    await saveCycle($, p.statusPath, () => undefined)
+    await cycleNotice($, `⟳ ${name} 接力已停止（你停止了工作）`, 'amber', false)
+  }
+  const text = failed.length ? `${name}：停止失敗：${failed.join('、')}` : `${name}：已停止工作；結果留著，可以同步或繼續`
+  await actionNotice($, text, !failed.length)
+  await refresh($, options, true)
+  return text
+}
+
+/**
+ * ↗ 接手對話: opens the background session in a new Windows Terminal tab when this console runs in one, else
+ * copies `claude attach <id>` for any terminal. Answering a permission prompt needs the session itself.
+ */
+async function attachJob($: any, p: Project, surface?: string): Promise<string> {
+  const name = p.name.replace(/\s.*$/, '')
+  const id = attachTarget(p)
+  if (!id) { $.ui.toast(`${name}：沒有可以接手的 Claude 對話`); return `${name}：沒有可以接手的 Claude 對話` }
+  const windows = isWindowsOs(String(await Promise.resolve().then(() => $.env.get('OS')).catch(() => '') ?? ''))
+  if (windows && await Promise.resolve().then(() => $.env.get('WT_SESSION')).catch(() => '')) {
+    const opened = await $.process.run(attachTabArgs(projectRoot(p.statusPath), id), { timeoutMs: 15_000 }).catch(() => null)
+    if (opened?.exitCode === 0) {
+      await actionNotice($, `${name}：已在 Windows Terminal 新分頁接手對話（claude attach ${id}）`, true)
+      return `${name}：已開新分頁接手`
+    }
+  }
+  const command = `claude attach ${id}`
+  const copied = await Promise.resolve().then(() => $.ui.copy({ text: command, ...(surface ? { surface } : {}) })).then((result: any) => result?.isCopied !== false, () => false)
+  const text = copied ? `${name}：已複製「${command}」，貼到終端機就能接手` : `${name}：在終端機輸入「${command}」接手`
+  await actionNotice($, text, true)
+  return text
+}
+
 async function toggleCycle($: any, options: PluginOptions, p: Project, want?: boolean): Promise<string> {
   const name = p.name.replace(/\s.*$/, '')
   if (await demoEnabled($)) { $.ui.toast('示範資料：不執行專案操作；/console refresh 回到實際資料。'); return '示範資料不接力' }
@@ -2146,7 +2240,9 @@ export const register: Register = (on, options) => {
     cache: '主控台的提示快取：上一則回應後 5 分鐘（或 1 小時）內送出，會直接讀快取；過期後，下一則提示要把整段上下文重新寫進快取，費用約為一般輸入價格的 1.25 倍（1 小時快取為 2 倍）。快取時長由 cacheTtl 設定，auto＝讀對話紀錄裡實際回報的時長。「上次命中」是上一則請求有多少比例的輸入來自快取，偏低代表快取失效或剛重建。',
     pipeline: '流程：規格 → 實作 → 同步 → 驗證 → 審核 → 上線。● 完成　◉ 執行中　◆ 等待（主控台、使用者或同步）　✕ 驗證失敗　○ 未到。由狀態卡、執行者工作與最近一次驗證推算。',
     action_continue: '6 秒內再按一次，請所選執行者依下一步繼續；只在無待決與關卡時可用，使用該執行者額度。',
-    action_reply: '執行者做完一輪停下來問你：在輸入框寫下回覆，按 Enter 後主控台用你的話接續它原本的對話（用該執行者的額度），不用切過去。需要批准的權限提示，仍要切到那個對話處理。',
+    action_reply: '執行者做完一輪停下來問你：在輸入框寫下回覆，按 Enter 後主控台用你的話接續它原本的對話（用該執行者的額度），不用切過去。需要批准的權限提示，用「↗ 接手對話」處理。執行者是因為出錯（登入失效、額度用完、服務出錯）停下的話，這個按鈕會變成「↻ 重試」：排除原因後 6 秒內按兩次，接回同一個對話從中斷的地方繼續。',
+    action_stop: '停止這個專案執行中的工作（claude stop，或 Codex 串接腳本的取消），6 秒內按兩次確認；也會停掉這個主控台在這個專案的自動接力。已經寫好的檔案不會還原，之後可以同步或繼續。',
+    action_attach: '接手背景執行者的對話：要批准權限、想看它在做什麼或直接跟它說話時用。在 Windows Terminal 裡會開一個新分頁執行 claude attach；其他終端機會複製「claude attach <代號>」讓你貼上。',
     action_decide: '預填決策草稿並選取專案，補完後送出才使用 Claude 額度。',
     action_gate: '把關卡與專案資料送給主控台審核，使用 Claude 額度；不會執行上線（release）。',
     action_cycle: '自動接力：每次更新替你按下一個現有按鈕（繼續、同步、審核關卡），一路做下去；停在需要你拍板的決策、執行者停下來提問、release 關卡、工作失敗、上一跳沒改到狀態卡、達到跳數上限（cycleMaxHops，預設 6），或 5 小時額度用到門檻（cycleQuotaStop，預設 70%）。再按一次停止，進行中的工作不中斷。',
@@ -2292,6 +2388,8 @@ export const register: Register = (on, options) => {
       }
       if (menuProject && !(await demoEnabled($))) {
         if (k === 'a') { void toggleCycle($, options, menuProject); return {} }
+        if (k === 'x' && menuProject.jobs.some(job => job.kind === 'running')) { void stopJobs($, options, menuProject); return {} }
+        if (k === 't' && attachTarget(menuProject)) { void attachJob($, menuProject); return {} }
         const kind = HOTKEYS[k]
         const state = list.find(r => r.full === menuProject.name)?.state
         const held = (await read($, pendingActions))[menuProject.statusPath]
@@ -2550,7 +2648,8 @@ export const register: Register = (on, options) => {
     const actionButton = (p: Project, kind: ActionKind, key: string) => {
       const active = livePending(p)
       const blocked = kind === 'continue' || kind === 'sync' || kind === 'reply' ? dispatchBlockReason(p) : ''
-      const confirming = confirmations[p.statusPath]?.signature === (kind === 'continue' ? workSignature(p) : kind === 'verify' ? verifySignature(p.verify) : null)
+      const confirming = confirmations[p.statusPath]?.signature === (kind === 'continue' ? workSignature(p) : kind === 'verify' ? verifySignature(p.verify)
+        : kind === 'reply' && askingError(p) ? retrySignature(p) : null)
       const running = active?.kind === kind
       const elapsed = running ? Math.max(0, Math.floor((renderedAt - active.at) / 1000)) : 0
       const label = blocked ? `⇢ 無法派工：${blocked}` : running ? `${rich ? '' : '⋯ '}${actionLabel(kind, p)}… ${elapsed}s`
@@ -2571,7 +2670,11 @@ export const register: Register = (on, options) => {
       const offer = p.executor === 'codex' ? offers[p.statusPath] : undefined
       // While a second press is armed, say exactly what it will do: the toast alone disappears.
       const armed = confirmations[p.statusPath]?.signature
-      const pendingConfirm = armed === workSignature(p) ? `再按一次將派工：${p.next}` : armed === verifySignature(p.verify) ? `再按一次將執行：${p.verify}` : ''
+      const running = p.jobs.filter(job => job.kind === 'running')
+      const pendingConfirm = armed === workSignature(p) ? `再按一次將派工：${p.next}` : armed === verifySignature(p.verify) ? `再按一次將執行：${p.verify}`
+        : askingError(p) && armed === retrySignature(p) ? `再按一次將重試（上次${askingError(p)}）`
+        : running.length && armed === stopSignature(p) ? `再按一次將停止：${[...new Set(running.map(job => job.executor ?? '執行者'))].join(' / ')} 工作` : ''
+      const attach = !demo ? attachTarget(p) : undefined
       // Actions and executor sit on the same label column as the fields above them.
       return <Box flexDirection="column">
         <Box gap={2}>
@@ -2584,6 +2687,12 @@ export const register: Register = (on, options) => {
                 onPress={() => void toggleCycle($, options, p)} />
             </Box>
           )}
+          {!demo && running.length > 0 && <Box key={'help-' + prefix + 'stop'} hover={{ scope: 'help-action_stop' }}>
+            <Button key={prefix + 'stop'} plain label={armed === stopSignature(p) ? '再按一次停止' : '■ 停止工作'} onPress={() => void stopJobs($, options, p)} />
+          </Box>}
+          {attach && <Box key={'help-' + prefix + 'attach'} hover={{ scope: 'help-action_attach' }}>
+            <Button key={prefix + 'attach'} plain label="↗ 接手對話" onPress={(press: any) => void attachJob($, p, press?.surface)} />
+          </Box>}
           {blockedReason && <Text key={prefix + 'blocked'} color={C.dim}>派工鎖定：{blockedReason}</Text>}
           {offer && <Box key={'help-' + prefix + 'fallback'} hover={{ scope: 'help-fallback' }}>
             <Button key={prefix + 'fallback'} plain dimColor={!!livePending(p)} label={`⇢ 改用 Claude 派工（${actionLabel(offer.kind, p).replace(/^⇢\s*/, '')}）`} onPress={async () => {
@@ -3153,6 +3262,8 @@ export const register: Register = (on, options) => {
                 const st = list.find(r => r.full === menuProject.name)?.state ?? 'NOCARD'
                 const keys = actionKinds(menuProject, st).filter(kind => HOTKEY_OF[kind]).map(kind => `${HOTKEY_OF[kind]} ${actionLabel(kind, menuProject).replace(/^\S+\s*/, '')}`)
                 if (hasAsk(menuProject) && parseAsk(menuProject.ask).some(d => d.options.length)) keys.unshift('1–9 選選項')
+                if (!demo && menuProject.jobs.some(job => job.kind === 'running')) keys.push('x 停止工作')
+                if (!demo && attachTarget(menuProject)) keys.push('t 接手對話')
                 if (menuProject.pr) keys.push('p 開啟 PR')
                 if (menuProject.git) keys.push('f Git 檔案', 'b 分支圖')
                 if (cycles[menuProject.statusPath] ? !foreign(cycles[menuProject.statusPath]!) : !isManual(menuProject) && menuProject.hasCard && st !== 'ACTION') keys.push(cycles[menuProject.statusPath] ? 'a 停止接力' : 'a 自動接力')
