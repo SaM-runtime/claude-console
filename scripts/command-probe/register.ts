@@ -10,6 +10,7 @@ import { claudeArgs, createExecutor } from '../console/hooks/executors'
 import type { ExecutorDeps } from '../console/hooks/executors'
 import { parseCodexQuota } from '../console/hooks/logic'
 import { isWindowsOs, preflightArgs, quotaArgs, tailLinesArgs } from '../console/hooks/platform'
+import { readTranscriptUsage, usageSum } from '../console/hooks/usage'
 
 type Input = {
   pluginRoot: string
@@ -19,6 +20,7 @@ type Input = {
   stateDir: string
   stateRoots: string[]
   tailFile: string
+  usageFile: string
   shim: string
   prompt: string
   verify: Record<string, string>
@@ -60,6 +62,25 @@ export const register: Register = on => {
     // A transcript's tail, as the digest (bytes) and the cache clock (lines) read one past what $.fs.read takes.
     await run('tailBytes', tailArgs(input.tailFile, windows, 4096))
     await run('tailLines', tailLinesArgs(input.tailFile, windows, 400))
+
+    // A transcript as 用量 reads one past what $.fs.read takes: only its usage lines, a span at a time (small ones here).
+    let usageRuns = 0
+    try {
+      const io = {
+        windows,
+        read: (path: string) => $.fs.read(path), exists: (path: string) => $.fs.exists(path), stat: (path: string) => $.fs.stat(path), list: (path: string) => $.fs.list(path),
+        run: async (argv: string[], init?: { timeoutMs?: number }) => {
+          usageRuns++
+          const result = await $.process.run(argv, init)
+          if (result.exitCode !== 0) out.usageFailed = { argv, exitCode: result.exitCode, stdout: result.stdout.slice(0, 300), stderr: result.stderr.slice(0, 300) }
+          return result
+        },
+      }
+      const read = await readTranscriptUsage(io, input.usageFile, new Map(), 0, { limit: 0, span: 4096, cap: 2048 })
+      out.usage = { runs: usageRuns, bytes: read.bytes, size: read.size, keys: [...read.entries.keys()], tokens: usageSum(read.entries.values(), 0).tokens }
+    } catch (error) {
+      out.usage = { runs: usageRuns, error: error instanceof Error ? error.message : String(error) }
+    }
 
     // A Claude dispatch, through the executor itself.
     const deps: ExecutorDeps = {

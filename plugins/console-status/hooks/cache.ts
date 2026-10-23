@@ -15,23 +15,36 @@ export function cacheTtlOption(value: unknown): CacheTtl | 'auto' {
   return v === '5m' || v === '1h' ? v : 'auto'
 }
 
-/** List input price per million tokens (USD) by model id; null for a model this table does not know. */
-export function inputPricePerMTok(model: string): number | null {
+/**
+ * List prices per million tokens (USD) by model id: input, and cache reads, which are a tenth of input except on
+ * Fable 5.1 and Opus 5.5. Output is 5× input, cache writes 1.25× (5 minutes) or 2× (one hour). Haiku 5.5 has a
+ * second rate card for prompts past 100K tokens. Null for a model this table does not know.
+ */
+export function modelPrice(model: string, promptTokens = 0): { input: number; read: number } | null {
   const m = model.toLowerCase()
-  if (/fable|mythos/.test(m)) return 10
-  if (/opus-5-5|opus-5\.5/.test(m)) return 4
-  if (/opus/.test(m)) return 5
-  if (/sonnet-5/.test(m)) return 2
-  if (/sonnet/.test(m)) return 3
-  if (/haiku-4/.test(m)) return 1
-  if (/haiku/.test(m)) return 0.8
+  if (/(fable|mythos)-5-1/.test(m)) return { input: 10, read: 0.25 }
+  if (/fable|mythos/.test(m)) return { input: 10, read: 1 }
+  if (/opus-5-5|opus-5\.5/.test(m)) return { input: 4, read: 0.2 }
+  if (/opus-4-1|opus-4-0|opus-4-2025|3-opus/.test(m)) return { input: 15, read: 1.5 }
+  if (/opus/.test(m)) return { input: 5, read: 0.5 }
+  if (/sonnet-5/.test(m)) return { input: 2, read: 0.2 }
+  if (/sonnet/.test(m)) return { input: 3, read: 0.3 }
+  if (/haiku-5/.test(m)) return promptTokens > 100_000 ? { input: 0.5, read: 0.05 } : { input: 0.1, read: 0.01 }
+  if (/haiku-4/.test(m)) return { input: 1, read: 0.1 }
+  if (/3-haiku/.test(m)) return { input: 0.25, read: 0.03 }
+  if (/haiku/.test(m)) return { input: 0.8, read: 0.08 }
   return null
+}
+
+/** List input price per million tokens (USD) by model id, for a prompt of `promptTokens`; null for a model this table does not know. */
+export function inputPricePerMTok(model: string, promptTokens = 0): number | null {
+  return modelPrice(model, promptTokens)?.input ?? null
 }
 
 /** What re-writing `tokens` to the cache costs: 1.25× input for the 5-minute TTL, 2× for one hour. */
 export function rewriteCost(tokens: number, model: string, ttl: CacheTtl, override?: number | null): number | null {
   const perMTok = override && override > 0 ? override : (() => {
-    const input = inputPricePerMTok(model)
+    const input = inputPricePerMTok(model, tokens)
     return input === null ? null : input * (ttl === '1h' ? 2 : 1.25)
   })()
   return perMTok === null ? null : (tokens / 1_000_000) * perMTok

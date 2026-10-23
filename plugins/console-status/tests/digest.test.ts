@@ -28,6 +28,9 @@ test('(a) the daemon record names the session and transcript before the plugin\'
   const state = { version: 1, roots: { 'd:/project alpha': { root: ROOT, sessionId: 'root-session', jobs: [{ id: 'old' }, { id: 'new', launchName: 'console-new' }] } } }
   expect(latestJob(state, 'D:\\Project Alpha\\')).toEqual({ job: { id: 'new', launchName: 'console-new' }, rootSessionId: 'root-session' })
   expect(latestJob(state, 'D:/Other')).toEqual({ job: null })
+  // A macOS or Linux root keeps its case in claude-sessions.json, as the executor keys it.
+  const posix = { version: 1, roots: { '/Users/me/My App': { root: '/Users/me/My App', jobs: [{ id: 'mac', launchName: 'console-mac' }] } } }
+  expect(latestJob(posix, '/Users/me/My App/')).toEqual({ job: { id: 'mac', launchName: 'console-mac' } })
 })
 
 test('(b) a long transcript is read from its last TAIL_CHARS, starting at the first whole line', () => {

@@ -111,6 +111,10 @@ export type CycleRun = {
   waiting?: string
   /** The console session that armed it; `$.store` is shared by every console, and only this one sends its hops. */
   owner?: string
+  /** Waiting for a turn under `cycleMaxRunning`: its place in line and why, in words. */
+  queued?: { place: number; why: string }
+  /** When it last left the line: its six hours without a hop count from there. */
+  queuedUntil?: number
 }
 /** `gate` is the CARD 關卡 the review was submitted for; a CARD that moved past it ends the row's wait. */
 export type ReviewRequest = { text: string; projectName: string; at: number; turnId?: string; gate?: string }
@@ -121,6 +125,27 @@ export type UpdateInfo = { current: string | null; latest: string | null; checke
 /** A session waiting on a person; `project` is the registered project it runs in (`主控台` for the console's folder). */
 /** A project card's 執行者 section: reading, the four lines, no record, or why it could not be read. */
 export type ExecutorDigest = { phase: 'loading' | 'ready' | 'none' | 'error'; lines?: string[]; error?: string }
+
+/** Tokens of every kind some responses used, and their cost at API list prices (null when a model among them has none). */
+export type UsageSum = { tokens: number; cost: number | null }
+/** What the work the console dispatched for a project used: this week (or the last 7 days) and this 5-hour window. */
+export type ProjectUsage = {
+  /** When it was read. */
+  at: number
+  /** `本週` (from the weekly window's start) or `近 7 天`, when Claude Code has not reported that window. */
+  label: string
+  start: number
+  /** `unknown`: the models with no list price, when there are any. */
+  week: UsageSum & { unknown?: string[] }
+  five: UsageSum
+  /** Claude jobs started in the week; `atLeast` when older ones may have dropped off the 20 claude-sessions.json keeps. */
+  jobs: number
+  atLeast?: boolean
+  /** Codex jobs started in the week: Codex keeps no token record. */
+  codex: number
+}
+/** A project card's 用量 row: reading, the figures, or why they could not be read. */
+export type UsageRow = { phase: 'loading' } | { phase: 'ready'; usage: ProjectUsage } | { phase: 'error'; error: string }
 
 export type Blocked ={ name: string; why: string; project?: string }
 
@@ -220,6 +245,8 @@ declare module 'claude-code' {
       cycleRuns: Record<string, CycleRun>
       /** statusPath → the executor digest shown on an expanded project card. */
       executorDigests: Record<string, ExecutorDigest>
+      /** statusPath → the 用量 row of an expanded project card, and what /console usage read. */
+      projectUsage: Record<string, UsageRow>
       /** When the person last used this console (a prompt, a /console command, a key or press in the pane). */
       activeAt: number
       /** Feed lines since then, newest first, for the while-away digest. */

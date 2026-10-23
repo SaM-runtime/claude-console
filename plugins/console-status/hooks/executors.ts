@@ -110,7 +110,8 @@ const SHORT_ID = /^[0-9a-f]{8}$/i
 const locks = new Map<string, Promise<void>>()
 
 const slash = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '')
-const rootKey = (value: string) => {
+/** How claude-sessions.json keys a project root: forward slashes, no trailing slash, a drive or UNC path in lower case. */
+export const rootKey = (value: string) => {
   const normalized = slash(value)
   return /^(?:[a-z]:\/|\/\/)/i.test(normalized) ? normalized.toLowerCase() : normalized
 }

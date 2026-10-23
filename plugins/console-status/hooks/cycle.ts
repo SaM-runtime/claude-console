@@ -1,6 +1,6 @@
 // ⟳ 自動接力: one press runs a project's cycle (continue → sync → review → gate → …) by pressing the existing
 // buttons in turn, and stops wherever a person is needed. Pure planning, no I/O; register.tsx runs the loop.
-import type { CycleRun, Project, VerificationResult } from '../types'
+import type { CycleRun, PendingAction, Project, VerificationResult } from '../types'
 import type { State } from './logic'
 import { hasAsk, limitName, parseGate, parseLimitKind, saysNone } from './logic'
 import { actionKinds, dispatchBlockReason, isManual } from './actions'
@@ -19,6 +19,56 @@ export function cycleMaxHops(value: unknown): number {
   const raw = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value.trim()) : NaN
   if (!Number.isFinite(raw)) return CYCLE_DEFAULT_HOPS
   return Math.max(CYCLE_MIN_HOPS, Math.min(CYCLE_MAX_HOPS, Math.round(raw)))
+}
+
+/** Most projects `cycleMaxRunning` lets run at once. */
+const CYCLE_MAX_RUNNING = 10
+
+/** `cycleMaxRunning` option: how many projects may run at once while ⟳ relays are armed, 1–10; blank or not a number is no limit. */
+export function cycleMaxRunning(value: unknown): number | null {
+  const raw = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value.trim()) : NaN
+  if (!Number.isFinite(raw)) return null
+  return Math.max(1, Math.min(CYCLE_MAX_RUNNING, Math.round(raw)))
+}
+
+/** The projects running work now: a job of theirs is running, or a continue, sync or reply was just sent. */
+export function runningPaths(projects: Project[], pending: Record<string, PendingAction>): Set<string> {
+  const out = new Set(projects.filter(p => p.jobs.some(job => job.kind === 'running')).map(p => p.statusPath))
+  for (const [path, action] of Object.entries(pending)) {
+    if (action.kind === 'continue' || action.kind === 'sync' || action.kind === 'reply') out.add(path)
+  }
+  return out
+}
+
+/** Where a waiting ⟳ relay stands: its place in line, the relays holding the places, and the other work running. */
+export type CycleQueueSpot = { place: number; relays: string[]; others: number }
+
+/**
+ * Which armed relays wait under `limit` (null: none do). Work already running holds its place first, a
+ * person's own presses too, since every job spends the same quota; a relay whose project is running holds
+ * the place of that work. The places left go to the other relays in the order they were armed, and a relay
+ * keeps its place between its hops until it ends. Relays of every console count: they share `$.store`.
+ */
+export function cycleQueue(runs: Record<string, CycleRun>, running: ReadonlySet<string>, limit: number | null): Record<string, CycleQueueSpot> {
+  if (limit === null) return {}
+  const order = Object.keys(runs).sort((a, b) => runs[a]!.startedAt - runs[b]!.startedAt || a.localeCompare(b))
+  const relays = order.filter(path => running.has(path))
+  const taken = new Set(running)
+  const waiting: string[] = []
+  for (const path of order) {
+    if (running.has(path)) continue
+    if (taken.size < limit) { taken.add(path); relays.push(path) } else waiting.push(path)
+  }
+  const held = order.filter(path => relays.includes(path))
+  const others = [...running].filter(path => !runs[path]).length
+  return Object.fromEntries(waiting.map((path, i) => [path, { place: i + 1, relays: held, others }]))
+}
+
+/** Why a relay waits, in words: the relays ahead of it (by the names given) and the other work running. */
+export function queueReason(spot: CycleQueueSpot, name: (path: string) => string): string {
+  const relays = spot.relays.length ? `${spot.relays.map(name).join('、')} 在接力` : ''
+  const others = spot.others ? `${relays ? '另有' : '已有'} ${spot.others} 個工作在跑` : ''
+  return [relays, others].filter(Boolean).join('、')
 }
 
 /** A cycle stops before a hop once a 5-hour window is used this much, unless `cycleQuotaStop` says otherwise. */
@@ -79,9 +129,17 @@ export function storedCycles(value: unknown): Record<string, CycleRun> {
       ...(typeof r.lastGate === 'string' ? { lastGate: r.lastGate } : {}),
       ...(typeof r.waiting === 'string' ? { waiting: r.waiting } : {}),
       ...(typeof r.owner === 'string' ? { owner: r.owner } : {}),
+      ...(queuedSpot(r.queued) ? { queued: queuedSpot(r.queued)! } : {}),
+      ...(num(r.queuedUntil) ? { queuedUntil: r.queuedUntil as number } : {}),
     }
   }
   return out
+}
+
+/** A stored place in line, checked. */
+function queuedSpot(value: unknown): { place: number; why: string } | null {
+  const q = value as { place?: unknown; why?: unknown } | null
+  return q && typeof q === 'object' && typeof q.place === 'number' && Number.isFinite(q.place) && typeof q.why === 'string' ? { place: q.place, why: q.why } : null
 }
 
 export type CyclePlan = { action: 'continue' | 'gate' | 'sync' | 'verify' } | { wait: string } | { stop: string; done?: boolean }
@@ -179,6 +237,7 @@ export function cyclePlan(project: Project, state: State, run: CycleRun, now: nu
 /** The chip on the row and the next-step card: hops sent of the limit, or what the cycle waits for. */
 export function cycleChip(run: CycleRun, foreign = false): string {
   if (foreign) return `⟳ ${FOREIGN_CYCLE}`
+  if (run.queued) return `⟳ 排隊中・第 ${run.queued.place} 個`
   return run.waiting && run.waiting !== '稍候' ? `⟳ ${run.waiting}` : `⟳ ${run.hops}/${run.max}`
 }
 

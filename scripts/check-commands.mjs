@@ -61,6 +61,20 @@ const tailFile = join(home, 'transcript.jsonl')
 const lines = Array.from({ length: 500 }, (_, i) => JSON.stringify({ n: i, text: `第 ${i} 行：許功蓋 ✓ "引號" \\ 反斜線`, pad: 'x'.repeat(300) }))
 writeFileSync(tailFile, lines.join('\n') + '\n')
 
+// A transcript for 用量: usage lines among long ones (Chinese in both), a line longer than a read's span, and a
+// usage line longer than a read's output on its own; every other response must come back, each once.
+const usageFile = join(home, 'usage.jsonl')
+const reply = (id, text) => JSON.stringify({ type: 'assistant', timestamp: stamp, requestId: `req_${id}`, message: { model: 'claude-opus-5-5', id: `msg_${id}`, content: [{ type: 'text', text }], usage: { input_tokens: 1, cache_creation_input_tokens: 10, cache_read_input_tokens: 100, output_tokens: 1000 } } })
+const usageRows = []
+for (let i = 0; i < 40; i++) {
+  usageRows.push(JSON.stringify({ type: 'user', timestamp: stamp, message: { content: `第 ${i} 輪：許功蓋 ✓ ${'字'.repeat(200)}` } }))
+  if (i === 10) usageRows.push(JSON.stringify({ type: 'user', timestamp: stamp, message: { content: 'x'.repeat(10_000) } }))
+  if (i === 20) usageRows.push(reply('big', 'y'.repeat(3000)))
+  usageRows.push(reply(`r${i}`, `回覆 ${i}：許功蓋 ✓ "引號" \\ 反斜線`), reply(`r${i}`, '同一則回應的第二段'))
+}
+writeFileSync(usageFile, usageRows.join('\n') + '\n')
+const usageKeys = Array.from({ length: 40 }, (_, i) => `msg_r${i}|req_r${i}`)
+
 // A stand-in claude behind a shim like npm's (cmd on Windows), printing the arguments and input it got.
 const bin = dir('bin')
 writeFileSync(join(bin, 'echo.js'), "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.stringify({argv:process.argv.slice(2),stdin:s})))\n")
@@ -92,7 +106,7 @@ const env = { ...process.env, HOME: home, USERPROFILE: home, ANTHROPIC_API_KEY: 
 for (const name of ['ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR']) delete env[name]
 env.COMMAND_PROBE = JSON.stringify({
   pluginRoot: join(root, 'plugins', 'console-status'), work, sessions: join(dir('.claude', 'handoffs'), 'claude-sessions.json'),
-  companion, stateDir, stateRoots, tailFile, shim, prompt, verify,
+  companion, stateDir, stateRoots, tailFile, usageFile, shim, prompt, verify,
 })
 const claude = (args, timeout = 180_000) => {
   const result = spawnSync('claude', windows ? args.map(arg => (/[\s&|<>^"]/.test(arg) ? `"${arg}"` : arg)) : args, { cwd: work, env, encoding: 'utf8', timeout, shell: windows })
@@ -125,6 +139,12 @@ check(r.verifyFailResult && !r.verifyFailResult.ok && r.verifyFailResult.exitCod
 const last = count => lines.slice(-count).join('\n')
 check(r.tailBytes?.exitCode === 0 && text(r.tailBytes.stdout).trimEnd().endsWith(last(5)), `the transcript tail in bytes: ${said(r.tailBytes)}`)
 check(r.tailLines?.exitCode === 0 && text(r.tailLines.stdout).trimEnd() === last(400), `the transcript tail in lines: ${said(r.tailLines)}`)
+
+// 用量's reads of a large transcript.
+const usageSize = Buffer.byteLength(readFileSync(usageFile, 'utf8'))
+check(r.usage && !r.usage.error && r.usage.runs > 3 && r.usage.bytes === usageSize && r.usage.size === usageSize
+  && JSON.stringify(r.usage.keys) === JSON.stringify(usageKeys) && r.usage.tokens === 40 * 1111,
+  `用量's transcript read: expected ${usageKeys.length} responses over ${usageSize} bytes in several reads, got ${JSON.stringify({ ...r.usage, keys: r.usage?.keys?.length })}${r.usageFailed ? ` (${JSON.stringify(r.usageFailed)})` : ''}`)
 
 /** The first prompt a background session recorded, read from its transcript. */
 function firstPrompt(sessionId) {
